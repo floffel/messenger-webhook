@@ -44,6 +44,18 @@ struct Text {
 }
 
 /// Returns the `WhatsApp` adapter.
+///
+/// ```
+/// use messenger_webhook::Adapter;
+///
+/// let payload = br#"{"object":"whatsapp_business_account","entry":[{"id":"1","changes":[{"field":"messages",
+///   "value":{"metadata":{"display_phone_number":"1","phone_number_id":"2"},
+///            "messages":[{"id":"wamid.1","from":"4915112345678","timestamp":"1729600000","type":"text","text":{"body":"Hallo"}}]}}]}]}"#;
+///
+/// let messages = messenger_webhook::whatsapp::adapter().adapt(payload)?;
+/// assert_eq!(messages[0].text.as_deref(), Some("Hallo"));
+/// # Ok::<(), messenger_webhook::Error>(())
+/// ```
 #[must_use]
 pub fn adapter() -> WhatsAppAdapter {
     WhatsAppAdapter
