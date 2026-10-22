@@ -28,10 +28,8 @@ fn whatsapp_status_only_payload_yields_no_messages() {
     let payload =
         br#"{"object":"whatsapp_business_account","entry":[{"changes":[{"field":"messages",
       "value":{"statuses":[{"id":"x","status":"read"}]}}]}]}"#;
-    assert!(messenger_webhook::whatsapp::adapter()
-        .adapt(payload)
-        .unwrap()
-        .is_empty());
+    let messages = messenger_webhook::whatsapp::adapter().adapt(payload).unwrap();
+    assert_eq!(messages, Vec::new(), "status-only payload must yield no messages");
 }
 
 #[cfg(feature = "telegram")]
@@ -54,10 +52,8 @@ fn telegram_message_is_normalised() {
 #[test]
 fn telegram_update_without_message_yields_nothing() {
     let payload = br#"{"update_id":2}"#;
-    assert!(messenger_webhook::telegram::adapter()
-        .adapt(payload)
-        .unwrap()
-        .is_empty());
+    let messages = messenger_webhook::telegram::adapter().adapt(payload).unwrap();
+    assert_eq!(messages, Vec::new(), "update without message must yield nothing");
 }
 
 #[cfg(feature = "whatsapp")]
