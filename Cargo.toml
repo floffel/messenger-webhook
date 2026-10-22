@@ -1,0 +1,31 @@
+[package]
+name = "messenger-webhook"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0 OR MIT"
+description = "Normalise inbound messenger webhooks (WhatsApp, Telegram, Matrix) into one common message type"
+repository = "https://github.com/floffel/messenger-webhook"
+documentation = "https://docs.rs/messenger-webhook"
+keywords = ["webhook", "messaging", "whatsapp", "telegram", "normalisation"]
+categories = ["web-programming", "api-bindings"]
+readme = "README.md"
+
+[features]
+default = ["whatsapp", "telegram"]
+whatsapp = []
+telegram = []
+matrix = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
