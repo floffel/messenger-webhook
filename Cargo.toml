@@ -10,6 +10,7 @@ documentation = "https://docs.rs/messenger-webhook"
 keywords = ["webhook", "messaging", "whatsapp", "telegram", "normalisation"]
 categories = ["web-programming", "api-bindings"]
 readme = "README.md"
+exclude = [".github/**", "deny.toml"]
 
 [features]
 default = ["whatsapp", "telegram"]
