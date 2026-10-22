@@ -11,7 +11,8 @@ struct Update {
 
 #[derive(Deserialize)]
 struct Message {
-    message_id: i64,
+    #[serde(rename = "message_id")]
+    id: i64,
     chat: Chat,
     #[serde(default)]
     from: Option<User>,
@@ -56,7 +57,7 @@ impl Adapter for TelegramAdapter {
 
         Ok(vec![NormalizedMessage {
             channel: Channel::Telegram,
-            external_id: message.message_id.to_string(),
+            external_id: message.id.to_string(),
             conversation_id: message.chat.id.to_string(),
             sender_id: sender,
             text: message.text,

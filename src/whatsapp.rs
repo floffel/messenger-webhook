@@ -1,4 +1,4 @@
-//! WhatsApp Cloud API adapter.
+//! `WhatsApp` Cloud API adapter.
 
 use serde::Deserialize;
 
@@ -43,13 +43,13 @@ struct Text {
     body: String,
 }
 
-/// Returns the WhatsApp adapter.
+/// Returns the `WhatsApp` adapter.
 #[must_use]
 pub fn adapter() -> WhatsAppAdapter {
     WhatsAppAdapter
 }
 
-/// Maps WhatsApp webhook payloads to [`NormalizedMessage`].
+/// Maps `WhatsApp` webhook payloads to [`NormalizedMessage`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WhatsAppAdapter;
 

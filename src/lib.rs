@@ -30,9 +30,9 @@ pub use error::{Error, Result};
 /// Which messenger a message came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Channel {
-    /// WhatsApp Cloud API.
+    /// `WhatsApp` Cloud API.
     WhatsApp,
-    /// Telegram Bot API.
+    /// `Telegram` Bot API.
     Telegram,
     /// Matrix.
     Matrix,
