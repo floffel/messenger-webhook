@@ -21,7 +21,7 @@ Each gated item carries a `feature` badge on docs.rs, which builds the crate
 with `--all-features`. The crate uses `std` only — there is no `no_std` story.
 
 **MSRV: Rust 1.89.** A dedicated CI job builds all features, no features and
-the test targets on 1.89 with `--locked`, so a dependency bump that raises the
+the test targets on 1.89 with a fresh dependency resolution, so a bump that raises the
 floor fails the pipeline instead of a user's build. The floor moves only in a
 minor release, and only when a dependency forces it.
 

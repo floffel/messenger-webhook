@@ -27,14 +27,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.89
-      # --locked on purpose: the committed lockfile is what an MSRV user gets,
-      # so a dependency bump that breaks 1.89 fails here instead of in the wild.
+      # No --locked on purpose: this crate is a library, so the lockfile is not
+      # shipped and an MSRV user resolves fresh. A dependency that raises its
+      # floor therefore fails here instead of in the wild.
       - name: MSRV build, all features
-        run: cargo check --all-features --locked
+        run: cargo check --all-features
       - name: MSRV build, no default features
-        run: cargo check --no-default-features --locked
+        run: cargo check --no-default-features
       - name: MSRV test build (dev-dependencies included)
-        run: cargo test --all-features --no-run --locked
+        run: cargo test --all-features --no-run
 
   docs:
     runs-on: ubuntu-latest
