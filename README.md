@@ -17,6 +17,14 @@ and the rate limits.
 
 All three features are on by default; each module is independently gated.
 
+Each gated item carries a `feature` badge on docs.rs, which builds the crate
+with `--all-features`. The crate uses `std` only — there is no `no_std` story.
+
+**MSRV: Rust 1.89.** A dedicated CI job builds all features, no features and
+the test targets on 1.89 with `--locked`, so a dependency bump that raises the
+floor fails the pipeline instead of a user's build. The floor moves only in a
+minor release, and only when a dependency forces it.
+
 ## Quick start
 
 ```rust

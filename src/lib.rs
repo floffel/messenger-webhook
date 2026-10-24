@@ -50,6 +50,7 @@
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod error;
 pub mod headers;
@@ -58,10 +59,13 @@ pub mod secret;
 pub mod signature;
 
 #[cfg(feature = "matrix")]
+#[cfg_attr(docsrs, doc(cfg(feature = "matrix")))]
 pub mod matrix;
 #[cfg(feature = "telegram")]
+#[cfg_attr(docsrs, doc(cfg(feature = "telegram")))]
 pub mod telegram;
 #[cfg(feature = "whatsapp")]
+#[cfg_attr(docsrs, doc(cfg(feature = "whatsapp")))]
 pub mod whatsapp;
 
 #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
@@ -69,10 +73,13 @@ mod json;
 mod model;
 
 #[cfg(feature = "matrix")]
+#[cfg_attr(docsrs, doc(cfg(feature = "matrix")))]
 pub use matrix::MatrixAdapter;
 #[cfg(feature = "telegram")]
+#[cfg_attr(docsrs, doc(cfg(feature = "telegram")))]
 pub use telegram::TelegramAdapter;
 #[cfg(feature = "whatsapp")]
+#[cfg_attr(docsrs, doc(cfg(feature = "whatsapp")))]
 pub use whatsapp::WhatsAppAdapter;
 
 pub use error::{Error, Result};

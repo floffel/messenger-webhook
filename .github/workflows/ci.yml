@@ -13,9 +13,41 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
       - run: cargo test --no-default-features
+      # Feature matrix: every feature has to stand on its own, because a
+      # consumer may enable exactly one provider.
+      - run: cargo test --no-default-features --features whatsapp
+      - run: cargo test --no-default-features --features telegram
+      - run: cargo test --no-default-features --features matrix
       - run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      # --locked on purpose: the committed lockfile is what an MSRV user gets,
+      # so a dependency bump that breaks 1.89 fails here instead of in the wild.
+      - name: MSRV build, all features
+        run: cargo check --all-features --locked
+      - name: MSRV build, no default features
+        run: cargo check --no-default-features --locked
+      - name: MSRV test build (dev-dependencies included)
+        run: cargo test --all-features --no-run --locked
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      # Mirrors the docs.rs build: all features plus the docsrs cfg that turns
+      # on the per-item feature badges. RUSTDOCFLAGS "-D warnings" catches
+      # intra-doc links that only break with a feature-gated item missing.
+      - name: docs.rs build
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: --cfg docsrs -D warnings
 
   coverage:
     runs-on: ubuntu-latest

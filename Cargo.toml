@@ -35,3 +35,7 @@ missing_docs = "deny"
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
