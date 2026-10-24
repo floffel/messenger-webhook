@@ -53,6 +53,7 @@
 
 pub mod error;
 pub mod headers;
+pub mod registry;
 pub mod secret;
 pub mod signature;
 
@@ -79,6 +80,7 @@ pub use model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, ProviderPayload,
     Reaction,
 };
+pub use registry::Registry;
 pub use secret::Secret;
 
 /// Hard ceiling on a request body, enforced before any hashing or JSON parsing.
@@ -95,8 +97,8 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 /// Turns provider payloads into normalised messages.
 ///
-/// Implementations are `Send + Sync`, hold no interior mutability and are safe
-/// to share across tasks by reference.
+/// Implementations are `Send + Sync + Debug` (with redacted secrets), hold no
+/// interior mutability and are safe to share across tasks by reference.
 ///
 /// ```
 /// use messenger_webhook::{
@@ -104,6 +106,7 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// };
 ///
 /// /// An adapter for a provider this crate does not ship.
+/// #[derive(Debug)]
 /// struct Echo;
 ///
 /// impl Adapter for Echo {
@@ -140,7 +143,7 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// assert_eq!(payload.body(), b"ping");
 /// # Ok::<(), messenger_webhook::Error>(())
 /// ```
-pub trait Adapter: Send + Sync {
+pub trait Adapter: Send + Sync + std::fmt::Debug {
     /// Which channel this adapter speaks.
     fn channel(&self) -> Channel;
 
@@ -189,6 +192,7 @@ pub trait Adapter: Send + Sync {
     ///     Adapter, Channel, Error, Headers, NormalizedMessage, ProviderPayload, Result,
     /// };
     ///
+    /// #[derive(Debug)]
     /// struct Upper;
     ///
     /// impl Adapter for Upper {
