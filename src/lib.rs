@@ -75,7 +75,10 @@ pub use whatsapp::WhatsAppAdapter;
 
 pub use error::{Error, Result};
 pub use headers::Headers;
-pub use model::{Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, Reaction};
+pub use model::{
+    Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, ProviderPayload,
+    Reaction,
+};
 pub use secret::Secret;
 
 /// Hard ceiling on a request body, enforced before any hashing or JSON parsing.
@@ -96,7 +99,9 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// to share across tasks by reference.
 ///
 /// ```
-/// use messenger_webhook::{Adapter, Channel, Error, Headers, NormalizedMessage, Result};
+/// use messenger_webhook::{
+///     Adapter, Channel, Error, Headers, NormalizedMessage, ProviderPayload, Result,
+/// };
 ///
 /// /// An adapter for a provider this crate does not ship.
 /// struct Echo;
@@ -117,10 +122,22 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 ///         let text = String::from_utf8_lossy(payload).into_owned();
 ///         Ok(vec![NormalizedMessage::text(Channel::Other("echo".into()), "self", text)])
 ///     }
+///
+///     fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
+///         Ok(ProviderPayload::new(
+///             Channel::Other("echo".into()),
+///             "POST",
+///             "text/plain",
+///             message.text.clone().unwrap_or_default().into_bytes(),
+///         ))
+///     }
 /// }
 ///
 /// let events = Echo.adapt(b"ping")?;
 /// assert_eq!(events[0].text.as_deref(), Some("ping"));
+///
+/// let payload = Echo.encode(&events[0])?;
+/// assert_eq!(payload.body(), b"ping");
 /// # Ok::<(), messenger_webhook::Error>(())
 /// ```
 pub trait Adapter: Send + Sync {
@@ -152,6 +169,76 @@ pub trait Adapter: Send + Sync {
     /// Returns [`Error::Payload`] when the body is not the provider's JSON
     /// shape, and [`Error::BodyTooLarge`] for oversized bodies.
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>>;
+
+    /// Encodes `message` into the provider's outbound schema.
+    ///
+    /// Provider limits are enforced here, so an invalid payload is never
+    /// produced: `WhatsApp` text is capped at 4096 bytes, Telegram text at 4096
+    /// UTF-16 units and Telegram captions at 1024 UTF-16 units. Matrix has no
+    /// documented body limit.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::MessageTooLong`] when the text exceeds the provider limit.
+    /// - [`Error::InvalidMessage`] when the provider cannot express the message
+    ///   (empty recipient, no text and no attachment, unsupported media kind,
+    ///   non-numeric Telegram id, non-`mxc://` Matrix url).
+    ///
+    /// ```
+    /// use messenger_webhook::{
+    ///     Adapter, Channel, Error, Headers, NormalizedMessage, ProviderPayload, Result,
+    /// };
+    ///
+    /// struct Upper;
+    ///
+    /// impl Adapter for Upper {
+    ///     fn channel(&self) -> Channel { Channel::Other("upper".into()) }
+    ///     fn verify(&self, _: &Headers, _: &[u8]) -> Result<()> { Ok(()) }
+    ///     fn adapt(&self, _: &[u8]) -> Result<Vec<NormalizedMessage>> { Ok(Vec::new()) }
+    ///     fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
+    ///         let text = message.text.clone().unwrap_or_default().to_uppercase();
+    ///         Ok(ProviderPayload::new(self.channel(), "POST", "text/plain", text.into_bytes()))
+    ///     }
+    /// }
+    ///
+    /// let message = NormalizedMessage::text(Channel::Other("upper".into()), "1", "hi");
+    /// assert_eq!(Upper.encode(&message)?.body(), b"HI");
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload>;
+}
+
+/// Length of `text` in UTF-16 code units — the unit Telegram counts.
+pub(crate) fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+/// Serialises `body` into a [`ProviderPayload`].
+pub(crate) fn json_payload(
+    channel: Channel,
+    method: &'static str,
+    body: &serde_json::Value,
+) -> Result<ProviderPayload> {
+    let encoded = serde_json::to_vec(body).map_err(|error| Error::Payload(error.to_string()))?;
+    Ok(ProviderPayload::new(
+        channel,
+        method,
+        "application/json",
+        encoded,
+    ))
+}
+
+/// The recipient a message is addressed to, rejecting an empty one.
+pub(crate) fn recipient(channel: Channel, message: &NormalizedMessage) -> Result<&str> {
+    let id = message.conversation_id.trim();
+    if id.is_empty() {
+        Err(Error::InvalidMessage {
+            channel,
+            reason: "conversation_id is empty".to_owned(),
+        })
+    } else {
+        Ok(id)
+    }
 }
 
 /// Rejects bodies above the crate-wide ceiling.

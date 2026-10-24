@@ -359,3 +359,135 @@ impl NormalizedMessage {
         self.edit_of.is_some()
     }
 }
+
+/// An outbound request body for one provider, ready for the caller to send.
+///
+/// The crate performs no I/O: the payload carries the HTTP method, the content
+/// type and the JSON body, and the application decides where to send it.
+///
+/// ```
+/// use messenger_webhook::{Channel, ProviderPayload};
+///
+/// let payload = ProviderPayload::new(
+///     Channel::Telegram,
+///     "POST",
+///     "application/json",
+///     br#"{"chat_id":"1","text":"hi"}"#.to_vec(),
+/// );
+/// assert_eq!(payload.method(), "POST");
+/// assert_eq!(payload.json().expect("json")["text"], "hi");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderPayload {
+    channel: Channel,
+    method: &'static str,
+    content_type: &'static str,
+    body: Vec<u8>,
+}
+
+impl ProviderPayload {
+    /// Wraps a serialised body.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderPayload};
+    ///
+    /// let payload = ProviderPayload::new(Channel::Matrix, "PUT", "application/json", b"{}".to_vec());
+    /// assert_eq!(payload.body(), b"{}");
+    /// ```
+    #[must_use]
+    pub fn new(
+        channel: Channel,
+        method: &'static str,
+        content_type: &'static str,
+        body: Vec<u8>,
+    ) -> Self {
+        Self {
+            channel,
+            method,
+            content_type,
+            body,
+        }
+    }
+
+    /// Channel this payload is addressed to.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderPayload};
+    ///
+    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", vec![]);
+    /// assert_eq!(payload.channel(), &Channel::Telegram);
+    /// ```
+    #[must_use]
+    pub fn channel(&self) -> &Channel {
+        &self.channel
+    }
+
+    /// HTTP method the provider expects (`POST` for bot APIs, `PUT` for Matrix).
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderPayload};
+    ///
+    /// let payload = ProviderPayload::new(Channel::Matrix, "PUT", "application/json", vec![]);
+    /// assert_eq!(payload.method(), "PUT");
+    /// ```
+    #[must_use]
+    pub fn method(&self) -> &'static str {
+        self.method
+    }
+
+    /// Content type of [`ProviderPayload::body`].
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderPayload};
+    ///
+    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", vec![]);
+    /// assert_eq!(payload.content_type(), "application/json");
+    /// ```
+    #[must_use]
+    pub fn content_type(&self) -> &'static str {
+        self.content_type
+    }
+
+    /// The serialised JSON body.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderPayload};
+    ///
+    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", b"{}".to_vec());
+    /// assert!(!payload.body().is_empty());
+    /// ```
+    #[must_use]
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// Consumes the payload and returns its body.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderPayload};
+    ///
+    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", b"{}".to_vec());
+    /// assert_eq!(payload.into_body(), b"{}");
+    /// ```
+    #[must_use]
+    pub fn into_body(self) -> Vec<u8> {
+        self.body
+    }
+
+    /// Parses the body back into JSON, for inspection or tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Payload`] if the body is not valid JSON — which
+    /// cannot happen for payloads this crate produces.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderPayload};
+    ///
+    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", b"[1]".to_vec());
+    /// assert!(payload.json().is_ok());
+    /// ```
+    pub fn json(&self) -> crate::Result<serde_json::Value> {
+        serde_json::from_slice(&self.body).map_err(|error| crate::Error::Payload(error.to_string()))
+    }
+}

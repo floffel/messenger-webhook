@@ -4,18 +4,31 @@
 //! Matrix is JSON over HTTP with no payload signature of its own: an
 //! application service authenticates with its `hs_token` as a bearer token.
 //! This module is pure: it never talks to a homeserver, it only normalises the
-//! events a homeserver pushes.
+//! events a homeserver pushes and builds the `content` a caller `PUT`s to
+//! `/rooms/{roomId}/send/m.room.message/{txnId}`.
+//!
+//! ```
+//! use messenger_webhook::{Adapter, Channel, MatrixAdapter, NormalizedMessage};
+//!
+//! let adapter = MatrixAdapter::new("hs-token");
+//! let message = NormalizedMessage::text(Channel::Matrix, "!room:example.org", "Hallo");
+//! let payload = adapter.encode(&message)?;
+//! assert_eq!(payload.method(), "PUT");
+//! assert_eq!(payload.json()?["msgtype"], "m.text");
+//! # Ok::<(), messenger_webhook::Error>(())
+//! ```
 
 use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::headers::Headers;
 use crate::json;
+use crate::model::ProviderPayload;
 use crate::model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, Reaction,
 };
 use crate::secret::Secret;
-use crate::{check_body, Adapter, MAX_BODY_BYTES};
+use crate::{check_body, json_payload, recipient, Adapter, MAX_BODY_BYTES};
 
 /// Header carrying the application service token.
 pub const AUTHORIZATION_HEADER: &str = "authorization";
@@ -119,6 +132,142 @@ impl Adapter for MatrixAdapter {
             .iter()
             .filter_map(|event| normalize_event(event))
             .collect())
+    }
+
+    fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
+        let room = recipient(Channel::Matrix, message)?;
+        if !room.starts_with('!') {
+            return Err(Error::InvalidMessage {
+                channel: Channel::Matrix,
+                reason: format!("Matrix room ids start with '!', got {room:?}"),
+            });
+        }
+
+        let text = message.text.as_deref().unwrap_or_default();
+        let mut content = if let Some(attachment) = message.first_attachment() {
+            media_content(attachment, text)?
+        } else {
+            if text.is_empty() {
+                return Err(Error::InvalidMessage {
+                    channel: Channel::Matrix,
+                    reason: "message has neither text nor an attachment".to_owned(),
+                });
+            }
+            let mut content = serde_json::Map::new();
+            content.insert("msgtype".to_owned(), Value::String("m.text".to_owned()));
+            content.insert("body".to_owned(), Value::String(text.to_owned()));
+            content
+        };
+
+        apply_relations(&mut content, message);
+        json_payload(Channel::Matrix, "PUT", &Value::Object(content))
+    }
+}
+
+/// Builds the `content` of an `m.image`/`m.video`/`m.audio`/`m.file`/
+/// `m.sticker` event.
+fn media_content(attachment: &Attachment, text: &str) -> Result<serde_json::Map<String, Value>> {
+    let msgtype = match attachment.kind {
+        AttachmentKind::Image => "m.image",
+        AttachmentKind::Video => "m.video",
+        AttachmentKind::Audio | AttachmentKind::Voice => "m.audio",
+        AttachmentKind::Document => "m.file",
+        AttachmentKind::Sticker => "m.sticker",
+        ref other => {
+            return Err(Error::InvalidMessage {
+                channel: Channel::Matrix,
+                reason: format!(
+                    "Matrix cannot send {} attachments as m.room.message",
+                    other.as_str()
+                ),
+            });
+        }
+    };
+    let url = attachment
+        .url
+        .as_ref()
+        .or(attachment.id.as_ref())
+        .ok_or_else(|| Error::InvalidMessage {
+            channel: Channel::Matrix,
+            reason: "attachment has neither a url nor an id".to_owned(),
+        })?;
+    if !url.starts_with("mxc://") {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Matrix,
+            reason: format!("Matrix media urls must be mxc://, got {url:?}"),
+        });
+    }
+
+    let body_text = attachment
+        .filename
+        .clone()
+        .or_else(|| attachment.caption.clone())
+        .unwrap_or_else(|| {
+            if text.is_empty() {
+                attachment.kind.as_str().to_owned()
+            } else {
+                text.to_owned()
+            }
+        });
+
+    let mut content = serde_json::Map::new();
+    content.insert("msgtype".to_owned(), Value::String(msgtype.to_owned()));
+    content.insert("body".to_owned(), Value::String(body_text));
+    content.insert("url".to_owned(), Value::String(url.clone()));
+
+    let mut info = serde_json::Map::new();
+    if let Some(mime) = &attachment.mime_type {
+        info.insert("mimetype".to_owned(), Value::String(mime.clone()));
+    }
+    if let Some(size) = attachment.size_bytes {
+        info.insert("size".to_owned(), Value::from(size));
+    }
+    if let Some(width) = attachment.width {
+        info.insert("w".to_owned(), Value::from(width));
+    }
+    if let Some(height) = attachment.height {
+        info.insert("h".to_owned(), Value::from(height));
+    }
+    if let Some(duration) = attachment.duration_seconds {
+        info.insert("duration".to_owned(), Value::from(duration));
+    }
+    if !info.is_empty() {
+        content.insert("info".to_owned(), Value::Object(info));
+    }
+    Ok(content)
+}
+
+/// Adds `m.relates_to` (reply, thread or edit) to an outbound `content`.
+fn apply_relations(content: &mut serde_json::Map<String, Value>, message: &NormalizedMessage) {
+    if let Some(target) = &message.edit_of {
+        let mut replacement = serde_json::Map::new();
+        if let Some(msgtype) = content.get("msgtype") {
+            replacement.insert("msgtype".to_owned(), msgtype.clone());
+        }
+        if let Some(body) = content.get("body") {
+            replacement.insert("body".to_owned(), body.clone());
+        }
+        content.insert("m.new_content".to_owned(), Value::Object(replacement));
+        content.insert(
+            "m.relates_to".to_owned(),
+            serde_json::json!({ "rel_type": "m.replace", "event_id": target }),
+        );
+    } else if let Some(thread) = &message.thread_id {
+        let mut relates = serde_json::Map::new();
+        relates.insert("rel_type".to_owned(), Value::String("m.thread".to_owned()));
+        relates.insert("event_id".to_owned(), Value::String(thread.clone()));
+        if let Some(reply) = &message.reply_to {
+            relates.insert(
+                "m.in_reply_to".to_owned(),
+                serde_json::json!({ "event_id": reply }),
+            );
+        }
+        content.insert("m.relates_to".to_owned(), Value::Object(relates));
+    } else if let Some(reply) = &message.reply_to {
+        content.insert(
+            "m.relates_to".to_owned(),
+            serde_json::json!({ "m.in_reply_to": { "event_id": reply } }),
+        );
     }
 }
 

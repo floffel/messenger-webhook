@@ -4,15 +4,45 @@
 //! channel post or a reaction — all of them normalise here. Telegram has no
 //! payload signature; it sends a secret token header that the bot registers
 //! with `setWebhook`.
+//!
+//! Outbound, `encode` produces the `sendMessage` (or send-media) body and
+//! enforces Telegram's 4096/1024 UTF-16 unit limits:
+//!
+//! ```
+//! use messenger_webhook::{Adapter, Channel, NormalizedMessage, TelegramAdapter};
+//!
+//! let adapter = TelegramAdapter::new("bot-secret");
+//! let message = NormalizedMessage::text(Channel::Telegram, "-1001", "Hallo");
+//! assert_eq!(adapter.encode(&message)?.json()?["text"], "Hallo");
+//!
+//! let too_long = NormalizedMessage::text(Channel::Telegram, "-1001", &"a".repeat(4097));
+//! assert!(adapter.encode(&too_long).is_err());
+//! # Ok::<(), messenger_webhook::Error>(())
+//! ```
 
 use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::headers::Headers;
 use crate::json;
+use crate::model::ProviderPayload;
 use crate::model::{Attachment, AttachmentKind, Channel, NormalizedMessage, Reaction};
 use crate::secret::Secret;
-use crate::{check_body, Adapter, MAX_BODY_BYTES};
+use crate::{check_body, json_payload, recipient, utf16_len, Adapter, MAX_BODY_BYTES};
+
+/// Maximum length of a Telegram text message, in UTF-16 code units.
+///
+/// ```
+/// assert_eq!(messenger_webhook::telegram::MAX_TEXT_UTF16, 4096);
+/// ```
+pub const MAX_TEXT_UTF16: usize = 4096;
+
+/// Maximum length of a Telegram media caption, in UTF-16 code units.
+///
+/// ```
+/// assert_eq!(messenger_webhook::telegram::MAX_CAPTION_UTF16, 1024);
+/// ```
+pub const MAX_CAPTION_UTF16: usize = 1024;
 
 /// Header Telegram sends the registered `secret_token` in.
 pub const SECRET_TOKEN_HEADER: &str = "x-telegram-bot-api-secret-token";
@@ -113,6 +143,105 @@ impl Adapter for TelegramAdapter {
         }
         Ok(events)
     }
+
+    fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
+        let chat_id = recipient(Channel::Telegram, message)?;
+        let mut body = serde_json::Map::new();
+        body.insert("chat_id".to_owned(), Value::String(chat_id.to_owned()));
+
+        let text = message.text.as_deref().unwrap_or_default();
+        if let Some(attachment) = message.first_attachment() {
+            let field = match attachment.kind {
+                AttachmentKind::Image => "photo",
+                AttachmentKind::Video => "video",
+                AttachmentKind::Audio => "audio",
+                AttachmentKind::Voice => "voice",
+                AttachmentKind::Document => "document",
+                AttachmentKind::Sticker => "sticker",
+                ref other => {
+                    return Err(Error::InvalidMessage {
+                        channel: Channel::Telegram,
+                        reason: format!(
+                            "Telegram cannot send {} attachments; use a document",
+                            other.as_str()
+                        ),
+                    });
+                }
+            };
+            let reference = attachment
+                .id
+                .clone()
+                .or_else(|| attachment.url.clone())
+                .ok_or_else(|| Error::InvalidMessage {
+                    channel: Channel::Telegram,
+                    reason: "attachment has neither a file id nor a url".to_owned(),
+                })?;
+            if !text.is_empty() {
+                let length = utf16_len(text);
+                if length > MAX_CAPTION_UTF16 {
+                    return Err(Error::MessageTooLong {
+                        channel: Channel::Telegram,
+                        limit: MAX_CAPTION_UTF16,
+                        actual: length,
+                        unit: "UTF-16 units",
+                    });
+                }
+                body.insert("caption".to_owned(), Value::String(text.to_owned()));
+            }
+            body.insert(field.to_owned(), Value::String(reference));
+        } else {
+            if text.is_empty() {
+                return Err(Error::InvalidMessage {
+                    channel: Channel::Telegram,
+                    reason: "message has neither text nor an attachment".to_owned(),
+                });
+            }
+            if message.edit_of.is_some() {
+                return Err(Error::InvalidMessage {
+                    channel: Channel::Telegram,
+                    reason: "edits go to editMessageText with the original message id".to_owned(),
+                });
+            }
+            let length = utf16_len(text);
+            if length > MAX_TEXT_UTF16 {
+                return Err(Error::MessageTooLong {
+                    channel: Channel::Telegram,
+                    limit: MAX_TEXT_UTF16,
+                    actual: length,
+                    unit: "UTF-16 units",
+                });
+            }
+            body.insert("text".to_owned(), Value::String(text.to_owned()));
+        }
+
+        if let Some(thread) = &message.thread_id {
+            body.insert(
+                "message_thread_id".to_owned(),
+                Value::from(telegram_id(thread, "thread_id")?),
+            );
+        }
+        if let Some(reply) = &message.reply_to {
+            let mut parameters = serde_json::Map::new();
+            parameters.insert(
+                "message_id".to_owned(),
+                Value::from(telegram_id(reply, "reply_to")?),
+            );
+            body.insert("reply_parameters".to_owned(), Value::Object(parameters));
+        }
+
+        json_payload(Channel::Telegram, "POST", &Value::Object(body))
+    }
+}
+
+/// Telegram ids are signed 64-bit integers; anything else would be rejected by
+/// the API, so it is rejected here first.
+fn telegram_id(text: &str, field: &str) -> Result<i64> {
+    text.trim()
+        .parse::<i64>()
+        .map_err(|_| Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: format!("{field} {text:?} is not an integer id"),
+        })
 }
 
 /// Maps one `Message` object.

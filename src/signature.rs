@@ -124,7 +124,8 @@ pub(crate) fn decode_hex(text: &str) -> Option<[u8; DIGEST_LEN]> {
         return None;
     }
     let mut out = [0u8; DIGEST_LEN];
-    for (slot, pair) in out.iter_mut().zip(bytes.chunks_exact(2)) {
+    let (pairs, _) = bytes.as_chunks::<2>();
+    for (slot, pair) in out.iter_mut().zip(pairs) {
         *slot = hex_value(pair[0])? * 16 + hex_value(pair[1])?;
     }
     Some(out)

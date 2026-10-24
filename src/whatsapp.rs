@@ -4,6 +4,18 @@
 //! receipts arrive in the same `change` objects. Both are normalised here:
 //! receipts come back as [`NormalizedMessage`] with
 //! [`NormalizedMessage::status`] set and no text.
+//!
+//! Outbound, the same adapter turns a normalised message into the Cloud API
+//! request body and refuses to produce one the provider would reject:
+//!
+//! ```
+//! use messenger_webhook::{Adapter, Channel, NormalizedMessage, WhatsAppAdapter};
+//!
+//! let message = NormalizedMessage::text(Channel::WhatsApp, "4915112345678", "Hallo");
+//! let payload = WhatsAppAdapter::new("app-secret").encode(&message)?;
+//! assert_eq!(payload.json()?["text"]["body"], "Hallo");
+//! # Ok::<(), messenger_webhook::Error>(())
+//! ```
 
 use serde_json::Value;
 
@@ -11,11 +23,26 @@ use crate::error::{Error, Result};
 use crate::headers::Headers;
 use crate::json;
 use crate::model::{
-    Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, Reaction,
+    Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, ProviderPayload,
+    Reaction,
 };
 use crate::secret::Secret;
 use crate::signature::{self, META_SIGNATURE_HEADER};
-use crate::{check_body, Adapter, MAX_BODY_BYTES};
+use crate::{check_body, json_payload, recipient, Adapter, MAX_BODY_BYTES};
+
+/// Maximum length of a `WhatsApp` text body, in bytes.
+///
+/// ```
+/// assert_eq!(messenger_webhook::whatsapp::MAX_TEXT_BYTES, 4096);
+/// ```
+pub const MAX_TEXT_BYTES: usize = 4096;
+
+/// Maximum length of a `WhatsApp` media caption, in bytes.
+///
+/// ```
+/// assert_eq!(messenger_webhook::whatsapp::MAX_CAPTION_BYTES, 1024);
+/// ```
+pub const MAX_CAPTION_BYTES: usize = 1024;
 
 /// Adapter for Meta's `WhatsApp` Cloud API webhooks.
 ///
@@ -115,6 +142,104 @@ impl Adapter for WhatsAppAdapter {
             }
         }
         Ok(events)
+    }
+
+    fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
+        let to = recipient(Channel::WhatsApp, message)?;
+        if !to.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(Error::InvalidMessage {
+                channel: Channel::WhatsApp,
+                reason: format!("WhatsApp recipients are E.164 digits, got {to:?}"),
+            });
+        }
+
+        let text = message.text.as_deref().unwrap_or_default();
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "messaging_product".to_owned(),
+            Value::String("whatsapp".to_owned()),
+        );
+        body.insert(
+            "recipient_type".to_owned(),
+            Value::String("individual".to_owned()),
+        );
+        body.insert("to".to_owned(), Value::String(to.to_owned()));
+
+        if let Some(attachment) = message.first_attachment() {
+            let field = match attachment.kind {
+                AttachmentKind::Image => "image",
+                AttachmentKind::Document => "document",
+                AttachmentKind::Audio | AttachmentKind::Voice => "audio",
+                AttachmentKind::Video => "video",
+                AttachmentKind::Sticker => "sticker",
+                ref other => {
+                    return Err(Error::InvalidMessage {
+                        channel: Channel::WhatsApp,
+                        reason: format!("WhatsApp cannot send {} attachments", other.as_str()),
+                    });
+                }
+            };
+
+            let mut media = serde_json::Map::new();
+            if let Some(url) = &attachment.url {
+                media.insert("link".to_owned(), Value::String(url.clone()));
+            } else if let Some(id) = &attachment.id {
+                media.insert("id".to_owned(), Value::String(id.clone()));
+            } else {
+                return Err(Error::InvalidMessage {
+                    channel: Channel::WhatsApp,
+                    reason: "attachment has neither a url nor an id".to_owned(),
+                });
+            }
+            if field == "document" {
+                if let Some(filename) = &attachment.filename {
+                    media.insert("filename".to_owned(), Value::String(filename.clone()));
+                }
+            }
+            if !text.is_empty() {
+                let length = text.len();
+                if length > MAX_CAPTION_BYTES {
+                    return Err(Error::MessageTooLong {
+                        channel: Channel::WhatsApp,
+                        limit: MAX_CAPTION_BYTES,
+                        actual: length,
+                        unit: "bytes",
+                    });
+                }
+                media.insert("caption".to_owned(), Value::String(text.to_owned()));
+            }
+            body.insert("type".to_owned(), Value::String(field.to_owned()));
+            body.insert(field.to_owned(), Value::Object(media));
+        } else {
+            if text.is_empty() {
+                return Err(Error::InvalidMessage {
+                    channel: Channel::WhatsApp,
+                    reason: "message has neither text nor an attachment".to_owned(),
+                });
+            }
+            if message.edit_of.is_some() || message.reaction.is_some() {
+                return Err(Error::InvalidMessage {
+                    channel: Channel::WhatsApp,
+                    reason: "edits and reactions need the Cloud API message id, not a send"
+                        .to_owned(),
+                });
+            }
+            let length = text.len();
+            if length > MAX_TEXT_BYTES {
+                return Err(Error::MessageTooLong {
+                    channel: Channel::WhatsApp,
+                    limit: MAX_TEXT_BYTES,
+                    actual: length,
+                    unit: "bytes",
+                });
+            }
+            let mut text_body = serde_json::Map::new();
+            text_body.insert("body".to_owned(), Value::String(text.to_owned()));
+            body.insert("type".to_owned(), Value::String("text".to_owned()));
+            body.insert("text".to_owned(), Value::Object(text_body));
+        }
+
+        json_payload(Channel::WhatsApp, "POST", &Value::Object(body))
     }
 }
 
