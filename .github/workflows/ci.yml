@@ -40,10 +40,12 @@ jobs:
           tool: cargo-fuzz
       - name: cargo-fuzz is on PATH
         run: cargo fuzz --version
+      # cargo-fuzz defaults to the musl target on Linux, where ASan needs a
+      # dynamically linked libc; pin the gnu target instead.
       - name: Build the normalize target
-        run: cargo fuzz build normalize
+        run: cargo fuzz build --target x86_64-unknown-linux-gnu normalize
       - name: Run the committed corpus
-        run: cargo fuzz run normalize -- -runs=5000
+        run: cargo fuzz run --target x86_64-unknown-linux-gnu normalize -- -runs=5000
 
   deny:
     runs-on: ubuntu-latest
