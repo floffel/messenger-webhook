@@ -54,8 +54,8 @@ proptest! {
                 Ok(events) => {
                     for event in events {
                         prop_assert_eq!(event.channel, adapter.channel());
-                        prop_assert!(!event.external_id.is_empty());
-                        prop_assert!(!event.conversation_id.is_empty());
+                        prop_assert_ne!(event.external_id.len(), 0);
+                        prop_assert_ne!(event.conversation_id.len(), 0);
                     }
                 }
                 Err(error) => {

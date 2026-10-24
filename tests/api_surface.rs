@@ -73,7 +73,7 @@ fn normalized_message_helpers() {
     let mut message = NormalizedMessage::text(Channel::Telegram, "42", "hi");
     assert_eq!(message.conversation_id, "42");
     assert_eq!(message.text.as_deref(), Some("hi"));
-    assert!(message.external_id.is_empty());
+    assert_eq!(message.external_id.len(), 0);
     assert!(message.first_attachment().is_none());
 
     message
@@ -125,7 +125,7 @@ fn provider_payload_rejects_non_json() {
 #[test]
 fn headers_api() {
     let mut headers = Headers::new();
-    assert!(headers.is_empty());
+    assert_eq!(headers.len(), 0);
     assert_eq!(headers.len(), 0);
 
     headers.insert("X-Hub-Signature-256", "one");
@@ -134,7 +134,7 @@ fn headers_api() {
     assert_eq!(headers.get("X-Hub-Signature-256"), Some("two"));
     assert_eq!(headers.get("x-hub-signature-256"), Some("two"));
     assert_eq!(headers.get("missing"), None);
-    assert!(!headers.is_empty());
+    assert_ne!(headers.len(), 0);
 
     let owned = Headers::from_pairs([("Authorization", "Bearer t".to_owned())]);
     assert_eq!(owned.get("authorization"), Some("Bearer t"));
@@ -152,6 +152,7 @@ fn headers_api() {
 #[test]
 fn secret_api() {
     let secret = Secret::new("token");
+    // A custom `is_empty` is not the `assert_is_empty` lint's target.
     assert!(!secret.is_empty());
     assert_eq!(secret.expose_secret(), "token");
     assert!(secret.ct_eq(b"token"));
@@ -198,7 +199,7 @@ fn every_error_variant_renders_without_panicking() {
     ];
     for error in errors {
         let rendered = error.to_string();
-        assert!(!rendered.is_empty());
+        assert_ne!(rendered.len(), 0);
         assert!(!error.is_retryable(), "every error here is terminal");
         assert!(format!("{error:?}").contains(char::is_alphabetic));
     }
@@ -217,10 +218,10 @@ fn signature_helpers_are_usable_from_outside() {
 #[test]
 fn registry_accessors() {
     let mut registry = Registry::new();
-    assert!(registry.is_empty());
+    assert_eq!(registry.len(), 0);
     assert_eq!(registry.len(), 0);
     assert!(!registry.contains(&Channel::Matrix));
-    assert!(registry.channels().is_empty());
+    assert_eq!(registry.channels().len(), 0);
     assert_eq!(format!("{registry:?}"), "Registry { channels: [] }");
 
     #[cfg(feature = "matrix")]

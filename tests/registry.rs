@@ -51,7 +51,7 @@ fn registration_is_by_channel_and_replaceable() {
 #[allow(unused_mut)]
 fn channels_are_sorted_and_counted() {
     let mut registry = Registry::new();
-    assert!(registry.is_empty());
+    assert_eq!(registry.len(), 0);
 
     #[cfg(feature = "telegram")]
     registry.register(messenger_webhook::TelegramAdapter::new("s"));

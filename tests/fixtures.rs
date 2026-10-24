@@ -41,8 +41,8 @@ fn fixtures_normalise_without_panicking() {
         for adapter in adapters() {
             for event in adapter.adapt(payload).unwrap_or_default() {
                 assert_eq!(event.channel, adapter.channel());
-                assert!(!event.external_id.is_empty(), "missing idempotency key");
-                assert!(!event.conversation_id.is_empty());
+                assert_ne!(event.external_id.len(), 0, "missing idempotency key");
+                assert_ne!(event.conversation_id.len(), 0);
             }
         }
     }

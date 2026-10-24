@@ -309,12 +309,12 @@ mod whatsapp_edges {
         // A boolean id cannot be an idempotency key.
         let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
             {"id":true,"from":"49","type":"text"}]}}]}]}"#;
-        assert!(whatsapp().adapt(payload).unwrap().is_empty());
+        assert_eq!(whatsapp().adapt(payload).unwrap().len(), 0);
 
         // An empty string is not an id either.
         let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
             {"id":"","from":"49","type":"text"}]}}]}]}"#;
-        assert!(whatsapp().adapt(payload).unwrap().is_empty());
+        assert_eq!(whatsapp().adapt(payload).unwrap().len(), 0);
     }
 
     #[test]
@@ -424,7 +424,7 @@ mod telegram_edges {
         assert_eq!(events.len(), 1);
         assert!(events[0].timestamp.is_none());
         assert!(events[0].text.is_none());
-        assert!(events[0].attachments.is_empty());
+        assert_eq!(events[0].attachments.len(), 0);
         assert_eq!(events[0].sender_id, "2", "falls back to the chat");
     }
 

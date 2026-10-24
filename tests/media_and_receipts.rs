@@ -154,8 +154,8 @@ mod whatsapp {
                 {"id":"w3","from":"49","type":"reaction"}]}"#,
         );
         assert_eq!(events.len(), 3);
-        assert!(events[0].attachments.is_empty());
-        assert!(events[1].attachments.is_empty());
+        assert_eq!(events[0].attachments.len(), 0);
+        assert_eq!(events[1].attachments.len(), 0);
         assert!(events[2].reaction.is_none());
     }
 
@@ -164,7 +164,7 @@ mod whatsapp {
         let events = adapter()
             .adapt(br#"{"entry":[{"changes":[{"field":"messages"}]}]}"#)
             .unwrap();
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 0);
     }
 
     #[test]

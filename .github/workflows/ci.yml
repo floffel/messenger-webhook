@@ -24,7 +24,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
       - name: Coverage gate (lines >= 95%)
         run: cargo llvm-cov --all-features --fail-under-lines 95 --summary-only
 
@@ -33,7 +35,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
-      - uses: taiki-e/install-action@cargo-fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: cargo-fuzz is on PATH
+        run: cargo fuzz --version
       - name: Build the normalize target
         run: cargo fuzz build normalize
       - name: Run the committed corpus
