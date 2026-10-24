@@ -53,6 +53,28 @@ impl Headers {
         self
     }
 
+    /// Builds a header set from pairs whose values may be owned or borrowed.
+    ///
+    /// ```
+    /// use messenger_webhook::Headers;
+    ///
+    /// let headers = Headers::from_pairs([("Authorization", "Bearer t".to_owned())]);
+    /// assert_eq!(headers.get("Authorization"), Some("Bearer t"));
+    /// ```
+    #[must_use]
+    pub fn from_pairs<I, K, V>(pairs: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        let mut headers = Self::new();
+        for (name, value) in pairs {
+            headers.insert(name.into(), value);
+        }
+        headers
+    }
+
     /// Looks a header up by name, case-insensitively.
     ///
     /// ```

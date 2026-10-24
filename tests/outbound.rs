@@ -4,6 +4,7 @@
 //! is proven rather than sampled.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(dead_code, unused_imports, unused_mut, unused_variables)]
 
 use messenger_webhook::{Adapter, Channel, NormalizedMessage};
 

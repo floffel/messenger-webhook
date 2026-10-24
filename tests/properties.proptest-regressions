@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6170e3069f3777df3327280d986c343f8be0ffca5410eea7888a5048d0b7d3b5 # shrinks to key = "_", value = Array [Number(-5.654239745351799e+120)]
+cc 272fdfa067f581f4ed87e5f675db3355890c74c7f677d75a03c8a11dde266b97 # shrinks to chat = "0", text = "A"
+cc a6dfd3c71730e058f79ddf195d443c35709424d8c02dc754c4e7314526810962 # shrinks to key = "a", value = Array [Number(-2.8104559471420123e+237)]

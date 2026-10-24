@@ -1,0 +1,1 @@
+{"type":"m.room.message","evener_ts":08type":"m.room.messa$abc",#room_id":"!room:exampl":"64800000061,"content":{"msgtype":"m.text","body":"Hallo","m.relates_to":{"m.in_reply_to":{"event_id":"$prev"}}}}

@@ -64,6 +64,7 @@ pub mod telegram;
 #[cfg(feature = "whatsapp")]
 pub mod whatsapp;
 
+#[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
 mod json;
 mod model;
 
@@ -213,11 +214,13 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
 }
 
 /// Length of `text` in UTF-16 code units — the unit Telegram counts.
+#[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
 pub(crate) fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
 }
 
 /// Serialises `body` into a [`ProviderPayload`].
+#[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
 pub(crate) fn json_payload(
     channel: Channel,
     method: &'static str,
@@ -233,6 +236,7 @@ pub(crate) fn json_payload(
 }
 
 /// The recipient a message is addressed to, rejecting an empty one.
+#[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
 pub(crate) fn recipient(channel: Channel, message: &NormalizedMessage) -> Result<&str> {
     let id = message.conversation_id.trim();
     if id.is_empty() {
@@ -246,6 +250,7 @@ pub(crate) fn recipient(channel: Channel, message: &NormalizedMessage) -> Result
 }
 
 /// Rejects bodies above the crate-wide ceiling.
+#[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
 pub(crate) fn check_body(limit: usize, actual: usize) -> Result<()> {
     if actual > limit {
         Err(Error::BodyTooLarge { limit, actual })

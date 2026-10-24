@@ -274,12 +274,25 @@ fn normalize_message(message: &Value) -> Option<NormalizedMessage> {
                 .and_then(|text| json::string(text, "body"))
                 .map(str::to_owned);
         }
-        "image" | "document" | "audio" | "video" | "sticker" => {
-            if let Some(attachment) = media_attachment(message, &provider_type) {
-                normalized.text.clone_from(&attachment.caption);
-                normalized.attachments.push(attachment);
-            }
+        "image" => push_media(&mut normalized, message, "image", AttachmentKind::Image),
+        "document" => push_media(
+            &mut normalized,
+            message,
+            "document",
+            AttachmentKind::Document,
+        ),
+        "audio" => {
+            let is_voice =
+                json::child(message, "audio").is_some_and(|audio| json::boolean(audio, "voice"));
+            let kind = if is_voice {
+                AttachmentKind::Voice
+            } else {
+                AttachmentKind::Audio
+            };
+            push_media(&mut normalized, message, "audio", kind);
         }
+        "video" => push_media(&mut normalized, message, "video", AttachmentKind::Video),
+        "sticker" => push_media(&mut normalized, message, "sticker", AttachmentKind::Sticker),
         "location" => {
             if let Some(location) = json::child(message, "location") {
                 let mut attachment = Attachment::new(AttachmentKind::Location);
@@ -299,15 +312,19 @@ fn normalize_message(message: &Value) -> Option<NormalizedMessage> {
             }
         }
         "reaction" => {
-            if let Some(target) = json::id(message, "message_id") {
-                let emoji = json::string(message, "emoji")
-                    .unwrap_or_default()
-                    .to_owned();
-                normalized.reaction = Some(Reaction {
-                    message_id: target,
-                    removed: emoji.is_empty(),
-                    emoji,
-                });
+            // The target message and the emoji live in the nested `reaction`
+            // object, not on the message itself.
+            if let Some(reaction) = json::child(message, "reaction") {
+                if let Some(target) = json::id(reaction, "message_id") {
+                    let emoji = json::string(reaction, "emoji")
+                        .unwrap_or_default()
+                        .to_owned();
+                    normalized.reaction = Some(Reaction {
+                        message_id: target,
+                        removed: emoji.is_empty(),
+                        emoji,
+                    });
+                }
             }
         }
         // Buttons, interactive replies, orders, system notices and future
@@ -319,17 +336,8 @@ fn normalize_message(message: &Value) -> Option<NormalizedMessage> {
 }
 
 /// Maps a media object (`image`, `document`, `audio`, `video`, `sticker`).
-fn media_attachment(message: &Value, provider_type: &str) -> Option<Attachment> {
-    let media = json::child(message, provider_type)?;
-    let kind = match provider_type {
-        "image" => AttachmentKind::Image,
-        "document" => AttachmentKind::Document,
-        "audio" if json::boolean(media, "voice") => AttachmentKind::Voice,
-        "audio" => AttachmentKind::Audio,
-        "video" => AttachmentKind::Video,
-        "sticker" => AttachmentKind::Sticker,
-        other => AttachmentKind::Other(other.to_owned()),
-    };
+fn media_attachment(message: &Value, field: &str, kind: AttachmentKind) -> Option<Attachment> {
+    let media = json::child(message, field)?;
 
     let mut attachment = Attachment::new(kind);
     attachment.id = json::id(media, "id");
@@ -339,6 +347,19 @@ fn media_attachment(message: &Value, provider_type: &str) -> Option<Attachment> 
     attachment.caption = json::string(media, "caption").map(str::to_owned);
     // WhatsApp reports no size, width or duration for inbound media.
     Some(attachment)
+}
+
+/// Appends media to the event, lifting its caption into `text`.
+fn push_media(
+    normalized: &mut NormalizedMessage,
+    message: &Value,
+    field: &str,
+    kind: AttachmentKind,
+) {
+    if let Some(attachment) = media_attachment(message, field, kind) {
+        normalized.text.clone_from(&attachment.caption);
+        normalized.attachments.push(attachment);
+    }
 }
 
 /// Maps one `statuses[]` entry (delivery receipt) onto a status event.

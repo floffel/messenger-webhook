@@ -1,0 +1,1 @@
+{"type":"m.room.message","event_id":"$abc","room_id":"!room:example.org","sender":"@alice:example.org","origtin_server_ts":1729600000123,"content":{"msgtype":"m.text","body":"Hallo","m.relates_tn":{"m.in_reply_to":{"event_id":"$prev"}}}}
