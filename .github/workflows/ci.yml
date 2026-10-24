@@ -17,6 +17,28 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Coverage gate (lines >= 95%)
+        run: cargo llvm-cov --all-features --fail-under-lines 95 --summary-only
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@cargo-fuzz
+      - name: Build the normalize target
+        run: cargo fuzz build normalize
+      - name: Run the committed corpus
+        run: cargo fuzz run normalize -- -runs=5000
+
   deny:
     runs-on: ubuntu-latest
     steps:
