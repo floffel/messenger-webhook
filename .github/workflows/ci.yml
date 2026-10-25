@@ -18,6 +18,9 @@ jobs:
       - run: cargo test --no-default-features --features whatsapp
       - run: cargo test --no-default-features --features telegram
       - run: cargo test --no-default-features --features matrix
+      # The outbound client is independent of the `matrix` adapter feature on
+      # purpose: a consumer may send without parsing, or parse without sending.
+      - run: cargo test --no-default-features --features matrix-out
       # The README points at both examples: run the framework-free one and make
       # sure the Axum one at least links, so neither rots into decoration.
       - run: cargo run --example minimal --features whatsapp
@@ -83,6 +86,12 @@ jobs:
         run: cargo fuzz build --target x86_64-unknown-linux-gnu normalize
       - name: Run the committed corpus
         run: cargo fuzz run --target x86_64-unknown-linux-gnu normalize -- -runs=5000
+      # The outbound validators decide what becomes a URL path segment. An
+      # accepted value that is not URL-safe is a routing bug, not a style issue.
+      - name: Build the outbound_ids target
+        run: cargo fuzz build --target x86_64-unknown-linux-gnu outbound_ids
+      - name: Fuzz the outbound validators
+        run: cargo fuzz run --target x86_64-unknown-linux-gnu outbound_ids -- -runs=5000
 
   deny:
     runs-on: ubuntu-latest

@@ -12,11 +12,18 @@ libfuzzer-sys = "0.4"
 
 [dependencies.messenger-webhook]
 path = ".."
-features = ["whatsapp", "telegram", "matrix"]
+features = ["whatsapp", "telegram", "matrix", "matrix-out"]
 
 [[bin]]
 name = "normalize"
 path = "fuzz_targets/normalize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "outbound_ids"
+path = "fuzz_targets/outbound_ids.rs"
 test = false
 doc = false
 bench = false
