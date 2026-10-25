@@ -4,7 +4,7 @@
 //! documented shape or the request is rejected. Permissiveness belongs in the
 //! payload parser, never in the authentication path.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
