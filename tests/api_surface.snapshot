@@ -1,0 +1,84 @@
+src/error.rs:enum Error
+src/error.rs:impl Error:fn is_retryable
+src/headers.rs:impl Headers:fn from_pairs
+src/headers.rs:impl Headers:fn get
+src/headers.rs:impl Headers:fn insert
+src/headers.rs:impl Headers:fn is_empty
+src/headers.rs:impl Headers:fn len
+src/headers.rs:impl Headers:fn new
+src/headers.rs:struct Headers
+src/lib.rs:const MAX_BODY_BYTES
+src/lib.rs:mod error
+src/lib.rs:mod headers
+src/lib.rs:mod matrix
+src/lib.rs:mod registry
+src/lib.rs:mod secret
+src/lib.rs:mod signature
+src/lib.rs:mod telegram
+src/lib.rs:mod whatsapp
+src/lib.rs:trait Adapter
+src/lib.rs:use error::{Error,Result}
+src/lib.rs:use headers::Headers
+src/lib.rs:use matrix::MatrixAdapter
+src/lib.rs:use model::{Attachment,AttachmentKind,Channel,DeliveryStatus,NormalizedMessage,ProviderPayload,Reaction,}
+src/lib.rs:use registry::Registry
+src/lib.rs:use secret::Secret
+src/lib.rs:use telegram::TelegramAdapter
+src/lib.rs:use whatsapp::WhatsAppAdapter
+src/matrix.rs:const AUTHORIZATION_HEADER
+src/matrix.rs:impl MatrixAdapter:fn new
+src/matrix.rs:struct MatrixAdapter
+src/model.rs:enum AttachmentKind
+src/model.rs:enum Channel
+src/model.rs:enum DeliveryStatus
+src/model.rs:impl Attachment:fn new
+src/model.rs:impl AttachmentKind:fn as_str
+src/model.rs:impl Channel:fn as_str
+src/model.rs:impl DeliveryStatus:fn as_str
+src/model.rs:impl NormalizedMessage:fn first_attachment
+src/model.rs:impl NormalizedMessage:fn is_edit
+src/model.rs:impl NormalizedMessage:fn is_status_update
+src/model.rs:impl NormalizedMessage:fn text
+src/model.rs:impl ProviderPayload:fn body
+src/model.rs:impl ProviderPayload:fn channel
+src/model.rs:impl ProviderPayload:fn content_type
+src/model.rs:impl ProviderPayload:fn into_body
+src/model.rs:impl ProviderPayload:fn json
+src/model.rs:impl ProviderPayload:fn method
+src/model.rs:impl ProviderPayload:fn new
+src/model.rs:struct Attachment
+src/model.rs:struct NormalizedMessage
+src/model.rs:struct ProviderPayload
+src/model.rs:struct Reaction
+src/registry.rs:impl Registry:fn adapt
+src/registry.rs:impl Registry:fn channels
+src/registry.rs:impl Registry:fn contains
+src/registry.rs:impl Registry:fn encode
+src/registry.rs:impl Registry:fn get
+src/registry.rs:impl Registry:fn handle
+src/registry.rs:impl Registry:fn is_empty
+src/registry.rs:impl Registry:fn len
+src/registry.rs:impl Registry:fn new
+src/registry.rs:impl Registry:fn register
+src/registry.rs:impl Registry:fn verify
+src/registry.rs:struct Registry
+src/secret.rs:impl Secret:fn ct_eq
+src/secret.rs:impl Secret:fn expose_secret
+src/secret.rs:impl Secret:fn is_empty
+src/secret.rs:impl Secret:fn new
+src/secret.rs:struct Secret
+src/signature.rs:const META_SIGNATURE_HEADER
+src/signature.rs:const META_SIGNATURE_PREFIX
+src/signature.rs:fn meta_signature
+src/signature.rs:fn verify_meta
+src/telegram.rs:const MAX_CAPTION_UTF16
+src/telegram.rs:const MAX_TEXT_UTF16
+src/telegram.rs:const SECRET_TOKEN_HEADER
+src/telegram.rs:impl TelegramAdapter:const HEADER
+src/telegram.rs:impl TelegramAdapter:fn new
+src/telegram.rs:struct TelegramAdapter
+src/whatsapp.rs:const MAX_CAPTION_BYTES
+src/whatsapp.rs:const MAX_TEXT_BYTES
+src/whatsapp.rs:impl WhatsAppAdapter:const SIGNATURE_HEADER
+src/whatsapp.rs:impl WhatsAppAdapter:fn new
+src/whatsapp.rs:struct WhatsAppAdapter

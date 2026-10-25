@@ -12,6 +12,23 @@ carry a `!` in the conventional-commit subject.
 
 Nothing yet.
 
+## [0.3.0] - 2026-10-25
+
+### Breaking
+
+- `Channel` is `#[non_exhaustive]`. An exhaustive `match` over it needs a `_`
+  arm; in exchange, a new built-in messenger is additive from here on, which is
+  what the 0.1.0 API review asked for. `Error`, `AttachmentKind` and
+  `DeliveryStatus` already were.
+
+### Added
+
+- `tests/api_freeze.rs` freezes the surface: every public item of `src/` is
+  recorded in `tests/api_surface.snapshot`, so adding, renaming or removing one
+  fails the build until the snapshot is regenerated on purpose. The same file
+  enforces `#[non_exhaustive]` on every public enum and that no private module
+  (`json`) leaks through a `pub use`.
+
 ## [0.2.1] - 2026-10-25
 
 ### Changed

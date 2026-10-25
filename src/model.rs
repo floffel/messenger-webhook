@@ -9,6 +9,9 @@ use std::fmt;
 
 /// Which messenger a message came from.
 ///
+/// The enum is `#[non_exhaustive]`, so a messenger this crate learns to speak
+/// later arrives as a new variant in a minor release instead of a break.
+///
 /// ```
 /// use messenger_webhook::Channel;
 ///
@@ -16,6 +19,7 @@ use std::fmt;
 /// assert_eq!(Channel::Other("signal".into()).as_str(), "signal");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum Channel {
     /// `WhatsApp` Cloud API.
     WhatsApp,
