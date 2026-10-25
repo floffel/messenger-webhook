@@ -14,6 +14,13 @@ Nothing yet.
 
 ## [0.3.0] - 2026-10-25
 
+### Breaking
+
+- `Channel` is `#[non_exhaustive]`. An exhaustive `match` over it needs a `_`
+  arm; in exchange, a new built-in messenger is additive from here on, which is
+  what the 0.1.0 API review asked for. `Error`, `AttachmentKind` and
+  `DeliveryStatus` already were.
+
 ### Added
 
 - **`matrix-out` feature (default off): a typed Matrix Client-Server outbound
@@ -40,16 +47,6 @@ Nothing yet.
 - Test suites `matrix_out`, `matrix_out_edge`, `matrix_out_properties`,
   `matrix_out_concurrency` and `matrix_out_http` (the only one that opens a
   socket: a loopback server for the `reqwest` transport).
-
-### Breaking
-
-- `Channel` is `#[non_exhaustive]`. An exhaustive `match` over it needs a `_`
-  arm; in exchange, a new built-in messenger is additive from here on, which is
-  what the 0.1.0 API review asked for. `Error`, `AttachmentKind` and
-  `DeliveryStatus` already were.
-
-### Added
-
 - `tests/api_freeze.rs` freezes the surface: every public item of `src/` is
   recorded in `tests/api_surface.snapshot`, so adding, renaming or removing one
   fails the build until the snapshot is regenerated on purpose. The same file
