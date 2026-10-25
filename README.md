@@ -6,8 +6,13 @@ Every provider reports the same facts differently. This crate maps **inbound**
 `WhatsApp` Cloud API, Telegram Bot API and Matrix events onto one
 `NormalizedMessage`, and **encodes** that message back into a provider payload —
 with signature verification as part of the adapter contract, not an optional
-extra. Nothing in the crate performs I/O: you own the HTTP server, the retries
-and the rate limits.
+extra.
+
+The default build performs **no I/O**: you own the HTTP server, the retries and
+the rate limits. The one exception is opt-in and default-off — the `matrix-out`
+feature adds a typed Matrix *outbound client* (send, react, redact, typing,
+receipts, media upload) behind a `Transport` trait, because a webhook parser and
+a homeserver client are different jobs and only one of them needs an HTTP stack.
 
 | provider | inbound | verification | outbound |
 |----------|---------|--------------|----------|
@@ -93,6 +98,86 @@ unsupported media kind, non-numeric Telegram ids, non-`mxc://` Matrix urls,
 edits) fail with `Error::InvalidMessage` instead of being sent as something the
 provider would reject.
 
+## Matrix outbound client (`matrix-out`)
+
+Enable the feature, hand it a transport, keep the access token out of the logs:
+
+```rust
+use std::sync::Arc;
+use messenger_webhook::matrix_out::{ClientConfig, MatrixClient, ReqwestTransport};
+
+let client = MatrixClient::new(
+    Arc::new(ReqwestTransport::new()?),
+    ClientConfig::new("https://matrix.example.org")?.with_user_id("@bot:example.org"),
+    std::env::var("MATRIX_ACCESS_TOKEN")?,
+)?;
+
+let outcome = client.send_text("!room:example.org", "Hallo").await?;
+println!("{} (txn {}, {} attempt(s))", outcome.event_id, outcome.txn_id, outcome.attempts);
+```
+
+The client never opens a socket itself. It builds a request, hands it to a
+`Transport`, and interprets the response — so every protocol rule below is
+tested without a homeserver, and `StubTransport` + `RecordingSleeper` are public
+so your tests can do the same.
+
+| leg | endpoint | idempotency |
+|-----|----------|-------------|
+| `send_text` / `send_event` | `PUT /rooms/{id}/send/{type}/{txn}` | transaction id |
+| `send_reaction` | `m.reaction` with `m.annotation` | transaction id |
+| `redact` | `PUT /rooms/{id}/redact/{event}/{txn}` | transaction id |
+| `send_typing` / `stop_typing` | `PUT /rooms/{id}/typing/{user}` | state-setting |
+| `send_read_receipt` | `POST /rooms/{id}/receipt/m.read/{event}` | state-setting |
+| `upload_media` | `POST /_matrix/media/v3/upload` | **none** |
+| `send_media` | upload, then `m.image`/`m.video`/`m.audio`/`m.file` | upload: none, send: transaction id |
+| `whoami` | `GET /account/whoami` | read |
+
+### Delivery contract
+
+| outcome | what the client does | what you see |
+|---------|---------------------|--------------|
+| `2xx` | done | `SendOutcome { event_id, txn_id, attempts }` |
+| `429` with `retry_after_ms` | waits exactly that long (bounded by `RetryPolicy::max_rate_limit_wait`), retries | more `attempts` |
+| `429` without it | exponential backoff (`500 ms`, doubling, capped) | more `attempts` |
+| `5xx` on a transaction-keyed send | retries **with the same txn id** — the homeserver de-duplicates | `Ambiguous { txn_id }` once the attempts are spent |
+| `5xx` / timeout on a **media upload** | **never retried** | `Ambiguous { txn_id: None }` |
+| connect/DNS/TLS failure | retried even for an upload — nothing was written | `Transport` (retryable) |
+| other `4xx` | not retried | `Rejected { status, errcode, message }` |
+| `2xx` with an unreadable body | not retried | `Ambiguous` for a write, `Decode` for a read |
+
+`OutboundError::is_retryable()` is true only when nothing was applied;
+`is_ambiguous()` is true when the event *may* be in the room. An ambiguous write
+carries the transaction id, and repeating that send with it
+(`send_text_with_txn`) is the documented recovery: one event, not two.
+
+Sends into one room are serialised (one request in flight, any number across
+rooms) so a bot's two-part reply cannot arrive out of order; turn it off with
+`ClientConfig::with_per_room_ordering(false)`. Limits are checked before a
+request exists: content against the 65 536-byte event ceiling, media against the
+configured `max_upload_bytes` (read the homeserver's real value from
+`m.upload.size` in `/capabilities`). The wire shapes and their sources are
+quoted in [docs/contracts.md](docs/contracts.md).
+
+### How this crate absorbed `channel-core` and `matrix-out`
+
+Both were monorepo crates in `repr/backend/aws/crates`, and the question was
+whether they belong here or in a second published crate. Evidence, then the
+decision:
+
+| monorepo item | verdict here |
+|---------------|--------------|
+| `channel_core::ChannelKind` (`WhatsApp`, `Telegram`, `Matrix`, `Email`, `Sms`, `Call`, `Letter`) | **Covered, minus the non-messengers.** `Channel` is the same idea with `Other(..)` for anything else; `Email`/`Sms`/`Call`/`Letter` are not messengers and stay in the monorepo, which is why `channel-core` is still a dependency of four other crates there. |
+| `ChannelCapabilities` (typing / reactions / read + delivery receipts / templates) | **Not merged, deliberately.** A capability matrix is a *product* decision (which channel may show what), not a wire fact, and the published crate has no channel that needs gating. `channels.md`-style truth belongs to the caller. |
+| `ChannelClient` trait (`send_text`, `indicate_typing`, `send_reaction`, defaulting to `Unsupported`) | **Covered and dropped.** `NormalizedMessage` + `Adapter::encode` is the outbound surface; the trait's default bodies existed to make an unsupported call fail loudly, which `encode` already does with `Error::InvalidMessage`. A second, `()`-returning send path was dead surface. |
+| `matrix_out::MatrixClient` | **Merged, hardened.** Same calls, but typed: `TxnId` instead of `Uuid::new_v4()` per attempt, `OutboundError` instead of `String`, limits and response-size checks, per-room ordering, and an injectable transport. |
+| `matrix_out` doc-comment claim that Matrix has "no documented body limit" | **Wrong, corrected.** The spec caps a complete event at 65 536 bytes; the client enforces what it can and says why ([docs/contracts.md](docs/contracts.md)). |
+| Media upload | **New.** `matrix-out` never uploaded anything; the client does, with the non-idempotent delivery rules the upload endpoint demands. |
+
+So: one crate, one release. `matrix-out` lives here behind a default-off
+feature, because an outbound client is additive surface on a crate that already
+owns the Matrix wire format — a second crate would publish the same provider
+twice and force consumers to keep two versions in step.
+
 ## Examples
 
 Two runnable examples ship with the crate — the minimal one has no dependencies
@@ -161,14 +246,22 @@ carried rather than rejected.
 | `tests/media_and_receipts.rs` | every media kind, reaction and receipt shape in both directions |
 | `tests/concurrency.rs` | 32 threads over one `Registry`, 32 threads over a borrowed `&dyn Adapter`, forged signatures under load |
 | `tests/fixtures.rs` | the fuzz seeds, compiled in, normalised through every adapter |
+| `tests/matrix_out.rs` | every outbound leg: URL, headers, body, txn reuse across retries, 429/5xx/4xx/timeout classification, ambiguous-vs-retryable, media ordering |
+| `tests/matrix_out_edge.rs` | the boundary matrix: empty and over-long ids, txn charset, control characters, media at N/N+1, `429` without a hint, statuses 100–999, undecodable bodies |
+| `tests/matrix_out_properties.rs` | proptest: txn-id grammar and uniqueness, total retry classification, "no non-idempotent request retried after 5xx", backoff bounds, `mxc://` grammar, every attempt of one send sharing one txn id |
+| `tests/matrix_out_concurrency.rs` | 32 tasks over one client: unique txn ids, one in-flight send per room, two rooms in parallel, retries not holding the gate |
+| `tests/matrix_out_http.rs` | the `reqwest` transport against a loopback server: token header, JSON body, media bytes, `5xx`, closed port (connect) and timeout (ambiguous) |
 | `tests/changelog.rs` | the newest changelog heading equals `Cargo.toml`, sections are newest-first, no duplicates and none empty — a version bump without an entry fails the build |
 
-**Coverage: 98.9 % of lines** (`cargo llvm-cov --all-features`, 1292 lines,
-14 missed). Half of the misses are the `is_empty()` helpers on `Headers` and
-`Registry`, which no test calls directly; the rest are single optional-field and
-error arms inside `json`, `lib`, `matrix` and `telegram`. CI fails below 95 %.
-Fuzz target: `normalize` (`cargo fuzz run normalize`), seeded with
-`fuzz/corpus/normalize/` — the same files the tests compile in.
+**Coverage: 97.6 % of lines** (`cargo llvm-cov --all-features`, 5491 lines,
+131 missed). The outbound module alone is ≥94 % per file and 100 % in
+`ordering.rs`; the misses are `reqwest`'s own error arms, unreachable
+`serde_json` failure paths and the `is_empty()` helpers no test calls directly.
+The gate is `--fail-under-lines 95`, so a regression fails CI rather than
+quietly eroding the number. Fuzz target: `normalize`
+(`cargo fuzz run normalize`), seeded with `fuzz/corpus/normalize/`; the outbound
+validators are covered by the property suite instead, because the response
+decoders are private and `StubTransport` already feeds them arbitrary bodies.
 
 ## Versioning and semver policy
 
@@ -184,8 +277,8 @@ without its entry.
 - any public type, trait, method, function or module path this README or the
   docs.rs page names — including moving an item between modules
 - `Adapter`'s methods and their contracts (`verify` before `adapt`)
-- renaming or removing a feature (`whatsapp`, `telegram`, `matrix`); adding one
-  is additive
+- renaming or removing a feature (`whatsapp`, `telegram`, `matrix`,
+  `matrix-out`); adding one is additive
 - the encoded payload for a message the crate claims to support: HTTP method,
   content type or body field names
 - a raised MSRV — the floor is Rust 1.89 and moves only in a minor release
@@ -219,8 +312,10 @@ strings and objects passed through verbatim.
 
 Each of these is a decision, not an omission:
 
-- **No network.** No sending, media download, token refresh or long polling.
-  The crate produces payloads and reads webhook bodies.
+- **No network in the default build.** Without `matrix-out` the crate produces
+  payloads and reads webhook bodies; with it, the only I/O is the Matrix
+  Client-Server legs listed above. No media download, no token refresh, no sync
+  or long polling, no E2EE, no room administration (create/join/invite/state).
 - **No rich text.** Telegram entities, `WhatsApp` interactive payloads and
   Matrix formatted bodies (`format`, `formatted_body`) are not parsed; the plain
   text is normalised and the raw object is preserved.

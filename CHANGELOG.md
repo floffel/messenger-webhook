@@ -14,6 +14,33 @@ Nothing yet.
 
 ## [0.3.0] - 2026-10-25
 
+### Added
+
+- **`matrix-out` feature (default off): a typed Matrix Client-Server outbound
+  client.** `MatrixClient` sends text and arbitrary event types, reactions
+  (`m.reaction` / `m.annotation`), redactions, typing notifications, read
+  receipts and media uploads; `whoami` probes the account. The crate still does
+  no I/O in its default build — the client talks to a `Transport`, and
+  `ReqwestTransport` is the shipped implementation. `StubTransport` and
+  `RecordingSleeper` are public so consumers can test without a homeserver.
+- **Idempotent sends.** Every event send is keyed by a validated `TxnId`; the
+  id is reused across internal retries and is returned in `SendOutcome` and in
+  `OutboundError::Ambiguous`, so a caller can repeat a send at most once.
+  `TxnId::generate()` yields unique, monotonically ordered ids.
+- **Delivery classification.** `RetryPolicy` + `Operation` decide whether an
+  attempt may be repeated: `429` is honoured via `retry_after_ms` (or a
+  `Retry-After` header, or the backoff), `5xx`/timeouts on a transaction-keyed
+  send retry with the same id, a media upload is never retried after an
+  uncertain outcome, and `OutboundError::is_retryable()` / `is_ambiguous()`
+  state which of the three delivery contracts applies.
+- **Per-room ordering.** Sends into one room are serialised (configurable),
+  bounded gate map, no lock held across an `await`.
+- `docs/contracts.md` — every endpoint and error shape this crate encodes,
+  quoted from the Matrix Client-Server API v1.19 with its source URL.
+- Test suites `matrix_out`, `matrix_out_edge`, `matrix_out_properties`,
+  `matrix_out_concurrency` and `matrix_out_http` (the only one that opens a
+  socket: a loopback server for the `reqwest` transport).
+
 ### Breaking
 
 - `Channel` is `#[non_exhaustive]`. An exhaustive `match` over it needs a `_`
