@@ -39,9 +39,16 @@ const DIGEST_LEN: usize = 32;
 ///
 /// # Errors
 ///
+/// Returns [`Error::MissingSecret`] when `secret` is empty: HMAC accepts a
+/// zero-length key, so signing with it would produce a value anyone can forge.
 /// Returns [`Error::BadSignature`] if the HMAC construction rejects the key,
 /// which cannot happen for HMAC-SHA256 and would still fail closed.
 pub fn meta_signature(secret: &Secret, body: &[u8]) -> Result<String> {
+    if secret.is_empty() {
+        return Err(Error::MissingSecret {
+            channel: Channel::WhatsApp,
+        });
+    }
     let digest =
         hmac_sha256(secret.expose_secret().as_bytes(), body).ok_or(Error::BadSignature {
             channel: Channel::WhatsApp,
@@ -61,15 +68,27 @@ pub fn meta_signature(secret: &Secret, body: &[u8]) -> Result<String> {
 /// let header = signature::meta_signature(&secret, b"{}")?;
 /// signature::verify_meta(&secret, &header, b"{}")?;
 /// assert!(signature::verify_meta(&secret, &header, b"{\"a\":1}").is_err());
+///
+/// // An unset secret fails closed instead of verifying with an empty key.
+/// assert!(signature::verify_meta(&Secret::new(""), &header, b"{}").is_err());
 /// # Ok::<(), messenger_webhook::Error>(())
 /// ```
 ///
 /// # Errors
 ///
+/// Returns [`Error::MissingSecret`] when `secret` is empty — before the header
+/// is parsed and before anything is hashed. An empty key is a valid HMAC key,
+/// so without this check `sha256=HMAC("", body)` would verify for every body,
+/// letting an attacker sign arbitrary payloads.
 /// Returns [`Error::MalformedVerificationHeader`] when the header is not
 /// `sha256=` followed by 64 hex digits, and [`Error::BadSignature`] when the
 /// digest does not match `body`.
 pub fn verify_meta(secret: &Secret, header: &str, body: &[u8]) -> Result<()> {
+    if secret.is_empty() {
+        return Err(Error::MissingSecret {
+            channel: Channel::WhatsApp,
+        });
+    }
     let hex = header.strip_prefix(META_SIGNATURE_PREFIX).ok_or_else(|| {
         Error::MalformedVerificationHeader {
             channel: Channel::WhatsApp,

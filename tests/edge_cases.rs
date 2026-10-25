@@ -128,6 +128,47 @@ mod whatsapp_edges {
         ));
     }
 
+    /// A zero-length HMAC key is legal, so an unset secret would otherwise
+    /// verify `sha256=HMAC("", body)` for *any* body — an attacker forges it.
+    #[test]
+    fn empty_secret_rejects_a_correctly_computed_empty_key_hmac() {
+        // HMAC-SHA256(key = "", message = "{}"), computed independently:
+        //   python3 -c "import hmac,hashlib;print(hmac.new(b'',b'{}',hashlib.sha256).hexdigest())"
+        const FORGED: &str =
+            "sha256=22f8eea909400af98adf3681a9f31923ef6b7fcba4abb553d92823a3e9d5c25e";
+
+        // The public verifier refuses before it hashes anything.
+        assert!(matches!(
+            messenger_webhook::signature::verify_meta(&Secret::new(""), FORGED, b"{}"),
+            Err(Error::MissingSecret { .. })
+        ));
+
+        // ... and it refuses with a header that is not even well formed, i.e.
+        // the empty-secret check runs before parsing.
+        assert!(matches!(
+            messenger_webhook::signature::verify_meta(&Secret::new(""), "sha256=nothex", b"{}"),
+            Err(Error::MissingSecret { .. })
+        ));
+
+        // The signer refuses too, so a mock/caller cannot mint an empty-key
+        // signature in the first place.
+        assert!(matches!(
+            meta_signature(&Secret::new(""), b"{}"),
+            Err(Error::MissingSecret { .. })
+        ));
+
+        // Boundary pair: the shortest non-empty secret is a real key and
+        // produces a signature that verifies only for its own body.
+        let shortest = Secret::new("x");
+        let header = meta_signature(&shortest, b"{}").expect("one-byte key signs");
+        assert_ne!(header, FORGED);
+        assert!(messenger_webhook::signature::verify_meta(&shortest, &header, b"{}").is_ok());
+        assert!(matches!(
+            messenger_webhook::signature::verify_meta(&shortest, FORGED, b"{}"),
+            Err(Error::BadSignature { .. })
+        ));
+    }
+
     #[test]
     fn signature_header_shape_is_enforced() {
         let body = b"{}";
