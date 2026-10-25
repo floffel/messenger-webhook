@@ -194,7 +194,23 @@ mod tests {
             "65 nibbles is too long"
         );
         assert_eq!(decode_hex(&"g".repeat(64)), None, "non-hex digit");
-        assert_eq!(decode_hex(&"ü".repeat(64)), None, "non-ascii");
+        // Wrong *byte* count, rejected at the length check before any byte is
+        // examined: "ü" is two UTF-8 bytes, so 64 of them are 128 bytes.
+        assert_eq!(decode_hex(&"ü".repeat(64)), None, "128 bytes, not 64");
+        // Right byte count, non-ASCII byte: 62 ASCII digits plus "ü" is
+        // exactly 64 bytes, so this one has to be rejected by `hex_value`.
+        assert_eq!(
+            decode_hex(&format!("{}ü", "0".repeat(62))),
+            None,
+            "64 bytes containing a non-ASCII byte"
+        );
+        // Same for a single non-ASCII byte in the last position of an
+        // otherwise valid digest.
+        assert_eq!(
+            decode_hex(&format!("{}é", &text[..62])),
+            None,
+            "valid prefix, multi-byte tail"
+        );
     }
 
     #[test]

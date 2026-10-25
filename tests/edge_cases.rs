@@ -140,6 +140,10 @@ mod whatsapp_edges {
             ("one nibble short", format!("sha256={}", &hex[1..])),
             ("one nibble long", format!("sha256={hex}0")),
             ("non-hex digit", format!("sha256={}", "z".repeat(64))),
+            (
+                "64 bytes with a non-ascii byte",
+                format!("sha256={}ü", "0".repeat(62)),
+            ),
             ("sha1 prefix", format!("sha1={}", &hex[..40])),
             ("leading space", format!(" {valid}")),
             ("wrong case prefix", format!("SHA256={hex}")),
