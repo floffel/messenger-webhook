@@ -17,6 +17,10 @@ default = ["whatsapp", "telegram", "matrix"]
 whatsapp = []
 telegram = []
 matrix = []
+# Default-off: a Matrix outbound client drags in an HTTP stack (reqwest) and a
+# runtime (tokio's sync + time primitives). A webhook-only consumer must not
+# inherit either, so the whole `matrix_out` module sits behind this feature.
+matrix-out = ["dep:reqwest", "dep:tokio", "dep:uuid"]
 
 [dependencies]
 serde_json = "1"
@@ -24,13 +28,33 @@ sha2 = "0.11"
 hmac = "0.13"
 subtle = "2"
 thiserror = "2"
+# One HTTP stack, one TLS backend: rustls, so no OpenSSL build. `json` is off on
+# purpose - the crate serialises with serde_json itself and sends bytes, which
+# keeps the transport dumb and the wire shape under this crate's control.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+], optional = true }
+# Only the primitives the outbound client needs: an async mutex for per-room
+# ordering and a timer for backoff. No runtime, no macros: the client drives on
+# whatever executor the caller already has.
+tokio = { version = "1", default-features = false, features = [
+    "sync",
+    "time",
+], optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
 
 [dev-dependencies]
 proptest = "1"
 # Only `examples/axum_handler.rs` needs an HTTP stack; the crate itself stays
 # free of one, which is why axum lives here and not in `[dependencies]`.
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tokio = { version = "1", features = [
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
 
 # An example that needs a feature is only built when that feature is on, so the
 # `--no-default-features` job does not try to compile it.

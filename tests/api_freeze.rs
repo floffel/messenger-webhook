@@ -191,11 +191,15 @@ fn surface() -> Report {
     let mut report = Report::default();
     for path in files {
         let source = fs::read_to_string(&path).expect("source file is readable");
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("file names are utf-8");
-        let file = format!("src/{name}");
+        // Path relative to `src/`, not just the file name: a subdirectory module
+        // (`src/matrix_out/mod.rs`) would otherwise be recorded as `src/mod.rs`
+        // and collide with the crate root's neighbours.
+        let relative = path
+            .strip_prefix(SRC)
+            .expect("every scanned file lives under src/")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let file = format!("src/{relative}");
         scan(&source, &file, &mut report);
     }
     report.items.sort();

@@ -15,6 +15,13 @@
 //! `telegram`, `matrix`); everything in this module is available regardless of
 //! the feature set.
 //!
+//! One feature is different: `matrix-out` (default **off**) adds the
+//! `matrix_out` module, a typed Matrix Client-Server *outbound client* — sends,
+//! reactions, redactions, typing, receipts and media upload — on a transport
+//! seam so the crate can be tested without a homeserver. It is the only module
+//! that performs I/O, and only when a consumer opts in with the transport it
+//! wants.
+//!
 //! Verification is part of the adapter contract, not an afterthought: an
 //! adapter cannot be constructed without a secret, and [`Adapter::verify`]
 //! fails closed on an empty secret, a missing header or an oversized body.
@@ -43,9 +50,9 @@
 //! ## Deliberate exclusions
 //!
 //! Documented rather than silently missing — see the README for the full list:
-//! no network calls, no media download, no rich-text or entity parsing, no
-//! Matrix end-to-end encryption (`m.room.encrypted` events are carried
-//! verbatim), and Meta's deprecated `X-Hub-Signature` (SHA-1) header is
+//! no network in the default build, no media download, no rich-text or entity
+//! parsing, no Matrix end-to-end encryption (`m.room.encrypted` events are
+//! carried verbatim), and Meta's deprecated `X-Hub-Signature` (SHA-1) header is
 //! rejected in favour of `X-Hub-Signature-256`.
 
 #![forbid(unsafe_code)]
@@ -61,6 +68,9 @@ pub mod signature;
 #[cfg(feature = "matrix")]
 #[cfg_attr(docsrs, doc(cfg(feature = "matrix")))]
 pub mod matrix;
+#[cfg(feature = "matrix-out")]
+#[cfg_attr(docsrs, doc(cfg(feature = "matrix-out")))]
+pub mod matrix_out;
 #[cfg(feature = "telegram")]
 #[cfg_attr(docsrs, doc(cfg(feature = "telegram")))]
 pub mod telegram;

@@ -11,6 +11,7 @@ src/lib.rs:const MAX_BODY_BYTES
 src/lib.rs:mod error
 src/lib.rs:mod headers
 src/lib.rs:mod matrix
+src/lib.rs:mod matrix_out
 src/lib.rs:mod registry
 src/lib.rs:mod secret
 src/lib.rs:mod signature
@@ -28,6 +29,132 @@ src/lib.rs:use whatsapp::WhatsAppAdapter
 src/matrix.rs:const AUTHORIZATION_HEADER
 src/matrix.rs:impl MatrixAdapter:fn new
 src/matrix.rs:struct MatrixAdapter
+src/matrix_out/error.rs:enum OutboundError
+src/matrix_out/error.rs:impl OutboundError:fn is_ambiguous
+src/matrix_out/error.rs:impl OutboundError:fn is_client_error
+src/matrix_out/error.rs:impl OutboundError:fn is_retryable
+src/matrix_out/error.rs:impl OutboundError:fn txn_id
+src/matrix_out/http.rs:const DEFAULT_REQUEST_TIMEOUT
+src/matrix_out/http.rs:impl ReqwestTransport:fn new
+src/matrix_out/http.rs:impl ReqwestTransport:fn timeout
+src/matrix_out/http.rs:impl ReqwestTransport:fn with_timeout
+src/matrix_out/http.rs:struct ReqwestTransport
+src/matrix_out/mod.rs:impl ClientConfig:fn homeserver
+src/matrix_out/mod.rs:impl ClientConfig:fn max_upload_bytes
+src/matrix_out/mod.rs:impl ClientConfig:fn new
+src/matrix_out/mod.rs:impl ClientConfig:fn per_room_ordering
+src/matrix_out/mod.rs:impl ClientConfig:fn retry
+src/matrix_out/mod.rs:impl ClientConfig:fn user_id
+src/matrix_out/mod.rs:impl ClientConfig:fn with_max_upload_bytes
+src/matrix_out/mod.rs:impl ClientConfig:fn with_per_room_ordering
+src/matrix_out/mod.rs:impl ClientConfig:fn with_retry
+src/matrix_out/mod.rs:impl ClientConfig:fn with_sleeper
+src/matrix_out/mod.rs:impl ClientConfig:fn with_user_id
+src/matrix_out/mod.rs:impl ClientConfig:struct MatrixClient
+src/matrix_out/mod.rs:impl MatrixClient:fn config
+src/matrix_out/mod.rs:impl MatrixClient:fn new
+src/matrix_out/mod.rs:impl TokioSleeper:struct ClientConfig
+src/matrix_out/mod.rs:mod error
+src/matrix_out/mod.rs:mod retry
+src/matrix_out/mod.rs:mod testing
+src/matrix_out/mod.rs:mod transport
+src/matrix_out/mod.rs:mod types
+src/matrix_out/mod.rs:struct TokioSleeper
+src/matrix_out/mod.rs:trait Sleeper
+src/matrix_out/mod.rs:use error::{OutboundError,OutboundResult}
+src/matrix_out/mod.rs:use http::{ReqwestTransport,DEFAULT_REQUEST_TIMEOUT}
+src/matrix_out/mod.rs:use ordering::GATE_CAPACITY
+src/matrix_out/mod.rs:use retry::{Operation,RetryPolicy,Verdict,DEFAULT_BASE_DELAY_MS,DEFAULT_MAX_ATTEMPTS,DEFAULT_MAX_DELAY_MS,DEFAULT_MAX_RATE_LIMIT_WAIT_MS,}
+src/matrix_out/mod.rs:use testing::{RecordedRequest,RecordingSleeper,StubTransport}
+src/matrix_out/mod.rs:use transport::Transport
+src/matrix_out/mod.rs:use types::{MediaKind,MediaUpload,MxcUri,SendOutcome,TxnId,DEFAULT_MAX_UPLOAD_BYTES,DEFAULT_TYPING_TIMEOUT_MS,MAX_CONTENT_BYTES,MAX_EVENT_TYPE_BYTES,MAX_ID_BYTES,MAX_MXC_URI_BYTES,MAX_TXN_ID_BYTES,}
+src/matrix_out/ordering.rs:const GATE_CAPACITY
+src/matrix_out/retry.rs:const DEFAULT_BASE_DELAY_MS
+src/matrix_out/retry.rs:const DEFAULT_MAX_ATTEMPTS
+src/matrix_out/retry.rs:const DEFAULT_MAX_DELAY_MS
+src/matrix_out/retry.rs:const DEFAULT_MAX_RATE_LIMIT_WAIT_MS
+src/matrix_out/retry.rs:enum Operation
+src/matrix_out/retry.rs:enum Verdict
+src/matrix_out/retry.rs:impl Operation:fn as_str
+src/matrix_out/retry.rs:impl Operation:fn is_repeatable
+src/matrix_out/retry.rs:impl RetryPolicy:fn backoff
+src/matrix_out/retry.rs:impl RetryPolicy:fn classify
+src/matrix_out/retry.rs:impl RetryPolicy:fn classify_transport
+src/matrix_out/retry.rs:impl Verdict:fn delay
+src/matrix_out/retry.rs:impl Verdict:fn is_final
+src/matrix_out/retry.rs:struct RetryPolicy
+src/matrix_out/testing.rs:impl RecordedRequest:fn header
+src/matrix_out/testing.rs:impl RecordedRequest:fn json
+src/matrix_out/testing.rs:impl RecordingSleeper:fn delays
+src/matrix_out/testing.rs:impl RecordingSleeper:fn new
+src/matrix_out/testing.rs:impl RecordingSleeper:fn total
+src/matrix_out/testing.rs:impl StubTransport:fn call_count
+src/matrix_out/testing.rs:impl StubTransport:fn last_request
+src/matrix_out/testing.rs:impl StubTransport:fn new
+src/matrix_out/testing.rs:impl StubTransport:fn push
+src/matrix_out/testing.rs:impl StubTransport:fn push_failure
+src/matrix_out/testing.rs:impl StubTransport:fn push_json
+src/matrix_out/testing.rs:impl StubTransport:fn push_status
+src/matrix_out/testing.rs:impl StubTransport:fn remaining
+src/matrix_out/testing.rs:impl StubTransport:fn requests
+src/matrix_out/testing.rs:struct RecordedRequest
+src/matrix_out/testing.rs:struct RecordingSleeper
+src/matrix_out/testing.rs:struct StubTransport
+src/matrix_out/transport.rs:enum Body
+src/matrix_out/transport.rs:enum Method
+src/matrix_out/transport.rs:enum TransportErrorKind
+src/matrix_out/transport.rs:impl Body:fn as_bytes
+src/matrix_out/transport.rs:impl Body:fn is_empty
+src/matrix_out/transport.rs:impl Body:fn len
+src/matrix_out/transport.rs:impl Method:fn as_str
+src/matrix_out/transport.rs:impl Method:fn is_safe
+src/matrix_out/transport.rs:impl Request:fn body
+src/matrix_out/transport.rs:impl Request:fn header
+src/matrix_out/transport.rs:impl Request:fn headers
+src/matrix_out/transport.rs:impl Request:fn method
+src/matrix_out/transport.rs:impl Request:fn new
+src/matrix_out/transport.rs:impl Request:fn url
+src/matrix_out/transport.rs:impl Request:fn with_body
+src/matrix_out/transport.rs:impl Request:fn with_header
+src/matrix_out/transport.rs:impl Response:fn body
+src/matrix_out/transport.rs:impl Response:fn header
+src/matrix_out/transport.rs:impl Response:fn is_success
+src/matrix_out/transport.rs:impl Response:fn json
+src/matrix_out/transport.rs:impl Response:fn new
+src/matrix_out/transport.rs:impl Response:fn status
+src/matrix_out/transport.rs:impl Response:fn with_header
+src/matrix_out/transport.rs:impl TransportError:fn connect
+src/matrix_out/transport.rs:impl TransportError:fn other
+src/matrix_out/transport.rs:impl TransportError:fn timeout
+src/matrix_out/transport.rs:impl TransportErrorKind:fn as_str
+src/matrix_out/transport.rs:impl TransportErrorKind:fn is_before_write
+src/matrix_out/transport.rs:struct Request
+src/matrix_out/transport.rs:struct Response
+src/matrix_out/transport.rs:struct TransportError
+src/matrix_out/transport.rs:trait Transport
+src/matrix_out/types.rs:const DEFAULT_MAX_UPLOAD_BYTES
+src/matrix_out/types.rs:const DEFAULT_TYPING_TIMEOUT_MS
+src/matrix_out/types.rs:const MAX_CONTENT_BYTES
+src/matrix_out/types.rs:const MAX_EVENT_TYPE_BYTES
+src/matrix_out/types.rs:const MAX_ID_BYTES
+src/matrix_out/types.rs:const MAX_MXC_URI_BYTES
+src/matrix_out/types.rs:const MAX_TXN_ID_BYTES
+src/matrix_out/types.rs:enum MediaKind
+src/matrix_out/types.rs:impl MediaKind:fn msgtype
+src/matrix_out/types.rs:impl MediaUpload:fn new
+src/matrix_out/types.rs:impl MediaUpload:fn with_filename
+src/matrix_out/types.rs:impl MediaUpload:fn with_kind
+src/matrix_out/types.rs:impl MxcUri:fn as_str
+src/matrix_out/types.rs:impl MxcUri:fn media_id
+src/matrix_out/types.rs:impl MxcUri:fn parse
+src/matrix_out/types.rs:impl MxcUri:fn server_name
+src/matrix_out/types.rs:impl TxnId:fn as_str
+src/matrix_out/types.rs:impl TxnId:fn generate
+src/matrix_out/types.rs:impl TxnId:fn new
+src/matrix_out/types.rs:struct MediaUpload
+src/matrix_out/types.rs:struct MxcUri
+src/matrix_out/types.rs:struct SendOutcome
+src/matrix_out/types.rs:struct TxnId
 src/model.rs:enum AttachmentKind
 src/model.rs:enum Channel
 src/model.rs:enum DeliveryStatus
