@@ -29,6 +29,20 @@ Nothing yet.
   enforces `#[non_exhaustive]` on every public enum and that no private module
   (`json`) leaks through a `pub use`.
 
+### Fixed
+
+- `signature::verify_meta` and `signature::meta_signature` fail closed on an
+  empty secret instead of verifying with a zero-length HMAC key. HMAC accepts
+  `""` as a key, so an unset app secret previously accepted
+  `sha256=HMAC("", body)` for *any* body — a signature bypass for callers of the
+  public helpers (the adapters already refused). Both now return
+  `Error::MissingSecret { channel: Channel::WhatsApp }` before parsing the
+  header or hashing.
+- The `decode_hex` non-ASCII test exercised the length check, not the byte
+  check: `"ü".repeat(64)` is 128 UTF-8 bytes. It now also asserts on a 64-byte
+  input that carries a multi-byte character, directly and through the public
+  header path.
+
 ## [0.2.1] - 2026-10-25
 
 ### Changed
