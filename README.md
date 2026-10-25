@@ -161,11 +161,53 @@ carried rather than rejected.
 | `tests/media_and_receipts.rs` | every media kind, reaction and receipt shape in both directions |
 | `tests/concurrency.rs` | 32 threads over one `Registry`, 32 threads over a borrowed `&dyn Adapter`, forged signatures under load |
 | `tests/fixtures.rs` | the fuzz seeds, compiled in, normalised through every adapter |
+| `tests/changelog.rs` | the newest changelog heading equals `Cargo.toml`, sections are newest-first, no duplicates and none empty — a version bump without an entry fails the build |
 
-**Coverage: 99.4 % of lines** (`cargo llvm-cov --all-features`, 1292 lines;
-the remainder are unreachable `None` arms of optional JSON fields). CI fails
-below 95 %. Fuzz target: `normalize` (`cargo fuzz run normalize`), seeded with
+**Coverage: 98.9 % of lines** (`cargo llvm-cov --all-features`, 1292 lines,
+14 missed). Half of the misses are the `is_empty()` helpers on `Headers` and
+`Registry`, which no test calls directly; the rest are single optional-field and
+error arms inside `json`, `lib`, `matrix` and `telegram`. CI fails below 95 %.
+Fuzz target: `normalize` (`cargo fuzz run normalize`), seeded with
 `fuzz/corpus/normalize/` — the same files the tests compile in.
+
+## Versioning and semver policy
+
+The crate is pre-1.0, so cargo's compatibility rule applies to the *middle*
+number: `0.2.x` are compatible patches, `0.2` → `0.3` may break, and a break is
+never published as `0.2.1`. Every release adds a section to
+[CHANGELOG.md](CHANGELOG.md), and `tests/changelog.rs` fails the build when the
+newest changelog heading and `Cargo.toml` disagree — a release cannot ship
+without its entry.
+
+**Breaking (needs a new minor, marked `Breaking` + `!` in the commit):**
+
+- any public type, trait, method, function or module path this README or the
+  docs.rs page names — including moving an item between modules
+- `Adapter`'s methods and their contracts (`verify` before `adapt`)
+- renaming or removing a feature (`whatsapp`, `telegram`, `matrix`); adding one
+  is additive
+- the encoded payload for a message the crate claims to support: HTTP method,
+  content type or body field names
+- a raised MSRV — the floor is Rust 1.89 and moves only in a minor release
+
+**Additive (a patch or a minor, never breaks a build):**
+
+- a new variant on `Error`, `AttachmentKind` or `DeliveryStatus` — all three are
+  `#[non_exhaustive]`, so `match` arms need a `_` anyway
+- new `Channel::Other(..)` values, new inherent methods, new trait methods with
+  a default body
+- a new optional field on a type that is `#[non_exhaustive]`
+
+**Breaking today, because these types are exhaustive on purpose:** adding a
+field to `NormalizedMessage`, `Attachment` or `Reaction`, or a built-in variant
+to `Channel`. The three structs are built with field literals by callers, so a
+new field is source-breaking, and a closed `Channel` breaks exhaustive matches.
+`Channel::Other` exists so an unmodelled messenger never forces a variant; a
+genuine new field is announced as breaking and lands in a minor bump.
+
+**Deliberately not covered by semver:** the wording of `Error`'s `Display`
+output, and the content of `provider_type` and `raw`, which are the provider's
+strings and objects passed through verbatim.
 
 ## Deliberate exclusions
 
