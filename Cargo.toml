@@ -27,6 +27,20 @@ thiserror = "2"
 
 [dev-dependencies]
 proptest = "1"
+# Only `examples/axum_handler.rs` needs an HTTP stack; the crate itself stays
+# free of one, which is why axum lives here and not in `[dependencies]`.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+
+# An example that needs a feature is only built when that feature is on, so the
+# `--no-default-features` job does not try to compile it.
+[[example]]
+name = "minimal"
+required-features = ["whatsapp"]
+
+[[example]]
+name = "axum_handler"
+required-features = ["whatsapp"]
 
 [lints.rust]
 unsafe_code = "forbid"

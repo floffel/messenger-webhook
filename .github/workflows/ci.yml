@@ -18,6 +18,10 @@ jobs:
       - run: cargo test --no-default-features --features whatsapp
       - run: cargo test --no-default-features --features telegram
       - run: cargo test --no-default-features --features matrix
+      # The README points at both examples: run the framework-free one and make
+      # sure the Axum one at least links, so neither rots into decoration.
+      - run: cargo run --example minimal --features whatsapp
+      - run: cargo build --example axum_handler --features whatsapp
       - run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: -D warnings

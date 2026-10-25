@@ -93,6 +93,29 @@ unsupported media kind, non-numeric Telegram ids, non-`mxc://` Matrix urls,
 edits) fail with `Error::InvalidMessage` instead of being sent as something the
 provider would reject.
 
+## Examples
+
+Two runnable examples ship with the crate — the minimal one has no dependencies
+beyond the crate, the Axum one is the shape a real webhook endpoint takes.
+
+```sh
+cargo run --example minimal --features whatsapp
+```
+
+Verifies a webhook body against a signature it computes itself, normalises the
+message and prints the outbound payload the provider would expect. No server,
+no network.
+
+```sh
+WA_APP_SECRET=dev-only-secret cargo run --example axum_handler
+```
+
+A real Axum handler on `127.0.0.1:3000`: takes the **raw** body as `Bytes`
+(before any deserialisation, so the signature still covers it), maps the
+framework's header map onto `Headers`, answers `401` for a missing or wrong
+signature and `200` for a verified event. CI runs the first example and
+compiles the second, so neither can rot into something that only looks runnable.
+
 ## Normalised shape
 
 `NormalizedMessage` carries the provider id, conversation, sender, text and
