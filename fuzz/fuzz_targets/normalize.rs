@@ -40,7 +40,17 @@ fuzz_target!(|data: &[u8]| {
                 for event in &events {
                     assert_eq!(event.channel, adapter.channel());
                     assert!(!event.external_id.is_empty());
-                    assert!(!event.conversation_id.is_empty());
+                    // An event whose conversation the provider did not send is
+                    // carried on purpose (the id is synthesised, see
+                    // `SYNTHETIC_ID_PREFIX`), but it must not be encodable:
+                    // there is no recipient to send it to.
+                    if event.conversation_id.is_empty() {
+                        assert!(
+                            adapter.encode(event).is_err(),
+                            "{} encoded an event without a recipient",
+                            event.channel
+                        );
+                    }
                     // Encoding a normalised event must succeed or fail typed.
                     let _ = adapter.encode(event);
                 }

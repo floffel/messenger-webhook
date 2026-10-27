@@ -277,15 +277,35 @@ fn a_payload_from_another_provider_does_not_become_an_event() {
             { "id": "wamid.1", "from": "49", "type": "text" }
         ] } }] }]
     });
-    assert!(adapt(&matrix(), &whatsapp_body).is_empty());
-    assert!(adapt(&telegram(), &whatsapp_body).is_empty());
+    assert_eq!(
+        adapt(&matrix(), &whatsapp_body),
+        Vec::new(),
+        "matrix saw a WhatsApp body"
+    );
+    assert_eq!(
+        adapt(&telegram(), &whatsapp_body),
+        Vec::new(),
+        "telegram saw a WhatsApp body"
+    );
 
     let matrix_body = json!({
         "type": "m.room.message", "room_id": "!r:s", "content": {}
     });
-    assert!(adapt(&whatsapp(), &matrix_body).is_empty());
+    assert_eq!(
+        adapt(&whatsapp(), &matrix_body),
+        Vec::new(),
+        "whatsapp saw a Matrix body"
+    );
 
     let telegram_body = json!({ "update_id": 1, "message": { "text": "hi" } });
-    assert!(adapt(&matrix(), &telegram_body).is_empty());
-    assert!(adapt(&whatsapp(), &telegram_body).is_empty());
+    assert_eq!(
+        adapt(&matrix(), &telegram_body),
+        Vec::new(),
+        "matrix saw a Telegram body"
+    );
+    assert_eq!(
+        adapt(&whatsapp(), &telegram_body),
+        Vec::new(),
+        "whatsapp saw a Telegram body"
+    );
 }
