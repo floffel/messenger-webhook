@@ -10,6 +10,10 @@ carry a `!` in the conventional-commit subject.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.2] - 2026-10-27
+
 ### Changed
 
 - **An event without a provider id is no longer dropped.** Adapters used to
