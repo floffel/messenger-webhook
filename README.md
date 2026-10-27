@@ -243,6 +243,7 @@ carried rather than rejected.
 | doctests on every public item | the documented examples really run |
 | `tests/properties.rs` | arbitrary JSON (any depth/types) and arbitrary bytes never panic; encode → provider echo → normalise round-trips on all three channels; unknown fields survive; limits hold exactly at N and N+1 |
 | `tests/edge_cases.rs` | empty body, 1 MiB boundary, missing/ malformed signature headers, signature bound to the exact body, duplicate keys, unknown types, 20 recipients, unicode/NUL, numeric-vs-string ids, wrong JSON types, deep nesting |
+| `tests/synthetic_ids.rs` | an event the provider sent without an id is carried with a stable synthesised key: same body, same id across replays; different body, different id; per adapter |
 | `tests/media_and_receipts.rs` | every media kind, reaction and receipt shape in both directions |
 | `tests/concurrency.rs` | 32 threads over one `Registry`, 32 threads over a borrowed `&dyn Adapter`, forged signatures under load |
 | `tests/fixtures.rs` | the fuzz seeds, compiled in, normalised through every adapter |
@@ -253,9 +254,9 @@ carried rather than rejected.
 | `tests/matrix_out_http.rs` | the `reqwest` transport against a loopback server: token header, JSON body, media bytes, `5xx`, closed port (connect) and timeout (ambiguous) |
 | `tests/changelog.rs` | the newest changelog heading equals `Cargo.toml`, sections are newest-first, no duplicates and none empty — a version bump without an entry fails the build |
 
-**Coverage: 97.6 % of lines** (`cargo llvm-cov --all-features`, 5491 lines,
-131 missed). The outbound module alone is ≥94 % per file and 100 % in
-`ordering.rs`; the misses are `reqwest`'s own error arms, unreachable
+**Coverage: 98.4 % of lines** (`cargo llvm-cov --all-features`, 3690 lines,
+58 missed; `src/id.rs` and `model.rs` at 100 %). The outbound module alone
+is ≥94 % per file and 100 % in `ordering.rs`; the misses are `reqwest`'s own error arms,
 `serde_json` failure paths and the `is_empty()` helpers no test calls directly.
 The gate is `--fail-under-lines 95`, so a regression fails CI rather than
 quietly eroding the number. Fuzz target: `normalize`
@@ -329,8 +330,14 @@ Each of these is a decision, not an omission:
   rejected; only `X-Hub-Signature-256` is accepted.
 - **No per-adapter body limits.** One crate-wide `MAX_BODY_BYTES` (1 MiB) keeps
   the gate simple; providers are far below it.
-- **Events without an id are skipped** (documented on `Adapter::adapt`): they
-  cannot serve as an idempotency key.
+- **No event is dropped for want of an id.** A provider that omits its own id
+  (a `WhatsApp` status without `id`, a Matrix event without `event_id`) still
+  gets an event: the `external_id` is then synthesised — `SYNTHETIC_ID_PREFIX`
+  followed by the SHA-256 of the channel, the event role and the raw object, so
+  a replay of the same body dedupes. `NormalizedMessage::has_synthetic_id` tells
+  an invented key from a provider-assigned one. An entry that carries none of the
+  provider's own fields — a body forwarded from another provider — is skipped
+  rather than turned into an invented event.
 
 ## License
 

@@ -21,6 +21,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::headers::Headers;
+use crate::id;
 use crate::json;
 use crate::model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, ProviderPayload,
@@ -133,11 +134,17 @@ impl Adapter for WhatsAppAdapter {
                 let Some(value) = json::child(change, "value") else {
                     continue;
                 };
-                for message in json::array(value, "messages") {
-                    events.extend(normalize_message(message));
+                for message in json::array(value, "messages")
+                    .iter()
+                    .filter(|entry| is_message(entry))
+                {
+                    events.push(normalize_message(message));
                 }
-                for status in json::array(value, "statuses") {
-                    events.extend(normalize_status(status));
+                for status in json::array(value, "statuses")
+                    .iter()
+                    .filter(|entry| is_status(entry))
+                {
+                    events.push(normalize_status(status));
                 }
             }
         }
@@ -244,9 +251,9 @@ impl Adapter for WhatsAppAdapter {
 }
 
 /// Maps one `messages[]` object, or drops it when it has no id to key on.
-fn normalize_message(message: &Value) -> Option<NormalizedMessage> {
-    let external_id = json::id(message, "id")?;
-    let sender_id = json::id(message, "from")?;
+fn normalize_message(message: &Value) -> NormalizedMessage {
+    let external_id = id::identify(message, "id", &Channel::WhatsApp, "message");
+    let sender_id = json::id(message, "from").unwrap_or_default();
     let provider_type = json::string(message, "type")
         .unwrap_or("unknown")
         .to_owned();
@@ -332,7 +339,7 @@ fn normalize_message(message: &Value) -> Option<NormalizedMessage> {
         _ => {}
     }
 
-    Some(normalized)
+    normalized
 }
 
 /// Maps a media object (`image`, `document`, `audio`, `video`, `sticker`).
@@ -363,12 +370,12 @@ fn push_media(
 }
 
 /// Maps one `statuses[]` entry (delivery receipt) onto a status event.
-fn normalize_status(status: &Value) -> Option<NormalizedMessage> {
-    let external_id = json::id(status, "id")?;
-    let recipient = json::id(status, "recipient_id")?;
+fn normalize_status(status: &Value) -> NormalizedMessage {
+    let external_id = id::identify(status, "id", &Channel::WhatsApp, "status");
+    let recipient = json::id(status, "recipient_id").unwrap_or_default();
     let state = json::string(status, "status").unwrap_or("unknown");
 
-    Some(NormalizedMessage {
+    NormalizedMessage {
         channel: Channel::WhatsApp,
         conversation_id: recipient.clone(),
         sender_id: recipient,
@@ -383,7 +390,7 @@ fn normalize_status(status: &Value) -> Option<NormalizedMessage> {
         status: Some(delivery_status(state)),
         provider_type: Some("status".to_owned()),
         raw: Some(status.clone()),
-    })
+    }
 }
 
 fn delivery_status(state: &str) -> DeliveryStatus {
@@ -395,4 +402,23 @@ fn delivery_status(state: &str) -> DeliveryStatus {
         "deleted" => DeliveryStatus::Deleted,
         other => DeliveryStatus::Unknown(other.to_owned()),
     }
+}
+
+/// Whether `entry` carries a field a `messages[]` object has.
+///
+/// A body from a different provider has none of them, and inventing an event
+/// (and an id) out of foreign JSON would be worse than skipping it. Together
+/// with its empty-object counterpart this is the only case in which an entry is
+/// dropped.
+fn is_message(entry: &Value) -> bool {
+    ["id", "from", "type"]
+        .iter()
+        .any(|key| json::child(entry, key).is_some())
+}
+
+/// Whether `entry` carries a field a `statuses[]` object has.
+fn is_status(entry: &Value) -> bool {
+    ["id", "recipient_id", "status"]
+        .iter()
+        .any(|key| json::child(entry, key).is_some())
 }

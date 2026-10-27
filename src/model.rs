@@ -237,6 +237,18 @@ impl DeliveryStatus {
     }
 }
 
+/// Prefix of an [`NormalizedMessage::external_id`] this crate synthesised.
+///
+/// A provider-assigned id never carries it, so `external_id.starts_with(…)` —
+/// or [`NormalizedMessage::has_synthetic_id`] — tells the two apart.
+///
+/// ```
+/// use messenger_webhook::SYNTHETIC_ID_PREFIX;
+///
+/// assert_eq!(SYNTHETIC_ID_PREFIX, "synthetic:");
+/// ```
+pub const SYNTHETIC_ID_PREFIX: &str = "synthetic:";
+
 /// One inbound event, provider independent.
 ///
 /// A message, a reaction, an edit and a delivery receipt are all one of these:
@@ -257,6 +269,11 @@ pub struct NormalizedMessage {
     /// Origin channel.
     pub channel: Channel,
     /// Provider event id — use it as the idempotency key.
+    ///
+    /// When the provider sent none, this crate synthesises a stable one (see
+    /// [`SYNTHETIC_ID_PREFIX`]) instead of dropping the event, so a replay
+    /// dedupes and nothing disappears. [`Self::has_synthetic_id`] tells the
+    /// two apart.
     pub external_id: String,
     /// Conversation the event belongs to (chat id, room id, phone number).
     pub conversation_id: String,
@@ -320,6 +337,27 @@ impl NormalizedMessage {
             provider_type: None,
             raw: None,
         }
+    }
+
+    /// Whether [`Self::external_id`] was invented by this crate.
+    ///
+    /// Providers occasionally send an event without an id. Instead of dropping
+    /// it, [`Adapter::adapt`](crate::Adapter::adapt) surfaces it with a stable
+    /// synthetic id — the digest of the raw event, so a replay still dedupes.
+    /// Applications that need the provider's own key (to call back into the
+    /// provider, for example) check this first.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, NormalizedMessage};
+    ///
+    /// let mut event = NormalizedMessage::text(Channel::Matrix, "!r:s", "hi");
+    /// assert!(!event.has_synthetic_id());
+    /// event.external_id = "synthetic:00ff".into();
+    /// assert!(event.has_synthetic_id());
+    /// ```
+    #[must_use]
+    pub fn has_synthetic_id(&self) -> bool {
+        self.external_id.starts_with(SYNTHETIC_ID_PREFIX)
     }
 
     /// The first attachment, if the event carries media.

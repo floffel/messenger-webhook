@@ -21,6 +21,7 @@ src/lib.rs:trait Adapter
 src/lib.rs:use error::{Error,Result}
 src/lib.rs:use headers::Headers
 src/lib.rs:use matrix::MatrixAdapter
+src/lib.rs:use model::SYNTHETIC_ID_PREFIX
 src/lib.rs:use model::{Attachment,AttachmentKind,Channel,DeliveryStatus,NormalizedMessage,ProviderPayload,Reaction,}
 src/lib.rs:use registry::Registry
 src/lib.rs:use secret::Secret
@@ -155,6 +156,7 @@ src/matrix_out/types.rs:struct MediaUpload
 src/matrix_out/types.rs:struct MxcUri
 src/matrix_out/types.rs:struct SendOutcome
 src/matrix_out/types.rs:struct TxnId
+src/model.rs:const SYNTHETIC_ID_PREFIX
 src/model.rs:enum AttachmentKind
 src/model.rs:enum Channel
 src/model.rs:enum DeliveryStatus
@@ -163,6 +165,7 @@ src/model.rs:impl AttachmentKind:fn as_str
 src/model.rs:impl Channel:fn as_str
 src/model.rs:impl DeliveryStatus:fn as_str
 src/model.rs:impl NormalizedMessage:fn first_attachment
+src/model.rs:impl NormalizedMessage:fn has_synthetic_id
 src/model.rs:impl NormalizedMessage:fn is_edit
 src/model.rs:impl NormalizedMessage:fn is_status_update
 src/model.rs:impl NormalizedMessage:fn text

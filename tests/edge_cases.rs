@@ -340,26 +340,32 @@ mod whatsapp_edges {
     }
 
     #[test]
-    fn entries_without_an_id_are_skipped_not_fatal() {
+    fn entries_without_an_id_are_carried_with_a_synthetic_key() {
         let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
             {"from":"49","type":"text","text":{"body":"no id"}},
             {"id":"wamid.2","from":"49","type":"text","text":{"body":"has id"}}]}}]}]}"#;
         let events = whatsapp().adapt(payload).unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].external_id, "wamid.2");
+        assert_eq!(events.len(), 2, "an event without an id is not dropped");
+        assert!(events[0].has_synthetic_id());
+        assert_eq!(events[0].text.as_deref(), Some("no id"));
+        assert_eq!(events[1].external_id, "wamid.2");
     }
 
     #[test]
-    fn identifiers_that_are_not_strings_or_numbers_are_ignored() {
-        // A boolean id cannot be an idempotency key.
+    fn identifiers_that_are_not_strings_or_numbers_are_synthesised() {
+        // A boolean id cannot be an idempotency key, so it is replaced.
         let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
             {"id":true,"from":"49","type":"text"}]}}]}]}"#;
-        assert_eq!(whatsapp().adapt(payload).unwrap().len(), 0);
+        let events = whatsapp().adapt(payload).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].has_synthetic_id());
 
         // An empty string is not an id either.
         let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
             {"id":"","from":"49","type":"text"}]}}]}]}"#;
-        assert_eq!(whatsapp().adapt(payload).unwrap().len(), 0);
+        let events = whatsapp().adapt(payload).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].has_synthetic_id());
     }
 
     #[test]
@@ -665,12 +671,14 @@ mod matrix_edges {
     }
 
     #[test]
-    fn events_without_an_id_are_skipped() {
+    fn events_without_an_id_are_carried() {
         let payload = br#"{"events":[
           {"type":"m.room.message","room_id":"!r:s","sender":"@a:s","content":{"msgtype":"m.text","body":"no id"}},
           {"type":"m.room.message","event_id":"$1","room_id":"!r:s","sender":"@a:s","content":{"msgtype":"m.text","body":"has id"}}]}"#;
         let events = matrix().adapt(payload).unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].external_id, "$1");
+        assert_eq!(events.len(), 2, "an event without an id is not dropped");
+        assert!(events[0].has_synthetic_id());
+        assert_eq!(events[0].text.as_deref(), Some("no id"));
+        assert_eq!(events[1].external_id, "$1");
     }
 }

@@ -22,6 +22,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::headers::Headers;
+use crate::id;
 use crate::json;
 use crate::model::ProviderPayload;
 use crate::model::{
@@ -129,8 +130,9 @@ impl Adapter for MatrixAdapter {
             None => vec![&root],
         };
         Ok(events
-            .iter()
-            .filter_map(|event| normalize_event(event))
+            .into_iter()
+            .filter(|entry| is_event(entry))
+            .map(normalize_event)
             .collect())
     }
 
@@ -272,10 +274,10 @@ fn apply_relations(content: &mut serde_json::Map<String, Value>, message: &Norma
 }
 
 /// Maps one Matrix event of any type.
-fn normalize_event(event: &Value) -> Option<NormalizedMessage> {
+fn normalize_event(event: &Value) -> NormalizedMessage {
     let event_type = json::string(event, "type").unwrap_or("unknown");
-    let external_id = json::id(event, "event_id")?;
-    let conversation_id = json::id(event, "room_id")?;
+    let external_id = id::identify(event, "event_id", &Channel::Matrix, "event");
+    let conversation_id = json::id(event, "room_id").unwrap_or_default();
     let sender_id = json::id(event, "sender").unwrap_or_default();
     let content = json::child(event, "content")
         .cloned()
@@ -321,7 +323,7 @@ fn normalize_event(event: &Value) -> Option<NormalizedMessage> {
         _ => {}
     }
 
-    Some(normalized)
+    normalized
 }
 
 /// Maps the `content` of an `m.room.message` (or `m.sticker`) event.
@@ -424,4 +426,15 @@ fn apply_receipts(normalized: &mut NormalizedMessage, content: &Value) {
             normalized.sender_id = reader;
         }
     }
+}
+
+/// Whether `entry` carries a field a Matrix room event has.
+///
+/// A body from a different provider has none of them, and inventing an event
+/// (and an id) out of foreign JSON would be worse than skipping it. Together
+/// with a non-object entry this is the only case in which one is dropped.
+fn is_event(entry: &Value) -> bool {
+    ["event_id", "room_id", "type"]
+        .iter()
+        .any(|key| json::child(entry, key).is_some())
 }

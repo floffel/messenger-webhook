@@ -24,6 +24,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::headers::Headers;
+use crate::id;
 use crate::json;
 use crate::model::ProviderPayload;
 use crate::model::{Attachment, AttachmentKind, Channel, NormalizedMessage, Reaction};
@@ -134,12 +135,14 @@ impl Adapter for TelegramAdapter {
             ("channel_post", "channel_post"),
             ("edited_channel_post", "edited_channel_post"),
         ] {
-            if let Some(message) = json::child(&root, field) {
-                events.extend(normalize_message(message, provider_type));
+            if let Some(message) = json::child(&root, field).filter(|value| value.is_object()) {
+                events.push(normalize_message(message, provider_type));
             }
         }
-        if let Some(reaction) = json::child(&root, "message_reaction") {
-            events.extend(normalize_reaction(reaction));
+        if let Some(reaction) =
+            json::child(&root, "message_reaction").filter(|value| value.is_object())
+        {
+            events.push(normalize_reaction(reaction));
         }
         Ok(events)
     }
@@ -245,10 +248,12 @@ fn telegram_id(text: &str, field: &str) -> Result<i64> {
 }
 
 /// Maps one `Message` object.
-fn normalize_message(message: &Value, provider_type: &str) -> Option<NormalizedMessage> {
-    let external_id = json::id(message, "message_id")?;
-    let chat = json::child(message, "chat")?;
-    let conversation_id = json::id(chat, "id")?;
+fn normalize_message(message: &Value, provider_type: &str) -> NormalizedMessage {
+    let external_id = id::identify(message, "message_id", &Channel::Telegram, "message");
+    let chat = json::child(message, "chat");
+    let conversation_id = chat
+        .and_then(|chat| json::id(chat, "id"))
+        .unwrap_or_default();
     // Channel posts have no `from`; the chat itself is the author.
     let sender_id = json::child(message, "from")
         .and_then(|from| json::id(from, "id"))
@@ -260,7 +265,7 @@ fn normalize_message(message: &Value, provider_type: &str) -> Option<NormalizedM
         .map(str::to_owned);
     let is_edit = provider_type.starts_with("edited_");
 
-    Some(NormalizedMessage {
+    NormalizedMessage {
         channel: Channel::Telegram,
         conversation_id,
         sender_id,
@@ -276,7 +281,7 @@ fn normalize_message(message: &Value, provider_type: &str) -> Option<NormalizedM
         status: None,
         provider_type: Some(provider_type.to_owned()),
         raw: Some(message.clone()),
-    })
+    }
 }
 
 /// Collects every media field Telegram may attach to a message.
@@ -377,10 +382,12 @@ fn attachments(message: &Value) -> Vec<Attachment> {
 
 /// Maps a `message_reaction` update; the reaction is keyed by the message it
 /// annotates.
-fn normalize_reaction(reaction: &Value) -> Option<NormalizedMessage> {
-    let chat = json::child(reaction, "chat")?;
-    let conversation_id = json::id(chat, "id")?;
-    let message_id = json::id(reaction, "message_id")?;
+fn normalize_reaction(reaction: &Value) -> NormalizedMessage {
+    let chat = json::child(reaction, "chat");
+    let conversation_id = chat
+        .and_then(|chat| json::id(chat, "id"))
+        .unwrap_or_default();
+    let message_id = id::identify(reaction, "message_id", &Channel::Telegram, "reaction");
     let sender_id = json::child(reaction, "user")
         .and_then(|user| json::id(user, "id"))
         .unwrap_or_else(|| conversation_id.clone());
@@ -394,7 +401,7 @@ fn normalize_reaction(reaction: &Value) -> Option<NormalizedMessage> {
         })
         .unwrap_or_default();
 
-    Some(NormalizedMessage {
+    NormalizedMessage {
         channel: Channel::Telegram,
         external_id: message_id.clone(),
         conversation_id,
@@ -413,5 +420,5 @@ fn normalize_reaction(reaction: &Value) -> Option<NormalizedMessage> {
         status: None,
         provider_type: Some("message_reaction".to_owned()),
         raw: Some(reaction.clone()),
-    })
+    }
 }

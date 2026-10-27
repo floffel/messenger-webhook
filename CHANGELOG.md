@@ -10,7 +10,20 @@ carry a `!` in the conventional-commit subject.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **An event without a provider id is no longer dropped.** Adapters used to
+  return nothing for a `WhatsApp` message or status without `id`, a Telegram
+  update without `message_id` or a Matrix event without `event_id`, which lost
+  real traffic. Those events now arrive with a synthesised `external_id`:
+  `SYNTHETIC_ID_PREFIX` (`synthetic:`) followed by the SHA-256 of the channel,
+  the event role and the raw object. The digest ignores JSON key order, so a
+  provider replay yields the same key and the caller's dedupe ledger still
+  works; `NormalizedMessage::has_synthetic_id` distinguishes an invented key
+  from a provider-assigned one. An event whose conversation or sender field is
+  missing keeps an empty string there instead of vanishing; entries without
+  the provider's own fields at all (a body from another provider) are still
+  skipped. Closes #10.
 
 ## [0.3.1] - 2026-10-25
 

@@ -44,7 +44,10 @@
 //! secret_token)`, `MatrixAdapter::new(hs_token)`.
 //!
 //! `external_id` is the provider's message id and therefore the right
-//! idempotency key. Nothing in this crate performs I/O: the caller owns the
+//! idempotency key. An event the provider sent without one is not dropped: it
+//! arrives with a stable synthesised id (`SYNTHETIC_ID_PREFIX`, the digest of
+//! the raw object), and `NormalizedMessage::has_synthetic_id` says which kind a
+//! given event carries. Nothing in this crate performs I/O: the caller owns the
 //! HTTP server, retries and rate limits.
 //!
 //! ## Deliberate exclusions
@@ -79,6 +82,8 @@ pub mod telegram;
 pub mod whatsapp;
 
 #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+mod id;
+#[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
 mod json;
 mod model;
 
@@ -94,6 +99,7 @@ pub use whatsapp::WhatsAppAdapter;
 
 pub use error::{Error, Result};
 pub use headers::Headers;
+pub use model::SYNTHETIC_ID_PREFIX;
 pub use model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, ProviderPayload,
     Reaction,
@@ -181,9 +187,13 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
 
     /// Parses `body` and returns every event it contains.
     ///
-    /// Unknown fields and unknown event types are carried, not rejected;
-    /// entries without an id are dropped because they cannot be used as an
-    /// idempotency key.
+    /// Unknown fields and unknown event types are carried, not rejected. An
+    /// event the provider sent without an id is carried too, with a stable
+    /// synthesised `external_id` ([`SYNTHETIC_ID_PREFIX`]) — the same body
+    /// always yields the same key, so a provider retry still dedupes. Only an
+    /// entry that carries none of the provider's own fields — a body forwarded
+    /// from another provider — is skipped rather than turned into an invented
+    /// event.
     ///
     /// # Errors
     ///
