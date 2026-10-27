@@ -399,23 +399,23 @@ mod tests {
         let policy = RetryPolicy {
             max_attempts: 10,
             base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_millis(1_000),
+            max_delay: Duration::from_secs(1),
             max_rate_limit_wait: Duration::from_secs(1),
         };
         assert_eq!(policy.backoff(0), Duration::from_millis(100));
         assert_eq!(policy.backoff(1), Duration::from_millis(100));
         assert_eq!(policy.backoff(2), Duration::from_millis(200));
         assert_eq!(policy.backoff(4), Duration::from_millis(800));
-        assert_eq!(policy.backoff(5), Duration::from_millis(1_000));
-        assert_eq!(policy.backoff(u32::MAX), Duration::from_millis(1_000));
+        assert_eq!(policy.backoff(5), Duration::from_secs(1));
+        assert_eq!(policy.backoff(u32::MAX), Duration::from_secs(1));
     }
 
     #[test]
     fn default_backoff_sequence_is_the_documented_one() {
         let policy = RetryPolicy::default();
         assert_eq!(policy.backoff(1), Duration::from_millis(500));
-        assert_eq!(policy.backoff(2), Duration::from_millis(1_000));
-        assert_eq!(policy.backoff(3), Duration::from_millis(2_000));
+        assert_eq!(policy.backoff(2), Duration::from_secs(1));
+        assert_eq!(policy.backoff(3), Duration::from_secs(2));
         assert_eq!(policy.backoff(20), Duration::from_secs(30));
     }
 
@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(
             policy.classify(1, &response, Operation::NonIdempotent),
             Verdict::Retry {
-                delay: Duration::from_millis(2_000)
+                delay: Duration::from_secs(2)
             }
         );
         // A 429 is answered before the request is processed, so even an upload
@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(
             policy.classify(2, &bare, Operation::Read),
             Verdict::Retry {
-                delay: Duration::from_millis(1_000)
+                delay: Duration::from_secs(1)
             }
         );
         let garbage = Response::json(429, "not json at all");

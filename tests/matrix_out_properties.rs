@@ -18,7 +18,7 @@ fn policy() -> RetryPolicy {
     RetryPolicy {
         max_attempts: 4,
         base_delay: Duration::from_millis(100),
-        max_delay: Duration::from_millis(1_000),
+        max_delay: Duration::from_secs(1),
         max_rate_limit_wait: Duration::from_secs(60),
     }
 }
