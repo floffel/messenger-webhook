@@ -12,6 +12,33 @@ carry a `!` in the conventional-commit subject.
 
 Nothing yet.
 
+## [0.3.3] - 2026-10-27
+
+### Added
+
+- **The Meta webhook-subscription handshake.** Before Meta posts an event it
+  sends a `GET` with `hub.mode`, `hub.challenge` and `hub.verify_token`, and the
+  endpoint has to compare the token and echo the challenge back. Nothing in the
+  crate did that, so every `WhatsApp` consumer had to hand-roll it — usually
+  comparing the token with `==` (timing leak) and reflecting whatever arrived.
+  `subscription::meta_subscription_challenge(&secret, query)` now takes the raw
+  query string and returns the challenge: the token is compared in constant
+  time, an empty dashboard token fails closed before the query is parsed, a
+  parameter that appears twice is rejected instead of resolved, unknown
+  parameters are ignored, and the echoed challenge is bounded
+  (`MAX_CHALLENGE_BYTES`, 128) and must be printable, non-space ASCII so it
+  cannot split a response. Both spellings of each parameter are accepted
+  (`hub.mode` and `hub_mode`) because Meta's page notes that PHP rewrites the
+  dots to underscores. The query string is parsed with `form_urlencoded` — the
+  maintained parser for that syntax — rather than by splitting on `&`, which is
+  why the `whatsapp` feature now pulls it in; no other feature does.
+  `Error::MalformedVerificationRequest` is the new, additive failure for a
+  request whose shape is wrong. The contract is quoted with its source in
+  `docs/contracts.md`, and `tests/subscription.rs` pins it with 24 tests
+  (including two proptest properties). Closes #1.
+- `tests/api_surface.snapshot` records the six new items, so the surface change
+  is a reviewed diff rather than a surprise.
+
 ## [0.3.2] - 2026-10-27
 
 ### Changed
