@@ -219,11 +219,35 @@ timestamp plus:
 An event that has none of these is still an event: unknown message types are
 carried rather than rejected.
 
+## The subscription handshake
+
+Meta asks the endpoint to prove it is the intended receiver *before* the first
+event arrives: a `GET` carrying `hub.mode`, `hub.challenge` and
+`hub.verify_token`. Something has to answer it — otherwise the webhook URL can
+never be saved in the app dashboard:
+
+```rust
+use messenger_webhook::{subscription::meta_subscription_challenge, Secret};
+
+// `query` is everything after `?` in the GET request.
+let challenge = meta_subscription_challenge(&Secret::new(verify_token), query)?;
+// Answer 200 with `challenge` as the body and `text/plain` — nothing else.
+```
+
+A wrong token, a missing parameter, a parameter that appears twice or a
+challenge that is not printable ASCII is a typed error, and the answer is `403`.
+The token is compared in constant time, and an unset token fails closed before
+the query is parsed.
+
 ## Security model
 
 - **Verification is not optional.** Adapters are constructed with their secret;
   `verify` is on the `Adapter` trait and fails closed on an empty secret, a
   missing header, a malformed header or a body over `MAX_BODY_BYTES` (1 MiB).
+- **The handshake before the events.** Meta's subscription `GET` is not an
+  event, so it is not covered by `Adapter::verify`; `meta_subscription_challenge`
+  answers it instead — token compared in constant time, challenge echoed back
+  bounded and unmodified.
 - **Constant time.** HMAC digests and provider tokens are compared with
   `subtle`; nothing short-circuits. `Secret`'s `Debug` is redacted, so a
   `{:?}` of an adapter never prints a credential.
@@ -243,6 +267,7 @@ carried rather than rejected.
 | doctests on every public item | the documented examples really run |
 | `tests/properties.rs` | arbitrary JSON (any depth/types) and arbitrary bytes never panic; encode → provider echo → normalise round-trips on all three channels; unknown fields survive; limits hold exactly at N and N+1 |
 | `tests/edge_cases.rs` | empty body, 1 MiB boundary, missing/ malformed signature headers, signature bound to the exact body, duplicate keys, unknown types, 20 recipients, unicode/NUL, numeric-vs-string ids, wrong JSON types, deep nesting |
+| `tests/subscription.rs` | the Meta handshake: the documented sample request, wrong/prefix/short token, empty secret, each missing parameter, duplicate parameters, mode casing, the PHP underscore spellings, percent-decoded values, `+`-as-space, challenge ceiling at N/N+1, non-printable and empty challenge, no received token in the error message; plus two proptest properties |
 | `tests/synthetic_ids.rs` | an event the provider sent without an id is carried with a stable synthesised key: same body, same id across replays; different body, different id; per adapter |
 | `tests/media_and_receipts.rs` | every media kind, reaction and receipt shape in both directions |
 | `tests/concurrency.rs` | 32 threads over one `Registry`, 32 threads over a borrowed `&dyn Adapter`, forged signatures under load |

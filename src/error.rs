@@ -62,6 +62,20 @@ pub enum Error {
         reason: String,
     },
 
+    /// A provider's webhook-subscription request is missing a parameter or has
+    /// one in a shape the provider does not document.
+    ///
+    /// This is the `GET` side of a webhook (Meta calls it a verification
+    /// request), so the defect is in the query string rather than in a header.
+    #[error("{channel} subscription request is malformed: {reason}")]
+    MalformedVerificationRequest {
+        /// Channel whose subscription request is malformed.
+        channel: Channel,
+        /// Which parameter is missing or wrong, and how. Never the received
+        /// value: that is attacker-controlled and would end up in a log.
+        reason: String,
+    },
+
     /// The signature did not match the body.
     #[error("{channel} signature verification failed")]
     BadSignature {

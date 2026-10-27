@@ -9,7 +9,7 @@
 //! |----------|---------|-----------|----------|
 //! | `WhatsAppAdapter` | `entry[].changes[].value.messages` and `statuses` | HMAC-SHA256 (`X-Hub-Signature-256`) | text, media link |
 //! | `TelegramAdapter` | `message`, edits, posts, reactions | `X-Telegram-Bot-Api-Secret-Token` | `sendMessage` / media |
-//! | `MatrixAdapter` | `m.room.message`, reactions, receipts, unknown types | `Authorization: Bearer` | `m.room.message` |
+//! | `MatrixAdapter` | `m.room.message`, reactions, receipts, unknown types | `Authorization: Bearer <token>` | `m.room.message` |
 //!
 //! Each provider adapter lives in its own feature-gated module (`whatsapp`,
 //! `telegram`, `matrix`); everything in this module is available regardless of
@@ -25,6 +25,11 @@
 //! Verification is part of the adapter contract, not an afterthought: an
 //! adapter cannot be constructed without a secret, and [`Adapter::verify`]
 //! fails closed on an empty secret, a missing header or an oversized body.
+//!
+//! A `WhatsApp` endpoint also receives one request that is not an event at all:
+//! Meta's subscription handshake. [`subscription::meta_subscription_challenge`]
+//! answers it — the token compared in constant time, the challenge echoed back
+//! and nothing else.
 //!
 //! ```
 //! use messenger_webhook::{signature::meta_signature, Headers, Secret};
@@ -68,6 +73,10 @@ pub mod registry;
 pub mod secret;
 pub mod signature;
 
+#[cfg(feature = "whatsapp")]
+#[cfg_attr(docsrs, doc(cfg(feature = "whatsapp")))]
+pub mod subscription;
+
 #[cfg(feature = "matrix")]
 #[cfg_attr(docsrs, doc(cfg(feature = "matrix")))]
 pub mod matrix;
@@ -106,6 +115,10 @@ pub use model::{
 };
 pub use registry::Registry;
 pub use secret::Secret;
+
+#[cfg(feature = "whatsapp")]
+#[cfg_attr(docsrs, doc(cfg(feature = "whatsapp")))]
+pub use subscription::meta_subscription_challenge;
 
 /// Hard ceiling on a request body, enforced before any hashing or JSON parsing.
 ///

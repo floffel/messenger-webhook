@@ -141,3 +141,55 @@ Nothing in this client is guessed, but two behaviours are *specified* rather tha
   strip them. The client tolerates both, and the fixture set covers both.
 - The `m.upload.size` capability value for a self-hosted homeserver. The
   default is documented, not assumed.
+
+# Meta: the webhook subscription handshake
+
+Source: **Graph API — Webhooks, Getting Started**, *Verification Requests*,
+<https://developers.facebook.com/docs/graph-api/webhooks/getting-started>
+(retrieved 2026-10-27).
+
+> Anytime you configure the Webhooks product in your App Dashboard, we'll send a
+> GET request to your endpoint URL. Verification requests include the following
+> query string parameters, appended to the end of your endpoint URL. They will
+> look something like this:
+>
+> ```
+> GET https://www.your-clever-domain-name.com/webhooks?
+>   hub.mode=subscribe&
+>   hub.challenge=1158201444&
+>   hub.verify_token=meatyhamhock
+> ```
+>
+> | Parameter | Sample Value | Description |
+> |---|---|---|
+> | `hub.mode` | `subscribe` | This value will always be set to `subscribe`. |
+> | `hub.challenge` | `1158201444` | An int you must pass back to us. |
+> | `hub.verify_token` | `meatyhamhock` | A string that we grab from the Verify Token field in your app's App Dashboard. |
+
+> Whenever your endpoint receives a verification request, it must: Verify that the
+> `hub.verify_token` value matches the string you set in the **Verify Token** field
+> […] Respond with the `hub.challenge` value.
+
+> Note: PHP converts periods (.) to underscores (_) in parameter names.
+
+What the crate does with it:
+
+- `subscription::meta_subscription_challenge` takes the raw query string and the
+  dashboard token, compares the token in constant time and returns the challenge
+  — the exact bytes of `hub.challenge`, nothing concatenated onto them.
+- Both spellings of every parameter are accepted (`hub.mode` and `hub_mode`),
+  because the underscore note above means an endpoint behind a PHP layer sees the
+  second one.
+- A parameter that appears twice is rejected instead of resolved: the request
+  would otherwise carry two candidate tokens and the endpoint would have to pick
+  one. Unknown parameters are ignored.
+- The challenge is reflected into the caller's response, so it is bounded
+  (`MAX_CHALLENGE_BYTES`) and must be printable, non-space ASCII; a value
+  containing CR/LF would be response splitting in a handler that put it in a
+  header, and a whitespace-only value means the query was mangled.
+- An empty dashboard token fails closed (`Error::MissingSecret`) before the query
+  is even parsed, because comparing against an unset token accepts anyone.
+
+Pinned by `tests/subscription.rs` (24 tests, two of them proptest properties:
+"challenge returned exactly when the token matches" and "arbitrary query strings
+never panic"). The sample request above is the first test case, byte for byte.

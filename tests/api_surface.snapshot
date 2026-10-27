@@ -15,6 +15,7 @@ src/lib.rs:mod matrix_out
 src/lib.rs:mod registry
 src/lib.rs:mod secret
 src/lib.rs:mod signature
+src/lib.rs:mod subscription
 src/lib.rs:mod telegram
 src/lib.rs:mod whatsapp
 src/lib.rs:trait Adapter
@@ -25,6 +26,7 @@ src/lib.rs:use model::SYNTHETIC_ID_PREFIX
 src/lib.rs:use model::{Attachment,AttachmentKind,Channel,DeliveryStatus,NormalizedMessage,ProviderPayload,Reaction,}
 src/lib.rs:use registry::Registry
 src/lib.rs:use secret::Secret
+src/lib.rs:use subscription::meta_subscription_challenge
 src/lib.rs:use telegram::TelegramAdapter
 src/lib.rs:use whatsapp::WhatsAppAdapter
 src/matrix.rs:const AUTHORIZATION_HEADER
@@ -201,6 +203,12 @@ src/signature.rs:const META_SIGNATURE_HEADER
 src/signature.rs:const META_SIGNATURE_PREFIX
 src/signature.rs:fn meta_signature
 src/signature.rs:fn verify_meta
+src/subscription.rs:const MAX_CHALLENGE_BYTES
+src/subscription.rs:const META_CHALLENGE_PARAM
+src/subscription.rs:const META_MODE_PARAM
+src/subscription.rs:const META_SUBSCRIBE_MODE
+src/subscription.rs:const META_VERIFY_TOKEN_PARAM
+src/subscription.rs:fn meta_subscription_challenge
 src/telegram.rs:const MAX_CAPTION_UTF16
 src/telegram.rs:const MAX_TEXT_UTF16
 src/telegram.rs:const SECRET_TOKEN_HEADER

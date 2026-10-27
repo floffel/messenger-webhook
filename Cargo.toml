@@ -1,6 +1,6 @@
 [package]
 name = "messenger-webhook"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 rust-version = "1.89"
 license = "Apache-2.0 OR MIT"
@@ -14,7 +14,9 @@ exclude = [".github/**", "deny.toml", "fuzz/**"]
 
 [features]
 default = ["whatsapp", "telegram", "matrix"]
-whatsapp = []
+# `form_urlencoded` parses the subscription handshake's query string, so the
+# dependency belongs to this feature and to no other one.
+whatsapp = ["dep:form_urlencoded"]
 telegram = []
 matrix = []
 # Default-off: a Matrix outbound client drags in an HTTP stack (reqwest) and a
@@ -41,6 +43,10 @@ tokio = { version = "1", default-features = false, features = [
     "sync",
     "time",
 ], optional = true }
+# Parses `application/x-www-form-urlencoded` query strings: `+` is a space,
+# `%` needs decoding and a key may legally repeat. The Meta handshake is the one
+# place this crate reads a query string.
+form_urlencoded = { version = "1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 
 [dev-dependencies]
