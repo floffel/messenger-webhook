@@ -213,11 +213,65 @@ timestamp plus:
 - `edit_of` — set when the event replaces an earlier message
 - `reaction` — `Reaction { message_id, emoji, removed }`
 - `status` — `DeliveryStatus` (sent, delivered, read, failed, deleted, unknown)
+- `spans` — the provider's formatting as `TextSpan`s over `text` (see below)
 - `provider_type` — the provider's own event name, verbatim
 - `raw` — the provider object, verbatim
 
 An event that has none of these is still an event: unknown message types are
 carried rather than rejected.
+
+### Rich text
+
+`text` stays plain; the formatting rides along as offsets **into** that text, so
+a consumer that cannot render bold still shows the message:
+
+```rust
+use messenger_webhook::{Adapter, TextFormat, TelegramAdapter};
+
+let body = br#"{"update_id":1,"message":{"message_id":7,"from":{"id":42},
+    "chat":{"id":-1001},"date":1729600000,"text":"Hallo Welt",
+    "entities":[{"type":"bold","offset":6,"length":4}]}}"#;
+let events = TelegramAdapter::new("secret").adapt(body)?;
+let message = &events[0];
+
+assert_eq!(message.text.as_deref(), Some("Hallo Welt"));
+let span = &message.spans[0];
+assert_eq!(span.format, TextFormat::Bold);
+assert_eq!(span.slice("Hallo Welt"), Some("Welt"));   // UTF-8 byte range
+assert!(span.covers(6));
+# Ok::<(), messenger_webhook::Error>(())
+```
+
+The contract, in three lines:
+
+- `start`/`end` are UTF-8 byte offsets into `text` (`start` inclusive, `end`
+  exclusive), so `text[start..end]` is always the run — never UTF-16 units,
+  never char indices. Providers that count UTF-16 code units (Telegram does)
+  are converted; an offset that splits a surrogate pair has no byte equivalent.
+- A span is built only through `TextSpan::new`, which rejects empty, inverted,
+  out-of-bounds and non-`char`-boundary ranges (`SpanError`). An entity whose
+  offsets do not describe a run is **dropped**, not clamped or repaired: `text`
+  still carries every character, and no span claims markup the provider did not
+  send.
+- `TextFormat` is `#[non_exhaustive]` and carries `Other(kind)` for a provider
+  entity this crate does not model (`date_time` today), so a new entity type is
+  visible instead of being swallowed.
+
+Telegram is wired end to end for inbound entities, including `caption_entities`
+on media messages: `bold`, `italic`, `underline`, `strikethrough`, `spoiler`,
+`code`, `pre` (with `language`), `text_link` (with `url`), `mention`, `hashtag`,
+`cashtag`, `bot_command`, `url`, `email`, `phone_number`, `text_mention` (with
+`user_id`), `custom_emoji` (with id), `blockquote` and
+`expandable_blockquote`. A structured entity whose payload is missing keeps its
+provider name as `TextFormat::Other` so the run is not lost.
+
+The parts still open are tracked, not excluded: [WhatsApp interactive
+replies](https://github.com/floffel/messenger-webhook/issues/12) (a chosen
+button is a selection, not formatting), [Matrix
+`formatted_body`](https://github.com/floffel/messenger-webhook/issues/13) (HTML
+needs a parser this crate has to justify and bound) and [outbound Telegram
+entities](https://github.com/floffel/messenger-webhook/issues/14) (`encode` still
+sends plain text).
 
 ## The subscription handshake
 
@@ -272,6 +326,7 @@ the query is parsed.
 | `tests/media_and_receipts.rs` | every media kind, reaction and receipt shape in both directions |
 | `tests/concurrency.rs` | 32 threads over one `Registry`, 32 threads over a borrowed `&dyn Adapter`, forged signatures under load |
 | `tests/fixtures.rs` | the fuzz seeds, compiled in, normalised through every adapter |
+| `tests/rich_text.rs` | entity offsets in UTF-16 units become byte spans: an astral emoji shifts by two units, a boundary inside a surrogate pair is dropped, offsets past the end and zero-length ranges are dropped, every Telegram entity type maps onto a `TextFormat`, a missing `url`/`user_id`/`custom_emoji_id` keeps the provider name, `caption_entities` describe the caption, provider order and overlap survive, and a proptest round-trips every char boundary through UTF-16 and back |
 | `tests/matrix_out.rs` | every outbound leg: URL, headers, body, txn reuse across retries, 429/5xx/4xx/timeout classification, ambiguous-vs-retryable, media ordering |
 | `tests/matrix_out_edge.rs` | the boundary matrix: empty and over-long ids, txn charset, control characters, media at N/N+1, `429` without a hint, statuses 100–999, undecodable bodies |
 | `tests/matrix_out_properties.rs` | proptest: txn-id grammar and uniqueness, total retry classification, "no non-idempotent request retried after 5xx", backoff bounds, `mxc://` grammar, every attempt of one send sharing one txn id |
@@ -279,8 +334,8 @@ the query is parsed.
 | `tests/matrix_out_http.rs` | the `reqwest` transport against a loopback server: token header, JSON body, media bytes, `5xx`, closed port (connect) and timeout (ambiguous) |
 | `tests/changelog.rs` | the newest changelog heading equals `Cargo.toml`, sections are newest-first, no duplicates and none empty — a version bump without an entry fails the build |
 
-**Coverage: 98.4 % of lines** (`cargo llvm-cov --all-features`, 3690 lines,
-58 missed; `src/id.rs` and `model.rs` at 100 %). The outbound module alone
+**Coverage: 98.5 % of lines** (`cargo llvm-cov --all-features`, 3941 lines,
+59 missed; `src/id.rs` and `model.rs` at 100 %, `rich.rs` at 99 %). The outbound module alone
 is ≥94 % per file and 100 % in `ordering.rs`; the misses are `reqwest`'s own error arms,
 `serde_json` failure paths and the `is_empty()` helpers no test calls directly.
 The gate is `--fail-under-lines 95`, so a regression fails CI rather than
@@ -342,9 +397,12 @@ Each of these is a decision, not an omission:
   payloads and reads webhook bodies; with it, the only I/O is the Matrix
   Client-Server legs listed above. No media download, no token refresh, no sync
   or long polling, no E2EE, no room administration (create/join/invite/state).
-- **No rich text.** Telegram entities, `WhatsApp` interactive payloads and
-  Matrix formatted bodies (`format`, `formatted_body`) are not parsed; the plain
-  text is normalised and the raw object is preserved.
+- **No HTML and no interaction parsing yet.** Telegram entities are parsed
+  (#6); `WhatsApp` interactive payloads and Matrix `formatted_body` are not, and
+  they are tracked as [#12](https://github.com/floffel/messenger-webhook/issues/12)
+  and [#13](https://github.com/floffel/messenger-webhook/issues/13) rather than
+  left as a silent gap. Until then the plain text is normalised and the raw
+  object is preserved.
 - **No Matrix E2EE.** `m.room.encrypted` events are carried verbatim
   (`provider_type`, `raw`), never decrypted.
 - **No edits/reactions outbound.** Telegram edits require `editMessageText` on
