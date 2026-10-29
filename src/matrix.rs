@@ -296,6 +296,7 @@ fn normalize_event(event: &Value) -> NormalizedMessage {
         edit_of: None,
         reaction: None,
         status: None,
+        spans: Vec::new(),
         provider_type: Some(event_type.to_owned()),
         raw: Some(event.clone()),
     };

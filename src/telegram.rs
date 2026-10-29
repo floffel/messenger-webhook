@@ -28,6 +28,7 @@ use crate::id;
 use crate::json;
 use crate::model::ProviderPayload;
 use crate::model::{Attachment, AttachmentKind, Channel, NormalizedMessage, Reaction};
+use crate::rich::{utf16_to_byte_range, TextFormat, TextSpan};
 use crate::secret::Secret;
 use crate::{check_body, json_payload, recipient, utf16_len, Adapter, MAX_BODY_BYTES};
 
@@ -279,6 +280,7 @@ fn normalize_message(message: &Value, provider_type: &str) -> NormalizedMessage 
         thread_id: json::id(message, "message_thread_id"),
         reaction: None,
         status: None,
+        spans: spans(message),
         provider_type: Some(provider_type.to_owned()),
         raw: Some(message.clone()),
     }
@@ -418,7 +420,95 @@ fn normalize_reaction(reaction: &Value) -> NormalizedMessage {
             emoji,
         }),
         status: None,
+        spans: Vec::new(),
         provider_type: Some("message_reaction".to_owned()),
         raw: Some(reaction.clone()),
+    }
+}
+
+/// Collects the formatting Telegram marks on a message.
+///
+/// `entities` describes `text`, `caption_entities` describes `caption`; the
+/// offsets are UTF-16 code units, so they go through
+/// [`utf16_to_byte_range`](crate::rich::utf16_to_byte_range) before a span is
+/// built. An entity whose range cannot be expressed in bytes — a boundary
+/// inside a surrogate pair, an offset past the end — is dropped: the plain text
+/// is still complete, and inventing a run would mark text the provider did not
+/// mark.
+fn spans(message: &Value) -> Vec<TextSpan> {
+    let (text, field) = match (
+        json::string(message, "text"),
+        json::string(message, "caption"),
+    ) {
+        (Some(text), _) => (text, "entities"),
+        (None, Some(caption)) => (caption, "caption_entities"),
+        (None, None) => return Vec::new(),
+    };
+    json::array(message, field)
+        .iter()
+        .filter_map(|entity| one_span(text, entity))
+        .collect()
+}
+
+/// Maps one `MessageEntity` object onto a span of `text`.
+fn one_span(text: &str, entity: &Value) -> Option<TextSpan> {
+    let kind = json::string(entity, "type")?;
+    let offset = json::unsigned(entity, "offset")?;
+    let length = json::unsigned(entity, "length")?;
+    let (start, end) = utf16_to_byte_range(text, offset, length)?;
+    TextSpan::new(text, start, end, format_of(kind, entity)).ok()
+}
+
+/// Maps a Telegram `MessageEntity.type` onto a [`TextFormat`].
+///
+/// A type whose payload is missing — a `text_link` without `url`, a
+/// `custom_emoji` without its id — keeps its provider name as
+/// [`TextFormat::Other`] instead of losing the run, so a renderer still sees
+/// that the provider marked it.
+fn format_of(kind: &str, entity: &Value) -> TextFormat {
+    match kind {
+        "bold" => TextFormat::Bold,
+        "italic" => TextFormat::Italic,
+        "underline" => TextFormat::Underline,
+        "strikethrough" => TextFormat::Strikethrough,
+        "spoiler" => TextFormat::Spoiler,
+        "code" => TextFormat::Code,
+        "pre" => TextFormat::Pre {
+            language: json::string(entity, "language")
+                .filter(|language| !language.is_empty())
+                .map(str::to_owned),
+        },
+        "text_link" => json::string(entity, "url")
+            .filter(|url| !url.is_empty())
+            .map_or_else(
+                || TextFormat::Other(kind.to_owned()),
+                |url| TextFormat::Link {
+                    url: url.to_owned(),
+                },
+            ),
+        "text_mention" => json::child(entity, "user")
+            .and_then(|user| json::id(user, "id"))
+            .map_or_else(
+                || TextFormat::Other(kind.to_owned()),
+                |user_id| TextFormat::TextMention { user_id },
+            ),
+        "custom_emoji" => json::string(entity, "custom_emoji_id")
+            .filter(|id| !id.is_empty())
+            .map_or_else(
+                || TextFormat::Other(kind.to_owned()),
+                |id| TextFormat::CustomEmoji { id: id.to_owned() },
+            ),
+        "mention" => TextFormat::Mention,
+        "hashtag" => TextFormat::Hashtag,
+        "cashtag" => TextFormat::Cashtag,
+        "bot_command" => TextFormat::BotCommand,
+        "url" => TextFormat::Url,
+        "email" => TextFormat::Email,
+        "phone_number" => TextFormat::PhoneNumber,
+        "blockquote" => TextFormat::Blockquote,
+        "expandable_blockquote" => TextFormat::ExpandableBlockquote,
+        // `date_time` and anything newer stay reachable under the provider's
+        // own name; `raw` still carries the untouched entity object.
+        other => TextFormat::Other(other.to_owned()),
     }
 }

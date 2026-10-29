@@ -10,7 +10,36 @@ carry a `!` in the conventional-commit subject.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Rich text: `NormalizedMessage::spans`.** Providers flatten formatting into
+  markup that this crate threw away, so a Telegram `**bold**` run reached the
+  application as nothing but text. `NormalizedMessage` now carries
+  `spans: Vec<TextSpan>`, each with UTF-8 byte offsets into `text`, and
+  `telegram` fills them from `entities` and `caption_entities`: `bold`, `italic`,
+  `underline`, `strikethrough`, `spoiler`, `code`, `pre` (with `language`),
+  `text_link` (with `url`), `mention`, `hashtag`, `cashtag`, `bot_command`,
+  `url`, `email`, `phone_number`, `text_mention` (with `user_id`),
+  `custom_emoji` (with id), `blockquote` and `expandable_blockquote`.
+  Telegram counts offsets in UTF-16 code units, so every range is converted to
+  bytes; a range that starts inside a surrogate pair, runs past the end or is
+  empty is dropped instead of clamped — the text stays complete and no span
+  claims markup the provider did not send. `TextSpan::new` is the only
+  constructor and rejects such ranges (`SpanError`), `slice`/`covers` answer the
+  two questions a renderer asks, and `NormalizedMessage::is_formatted` says
+  whether there is anything to render. A structured entity whose payload is
+  missing (`text_link` without `url`, `custom_emoji` without its id) keeps its
+  provider name as `TextFormat::Other`, so the run is not lost. The remaining
+  surface is tracked in #12 (WhatsApp interactive replies), #13 (Matrix
+  `formatted_body`) and #14 (outbound Telegram entities).
+
+### Breaking
+
+- `NormalizedMessage` gained the public field `spans`, so a struct literal that
+  builds the whole message no longer compiles. Use `NormalizedMessage::text`
+  (which leaves `spans` empty) or `..Default::default()`-style updates where
+  possible. The next version therefore moves to **0.4.0**; 0.3.4 stays the
+  released one.
 
 ## [0.3.3] - 2026-10-27
 

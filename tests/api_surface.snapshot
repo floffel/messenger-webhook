@@ -13,6 +13,7 @@ src/lib.rs:mod headers
 src/lib.rs:mod matrix
 src/lib.rs:mod matrix_out
 src/lib.rs:mod registry
+src/lib.rs:mod rich
 src/lib.rs:mod secret
 src/lib.rs:mod signature
 src/lib.rs:mod subscription
@@ -25,6 +26,7 @@ src/lib.rs:use matrix::MatrixAdapter
 src/lib.rs:use model::SYNTHETIC_ID_PREFIX
 src/lib.rs:use model::{Attachment,AttachmentKind,Channel,DeliveryStatus,NormalizedMessage,ProviderPayload,Reaction,}
 src/lib.rs:use registry::Registry
+src/lib.rs:use rich::{SpanError,TextFormat,TextSpan}
 src/lib.rs:use secret::Secret
 src/lib.rs:use subscription::meta_subscription_challenge
 src/lib.rs:use telegram::TelegramAdapter
@@ -169,6 +171,7 @@ src/model.rs:impl DeliveryStatus:fn as_str
 src/model.rs:impl NormalizedMessage:fn first_attachment
 src/model.rs:impl NormalizedMessage:fn has_synthetic_id
 src/model.rs:impl NormalizedMessage:fn is_edit
+src/model.rs:impl NormalizedMessage:fn is_formatted
 src/model.rs:impl NormalizedMessage:fn is_status_update
 src/model.rs:impl NormalizedMessage:fn text
 src/model.rs:impl ProviderPayload:fn body
@@ -194,6 +197,13 @@ src/registry.rs:impl Registry:fn new
 src/registry.rs:impl Registry:fn register
 src/registry.rs:impl Registry:fn verify
 src/registry.rs:struct Registry
+src/rich.rs:enum SpanError
+src/rich.rs:enum TextFormat
+src/rich.rs:impl TextFormat:fn as_str
+src/rich.rs:impl TextSpan:fn covers
+src/rich.rs:impl TextSpan:fn new
+src/rich.rs:impl TextSpan:fn slice
+src/rich.rs:struct TextSpan
 src/secret.rs:impl Secret:fn ct_eq
 src/secret.rs:impl Secret:fn expose_secret
 src/secret.rs:impl Secret:fn is_empty

@@ -7,6 +7,8 @@
 
 use std::fmt;
 
+use crate::rich::TextSpan;
+
 /// Which messenger a message came from.
 ///
 /// The enum is `#[non_exhaustive]`, so a messenger this crate learns to speak
@@ -295,6 +297,13 @@ pub struct NormalizedMessage {
     pub reaction: Option<Reaction>,
     /// Delivery state carried by this event.
     pub status: Option<DeliveryStatus>,
+    /// Formatted runs inside [`Self::text`], in provider order.
+    ///
+    /// Offsets are UTF-8 byte offsets into `text`, so `text[start..end]` is the
+    /// run the span describes. A provider entity whose offsets cannot be
+    /// expressed that way is dropped rather than repaired — see
+    /// [`TextSpan::new`](crate::TextSpan::new).
+    pub spans: Vec<TextSpan>,
     /// Provider-native event name (`text`, `image`, `message_reaction`,
     /// `m.room.message`, …), verbatim including unknown types.
     pub provider_type: Option<String>,
@@ -334,6 +343,7 @@ impl NormalizedMessage {
             edit_of: None,
             reaction: None,
             status: None,
+            spans: Vec::new(),
             provider_type: None,
             raw: None,
         }
@@ -399,6 +409,18 @@ impl NormalizedMessage {
     #[must_use]
     pub fn is_edit(&self) -> bool {
         self.edit_of.is_some()
+    }
+
+    /// Whether the event carries formatting, i.e. [`Self::spans`] is not empty.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, NormalizedMessage};
+    ///
+    /// assert!(!NormalizedMessage::text(Channel::Matrix, "!r:s", "plain").is_formatted());
+    /// ```
+    #[must_use]
+    pub fn is_formatted(&self) -> bool {
+        !self.spans.is_empty()
     }
 }
 

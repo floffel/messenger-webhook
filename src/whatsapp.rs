@@ -271,6 +271,7 @@ fn normalize_message(message: &Value) -> NormalizedMessage {
         edit_of: None,
         reaction: None,
         status: None,
+        spans: Vec::new(),
         provider_type: Some(provider_type.clone()),
         raw: Some(message.clone()),
     };
@@ -388,6 +389,7 @@ fn normalize_status(status: &Value) -> NormalizedMessage {
         edit_of: None,
         reaction: None,
         status: Some(delivery_status(state)),
+        spans: Vec::new(),
         provider_type: Some("status".to_owned()),
         raw: Some(status.clone()),
     }

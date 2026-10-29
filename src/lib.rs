@@ -58,8 +58,8 @@
 //! ## Deliberate exclusions
 //!
 //! Documented rather than silently missing — see the README for the full list:
-//! no network in the default build, no media download, no rich-text or entity
-//! parsing, no Matrix end-to-end encryption (`m.room.encrypted` events are
+//! no network in the default build, no media download, no Matrix end-to-end
+//! encryption (`m.room.encrypted` events are
 //! carried verbatim), and Meta's deprecated `X-Hub-Signature` (SHA-1) header is
 //! rejected in favour of `X-Hub-Signature-256`.
 
@@ -70,6 +70,7 @@
 pub mod error;
 pub mod headers;
 pub mod registry;
+pub mod rich;
 pub mod secret;
 pub mod signature;
 
@@ -114,6 +115,7 @@ pub use model::{
     Reaction,
 };
 pub use registry::Registry;
+pub use rich::{SpanError, TextFormat, TextSpan};
 pub use secret::Secret;
 
 #[cfg(feature = "whatsapp")]
