@@ -193,3 +193,51 @@ What the crate does with it:
 Pinned by `tests/subscription.rs` (24 tests, two of them proptest properties:
 "challenge returned exactly when the token matches" and "arbitrary query strings
 never panic"). The sample request above is the first test case, byte for byte.
+
+# Telegram: `MessageEntity`
+
+Source: **Telegram Bot API — `MessageEntity`**,
+<https://core.telegram.org/bots/api#messageentity> (retrieved 2026-10-29).
+
+`type`:
+
+> Type of the entity. Currently, can be “mention” (`@username`), “hashtag”
+> (`#hashtag` or `#hashtag@chatusername`), “cashtag” (`$USD` or
+> `$USD@chatusername`), “bot_command” (`/start@jobs_bot`), “url”
+> (`https://telegram.org`), “email” (`do-not-reply@telegram.org`),
+> “phone_number” (`+1-212-555-0123`), “bold” (bold text), “italic” (italic
+> text), “underline” (underlined text), “strikethrough” (strikethrough text),
+> “spoiler” (spoiler message), “blockquote” (block quotation),
+> “expandable_blockquote” (collapsed-by-default block quotation), “code”
+> (monowidth string), “pre” (monowidth block), “text_link” (for clickable text
+> URLs), “text_mention” (for users without usernames), “custom_emoji” (for inline
+> custom emoji stickers), or “date_time” (for formatted date and time).
+
+`offset`:
+
+> Offset in UTF-16 code units to the start of the entity.
+
+`length`:
+
+> Length of the entity in UTF-16 code units.
+
+What the crate does with it:
+
+- All twenty types are mapped in [`format_of`](../src/telegram.rs); nineteen onto
+  a `TextFormat` variant, `date_time` onto `TextFormat::Other("date_time")`
+  because the neutral model has no timestamp attribute yet — the run stays
+  visible instead of disappearing.
+- Every range is converted from UTF-16 units to UTF-8 byte offsets before a
+  `TextSpan` is built, so `"a😀b"` with offset 1 / length 2 is bytes `1..5`. The
+  conversion and its rejections (mid-surrogate, past the end, zero length) are
+  pinned by `tests/rich_text.rs`, including a proptest over every char boundary.
+- `text_link` carries `url`, `pre` carries `language`, `text_mention` carries
+  `user.id`, `custom_emoji` carries `custom_emoji_id`; a structured entity
+  without its payload keeps its provider name as `TextFormat::Other`, so a
+  malformed entity cannot erase a run (`structured_entities_without_their_payload_keep_the_provider_name`).
+- `caption_entities` describes `caption`, not `text`; a media message is pinned
+  by `caption_entities_describe_the_caption`.
+
+Unverified: the visible result of `date_time` formatting (it depends on the
+client's locale), and whether `custom_emoji` markup survives forwarding — neither
+affects the offsets this crate emits.
