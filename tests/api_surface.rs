@@ -150,6 +150,30 @@ fn headers_api() {
 }
 
 #[test]
+fn headers_debug_redacts_credential_values() {
+    let authorization = "Bearer representative-authorization-token";
+    let telegram = "representative-telegram-secret-token";
+    let meta = "sha256=representative-meta-signature";
+    let headers = Headers::from_iter([
+        ("Authorization", authorization),
+        ("X-Telegram-Bot-Api-Secret-Token", telegram),
+        ("X-Hub-Signature-256", meta),
+    ]);
+
+    let rendered = format!("{headers:?}");
+    for value in [authorization, telegram, meta] {
+        assert!(
+            !rendered.contains(value),
+            "Debug leaked a credential: {rendered}"
+        );
+    }
+    assert!(
+        rendered.contains("<redacted>"),
+        "Debug should mark values as redacted: {rendered}"
+    );
+}
+
+#[test]
 fn secret_api() {
     let secret = Secret::new("token");
     // A custom `is_empty` is not the `assert_is_empty` lint's target.
