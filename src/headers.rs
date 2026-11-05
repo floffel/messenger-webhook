@@ -4,7 +4,12 @@
 //! particular server stack, so the verification API takes this small type
 //! instead of `http::HeaderMap` or an axum extractor.
 
+use std::fmt;
+
 /// A case-insensitive set of request headers.
+///
+/// Header values are redacted in [`Debug`](fmt::Debug) output, so logging a
+/// header set cannot expose credentials.
 ///
 /// ```
 /// use messenger_webhook::Headers;
@@ -13,10 +18,35 @@
 /// headers.insert("X-Hub-Signature-256", "sha256=abcd");
 /// assert_eq!(headers.get("x-hub-signature-256"), Some("sha256=abcd"));
 /// assert_eq!(headers.len(), 1);
+///
+/// let rendered = format!("{headers:?}");
+/// assert!(rendered.contains("x-hub-signature-256"));
+/// assert!(!rendered.contains("sha256=abcd"));
+/// assert!(rendered.contains("<redacted>"));
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Headers {
     entries: Vec<(String, String)>,
+}
+
+const REDACTED: &str = "<redacted>";
+
+struct RedactedEntries<'a>(&'a [(String, String)]);
+
+impl fmt::Debug for RedactedEntries<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|(name, _)| (name, REDACTED)))
+            .finish()
+    }
+}
+
+impl fmt::Debug for Headers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Headers")
+            .field("entries", &RedactedEntries(&self.entries))
+            .finish()
+    }
 }
 
 impl Headers {
