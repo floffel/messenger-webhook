@@ -48,8 +48,8 @@ strum = { version = "0.28.0", features = ["derive"] }
 # One HTTP stack, one TLS backend: rustls, so no OpenSSL build. `json` is off on
 # purpose - the crate serialises with serde_json itself and sends bytes, which
 # keeps the transport dumb and the wire shape under this crate's control.
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
 ], optional = true }
 # Only the primitives the outbound client needs: an async mutex for per-room
 # ordering and a timer for backoff. No runtime, no macros: the client drives on
