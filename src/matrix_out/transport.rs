@@ -324,6 +324,14 @@ impl<'a> Request<'a> {
     pub const fn body(&self) -> &Body<'a> {
         &self.body
     }
+
+    /// Consumes the request and returns its body.
+    ///
+    /// Used by transports that need to move an owned JSON body into the HTTP
+    /// client instead of copying it.
+    pub(crate) fn into_body(self) -> Body<'a> {
+        self.body
+    }
 }
 
 const REDACTED: &str = "<redacted>";
