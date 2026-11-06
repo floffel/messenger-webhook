@@ -142,6 +142,22 @@ fn attachment_helpers() {
     let file = Attachment::new(AttachmentKind::Document);
     assert_eq!(file.kind, AttachmentKind::Document);
     assert_eq!(file.width, None);
+
+    let mut location = Attachment::new(AttachmentKind::Location);
+    location.latitude = serde_json::Number::from_f64(48.7);
+    location.longitude = serde_json::Number::from_f64(11.4);
+    assert_eq!(
+        location
+            .latitude
+            .as_ref()
+            .and_then(serde_json::Number::as_f64),
+        Some(48.7)
+    );
+
+    let mut contact = Attachment::new(AttachmentKind::Contact);
+    contact.phone_number = Some("+4915112345678".to_owned());
+    contact.first_name = Some("Florian".to_owned());
+    assert_eq!(contact.phone_number.as_deref(), Some("+4915112345678"));
 }
 
 #[test]

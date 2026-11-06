@@ -59,6 +59,17 @@ pub(crate) fn unsigned(value: &Value, key: &str) -> Option<u64> {
     }
 }
 
+/// Reads a finite JSON number, tolerating numeric strings.
+pub(crate) fn number(value: &Value, key: &str) -> Option<serde_json::Number> {
+    match child(value, key)? {
+        Value::Number(number) if number.as_f64().is_some_and(f64::is_finite) => {
+            Some(number.clone())
+        }
+        Value::String(text) => serde_json::Number::from_f64(text.trim().parse().ok()?),
+        _ => None,
+    }
+}
+
 /// Narrows an optional `u64` to `u32` without truncating.
 pub(crate) fn narrow(value: Option<u64>) -> Option<u32> {
     value.and_then(|n| u32::try_from(n).ok())

@@ -314,6 +314,104 @@ mod telegram {
     }
 
     #[test]
+    fn location_coordinates_are_encoded_at_the_boundaries() {
+        let cases = [(0.0, 0.0), (-90.0, -180.0), (90.0, 180.0)];
+        for (latitude, longitude) in cases {
+            let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
+            message.text = None;
+            let mut location = Attachment::new(AttachmentKind::Location);
+            location.latitude = serde_json::Number::from_f64(latitude);
+            location.longitude = serde_json::Number::from_f64(longitude);
+            message.attachments.push(location);
+
+            let body = adapter().encode(&message).unwrap().json().unwrap();
+            assert_eq!(body["latitude"], latitude);
+            assert_eq!(body["longitude"], longitude);
+        }
+
+        for (latitude, longitude, expected) in [
+            (-90.1, 0.0, "latitude"),
+            (90.1, 0.0, "latitude"),
+            (0.0, -180.1, "longitude"),
+            (0.0, 180.1, "longitude"),
+        ] {
+            let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
+            message.text = None;
+            let mut location = Attachment::new(AttachmentKind::Location);
+            location.latitude = serde_json::Number::from_f64(latitude);
+            location.longitude = serde_json::Number::from_f64(longitude);
+            message.attachments.push(location);
+
+            let error = adapter().encode(&message).unwrap_err();
+            assert!(
+                matches!(
+                    &error,
+                    Error::InvalidMessage { reason, .. } if reason.contains(expected)
+                ),
+                "unexpected error: {error:?}"
+            );
+        }
+
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
+        message.text = None;
+        let mut location = Attachment::new(AttachmentKind::Location);
+        location.longitude = serde_json::Number::from_f64(11.4);
+        message.attachments.push(location);
+        let error = adapter().encode(&message).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                Error::InvalidMessage { reason, .. } if reason.contains("latitude")
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn contact_fields_are_encoded_and_required_fields_are_checked() {
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
+        message.text = None;
+        let mut contact = Attachment::new(AttachmentKind::Contact);
+        contact.phone_number = Some("+4915112345678".to_owned());
+        contact.first_name = Some("Florian".to_owned());
+        contact.last_name = Some("Loeffel".to_owned());
+        message.attachments.push(contact);
+
+        let body = adapter().encode(&message).unwrap().json().unwrap();
+        assert_eq!(body["phone_number"], "+4915112345678");
+        assert_eq!(body["first_name"], "Florian");
+        assert_eq!(body["last_name"], "Loeffel");
+
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
+        message.text = None;
+        let mut contact = Attachment::new(AttachmentKind::Contact);
+        contact.first_name = Some("Florian".to_owned());
+        message.attachments.push(contact);
+        let error = adapter().encode(&message).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                Error::InvalidMessage { reason, .. } if reason.contains("phone number")
+            ),
+            "unexpected error: {error:?}"
+        );
+
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
+        message.text = None;
+        let mut contact = Attachment::new(AttachmentKind::Contact);
+        contact.phone_number = Some("+4915112345678".to_owned());
+        message.attachments.push(contact);
+        let error = adapter().encode(&message).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                Error::InvalidMessage { reason, .. } if reason.contains("first name")
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
     fn unsupported_messages_are_rejected() {
         let mut edit = OutboundMessage::text(Channel::Telegram, "1", "fixed");
         edit.edit_of = Some("7".to_owned());

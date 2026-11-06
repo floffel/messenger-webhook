@@ -87,7 +87,7 @@ mod whatsapp {
     #[test]
     fn location_and_contact_cards_keep_their_label() {
         let events = inbound(
-            r#"{"messages":[{"id":"w1","from":"49","type":"location","location":{"name":"Ingolstadt"}}]}"#,
+            r#"{"messages":[{"id":"w1","from":"49","type":"location","location":{"latitude":48.7,"longitude":11.4,"name":"Ingolstadt"}}]}"#,
         );
         assert_eq!(
             events[0].first_attachment().unwrap().kind.as_str(),
@@ -96,6 +96,24 @@ mod whatsapp {
         assert_eq!(
             events[0].first_attachment().unwrap().caption.as_deref(),
             Some("Ingolstadt")
+        );
+        assert_eq!(
+            events[0]
+                .first_attachment()
+                .unwrap()
+                .latitude
+                .as_ref()
+                .and_then(serde_json::Number::as_f64),
+            Some(48.7)
+        );
+        assert_eq!(
+            events[0]
+                .first_attachment()
+                .unwrap()
+                .longitude
+                .as_ref()
+                .and_then(serde_json::Number::as_f64),
+            Some(11.4)
         );
 
         // Address is the fallback when the place has no name.
@@ -108,7 +126,7 @@ mod whatsapp {
         );
 
         let events = inbound(
-            r#"{"messages":[{"id":"w3","from":"49","type":"contacts","contacts":[{"name":{"formatted_name":"Florian"}}]}]}"#,
+            r#"{"messages":[{"id":"w3","from":"49","type":"contacts","contacts":[{"name":{"formatted_name":"Florian","first_name":"Florian","last_name":"Loeffel"},"phones":[{"phone":"+4915112345678"}]}]}]}"#,
         );
         assert_eq!(
             events[0].first_attachment().unwrap().kind.as_str(),
@@ -117,6 +135,22 @@ mod whatsapp {
         assert_eq!(
             events[0].first_attachment().unwrap().caption.as_deref(),
             Some("Florian")
+        );
+        assert_eq!(
+            events[0]
+                .first_attachment()
+                .unwrap()
+                .phone_number
+                .as_deref(),
+            Some("+4915112345678")
+        );
+        assert_eq!(
+            events[0].first_attachment().unwrap().first_name.as_deref(),
+            Some("Florian")
+        );
+        assert_eq!(
+            events[0].first_attachment().unwrap().last_name.as_deref(),
+            Some("Loeffel")
         );
     }
 
@@ -269,13 +303,21 @@ mod telegram {
     }
 
     #[test]
-    fn location_cannot_be_sent_but_is_normalised_inbound() {
+    fn location_and_contact_can_be_reencoded_after_adapting() {
         let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
         message.text = None;
         message
             .attachments
             .push(Attachment::new(AttachmentKind::Location));
-        assert!(adapter().encode(&message).is_err());
+        let error = adapter().encode(&message).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                messenger_webhook::Error::InvalidMessage { reason, .. }
+                    if reason.contains("latitude")
+            ),
+            "unexpected error: {error:?}"
+        );
 
         let payload = br#"{"message":{"message_id":1,"chat":{"id":2},"location":{"latitude":48.7,"longitude":11.4,"name":"Ingolstadt"}}}"#;
         let events = adapter().adapt(payload).unwrap();
@@ -284,6 +326,51 @@ mod telegram {
             events[0].attachments[0].caption.as_deref(),
             Some("Ingolstadt")
         );
+        assert_eq!(
+            events[0].attachments[0]
+                .latitude
+                .as_ref()
+                .and_then(serde_json::Number::as_f64),
+            Some(48.7)
+        );
+        assert_eq!(
+            events[0].attachments[0]
+                .longitude
+                .as_ref()
+                .and_then(serde_json::Number::as_f64),
+            Some(11.4)
+        );
+
+        let mut outbound = OutboundMessage::text(Channel::Telegram, "2", "");
+        outbound.text = None;
+        outbound.attachments = events[0].attachments.clone();
+        let body = adapter().encode(&outbound).unwrap().json().unwrap();
+        assert_eq!(body["latitude"], 48.7);
+        assert_eq!(body["longitude"], 11.4);
+
+        let payload = br#"{"message":{"message_id":2,"chat":{"id":2},"contact":{"phone_number":"+4915112345678","first_name":"Florian","last_name":"Loeffel"}}}"#;
+        let events = adapter().adapt(payload).unwrap();
+        assert_eq!(events[0].attachments[0].kind.as_str(), "contact");
+        assert_eq!(
+            events[0].attachments[0].phone_number.as_deref(),
+            Some("+4915112345678")
+        );
+        assert_eq!(
+            events[0].attachments[0].first_name.as_deref(),
+            Some("Florian")
+        );
+        assert_eq!(
+            events[0].attachments[0].last_name.as_deref(),
+            Some("Loeffel")
+        );
+
+        let mut outbound = OutboundMessage::text(Channel::Telegram, "2", "");
+        outbound.text = None;
+        outbound.attachments = events[0].attachments.clone();
+        let body = adapter().encode(&outbound).unwrap().json().unwrap();
+        assert_eq!(body["phone_number"], "+4915112345678");
+        assert_eq!(body["first_name"], "Florian");
+        assert_eq!(body["last_name"], "Loeffel");
     }
 }
 

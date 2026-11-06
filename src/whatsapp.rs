@@ -346,14 +346,30 @@ fn normalize_message(message: &Value) -> Result<NormalizedMessage> {
                 attachment.caption = json::string(location, "name")
                     .or_else(|| json::string(location, "address"))
                     .map(str::to_owned);
+                attachment.latitude = json::number(location, "latitude");
+                attachment.longitude = json::number(location, "longitude");
                 normalized.attachments.push(attachment);
             }
         }
         "contacts" => {
             if let Some(contact) = json::array(message, "contacts").first() {
                 let mut attachment = Attachment::new(AttachmentKind::Contact);
-                attachment.caption = json::child(contact, "name")
+                let name = json::child(contact, "name");
+                attachment.caption = name
                     .and_then(|name| json::string(name, "formatted_name"))
+                    .or_else(|| name.and_then(|name| json::string(name, "first_name")))
+                    .map(str::to_owned);
+                attachment.first_name = name
+                    .and_then(|name| json::string(name, "first_name"))
+                    .map(str::to_owned);
+                attachment.last_name = name
+                    .and_then(|name| json::string(name, "last_name"))
+                    .map(str::to_owned);
+                attachment.phone_number = json::array(contact, "phones")
+                    .first()
+                    .and_then(|phone| {
+                        json::string(phone, "phone").or_else(|| json::string(phone, "wa_id"))
+                    })
                     .map(str::to_owned);
                 normalized.attachments.push(attachment);
             }

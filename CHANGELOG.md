@@ -91,6 +91,10 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- **Location and contact cards keep their coordinates and phone number.**
+  Inbound Telegram and `WhatsApp` location and contact messages now carry
+  latitude, longitude and contact name/phone fields on `Attachment`, so the
+  normalised event can be re-encoded instead of losing the payload. Closes #127.
 - **`Secret` no longer claims all comparisons are constant time.** The type's
   docs now state what is enforced: `Debug` is redacted and `Secret::ct_eq` is
   the constant-time comparison path, while `Secret::expose_secret` returns the
