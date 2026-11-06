@@ -330,6 +330,10 @@ the query is parsed.
 - **Constant time.** HMAC digests and provider tokens are compared with
   `subtle`; nothing short-circuits. `Secret`'s `Debug` is redacted, so a
   `{:?}` of an adapter never prints a credential.
+- **Secrets are wiped in memory.** `Secret` keeps its bytes in a
+  `zeroize::Zeroizing<String>`, and its `Clone` is a deep copy with its own
+  zeroizing buffer, so the live secret is zeroed when it is dropped and a
+  cloned adapter does not keep a writable copy of the credential alive.
 - **Size before work.** The body ceiling is checked before hashing and before
   JSON parsing.
 - **Strict authentication, permissive parsing.** Header shapes are validated

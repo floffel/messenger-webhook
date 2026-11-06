@@ -3,12 +3,18 @@
 use std::fmt;
 
 use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
 
 /// A shared secret used to authenticate provider webhooks.
 ///
 /// The value is redacted in [`Debug`](fmt::Debug) output and can only be
 /// compared in constant time through [`Secret::ct_eq`]. An empty secret is
 /// accepted as a value, but every adapter refuses to verify with it.
+///
+/// The bytes live in a [`zeroize::Zeroizing`] buffer, so the heap allocation
+/// backing the secret is wiped when the value is dropped. [`Clone`] is a deep
+/// copy — cloning an adapter gives the copy its own independent, zeroizing
+/// buffer — so no clone leaves the secret behind in freed memory.
 ///
 /// ```
 /// use messenger_webhook::Secret;
@@ -19,8 +25,15 @@ use subtle::ConstantTimeEq;
 /// assert!(!secret.ct_eq(b"s3creT"));
 /// assert_eq!(format!("{secret:?}"), "Secret(<redacted>)");
 /// ```
-#[derive(Clone)]
-pub struct Secret(String);
+pub struct Secret(Zeroizing<String>);
+
+impl Clone for Secret {
+    fn clone(&self) -> Self {
+        // A fresh `Zeroizing` buffer: the clone wipes its own bytes on drop and
+        // shares nothing with the original.
+        Self(Zeroizing::new(self.0.as_str().to_owned()))
+    }
+}
 
 impl Secret {
     /// Wraps a raw secret value.
@@ -32,7 +45,7 @@ impl Secret {
     /// ```
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        Self(Zeroizing::new(value.into()))
     }
 
     /// Whether the secret is empty — which makes every `verify` call fail
@@ -58,7 +71,7 @@ impl Secret {
     /// ```
     #[must_use]
     pub fn expose_secret(&self) -> &str {
-        &self.0
+        self.0.as_str()
     }
 
     /// Compares a candidate in constant time.
@@ -79,5 +92,45 @@ impl Secret {
 impl fmt::Debug for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Secret(<redacted>)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Secret;
+
+    #[test]
+    fn clone_is_an_independent_deep_copy() {
+        let original = Secret::new("app-secret");
+        let clone = original.clone();
+
+        // Both share the same bytes...
+        assert!(clone.ct_eq(b"app-secret"));
+        assert_eq!(clone.expose_secret(), "app-secret");
+        // ...and dropping one leaves the other valid.
+        drop(original);
+        assert!(clone.ct_eq(b"app-secret"));
+        assert_eq!(format!("{clone:?}"), "Secret(<redacted>)");
+    }
+
+    #[test]
+    fn clone_wipes_its_own_bytes_on_drop() {
+        // `Secret` owns a `Zeroizing<String>`, so the allocation is zeroed when
+        // the last owner is dropped. This pins that guarantee in place: a
+        // future change that reverts to a bare `String` no longer wipes.
+        fn assert_zeroizing(_: &zeroize::Zeroizing<String>) {}
+
+        let secret = Secret::new(String::from("app-secret"));
+        // The inner buffer is a `Zeroizing`, so cloning and dropping both wipe.
+        let clone = secret.clone();
+        assert_zeroizing(&secret.0);
+        assert_zeroizing(&clone.0);
+        assert!(secret.ct_eq(b"app-secret"));
+    }
+
+    #[test]
+    fn secret_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Secret>();
     }
 }

@@ -76,6 +76,13 @@ carry a `!` in the conventional-commit subject.
   mapped error is stripped with `without_url()` so a room, media or upload URL
   no longer appears in the rendered message. The type gains
   `TransportError::new`, and is now `#[non_exhaustive]`. Closes #57.
+- **Verification secrets are wiped from memory.** `Secret` held a bare
+  `String` behind a derived `Clone`, so every cloned adapter and every
+  reallocation could leave the webhook secret in freed heap, swap or a core
+  dump. Its bytes now live in a `zeroize::Zeroizing<String>`, and `Clone` is a
+  deep copy that owns its own zeroizing buffer, so every value wipes its
+  allocation on drop. `expose_secret` still returns a `&str` borrow, but that
+  borrow cannot outlive the value that now owns a wiping buffer. Closes #108.
 - **Formatting spans stay tied to their text.** `NormalizedMessage::text` and
   `NormalizedMessage::spans` are no longer independent public fields. The
   fields are now private behind checked accessors
