@@ -133,6 +133,7 @@ proptest! {
             Just(TransportErrorKind::Other),
             Just(TransportErrorKind::InvalidRequest),
             Just(TransportErrorKind::TestHarness),
+            Just(TransportErrorKind::ResponseTooLarge),
         ],
         attempt in 1u32..=5,
         repeatable in any::<bool>(),
@@ -145,7 +146,13 @@ proptest! {
         let error = TransportError::new(kind, "x");
         let verdict = policy().classify_transport(attempt, &error, operation);
         match (kind, kind.is_before_write(), repeatable) {
-            (TransportErrorKind::InvalidRequest | TransportErrorKind::TestHarness, _, _) => {
+            (
+                TransportErrorKind::InvalidRequest
+                | TransportErrorKind::TestHarness
+                | TransportErrorKind::ResponseTooLarge,
+                _,
+                _,
+            ) => {
                 prop_assert_eq!(verdict, Verdict::Rejected);
             }
             (_, true, _) => prop_assert!(

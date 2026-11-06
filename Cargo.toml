@@ -24,6 +24,7 @@ matrix = ["dep:html5ever"]
 # inherit either, so the whole `matrix_out` module sits behind this feature.
 matrix-out = [
     "dep:exponential-backoff",
+    "dep:futures-util",
     "dep:percent-encoding",
     "dep:reqwest",
     "dep:tokio",
@@ -50,6 +51,12 @@ strum = { version = "0.28.0", features = ["derive"] }
 # keeps the transport dumb and the wire shape under this crate's control.
 reqwest = { version = "0.13", default-features = false, features = [
     "rustls",
+    "stream",
+], optional = true }
+# `reqwest::Response::bytes_stream` has the stream; `TryStreamExt::try_fold`
+# bounds the body before it can grow without limit.
+futures-util = { version = "0.3", default-features = false, features = [
+    "std",
 ], optional = true }
 # Only the primitives the outbound client needs: an async mutex for per-room
 # ordering and a timer for backoff. No runtime, no macros: the client drives on
@@ -87,6 +94,7 @@ percent-encoding = { version = "2.3.2", default-features = false, features = [
 html5ever = { version = "0.40.1", optional = true }
 
 [dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 proptest = "1"
 # Only `examples/axum_handler.rs` needs an HTTP stack; the crate itself stays
 # free of one, which is why axum lives here and not in `[dependencies]`.

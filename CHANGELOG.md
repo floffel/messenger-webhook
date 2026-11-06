@@ -22,6 +22,8 @@ carry a `!` in the conventional-commit subject.
   `adapt_verified` and `handle`; the legacy `verify`/`adapt` methods remain for
   compatibility but are documented as separate calls whose ordering the caller
   must enforce. Closes #20.
+- The `reqwest` transport now bounds Matrix response bodies at
+  `MAX_RESPONSE_BODY_BYTES` before returning them. Closes #55.
 - The `cargo-deny` gate now resolves all features, so default-off dependencies
   such as the `matrix-out` HTTP stack are covered by advisory checks. Closes #17.
 - **The body ceiling is now a per-adapter property.** `Adapter` gains

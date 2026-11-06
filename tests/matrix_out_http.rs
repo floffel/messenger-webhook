@@ -11,8 +11,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::body::Body as AxumBody;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
 use axum::Router;
 use messenger_webhook::matrix_out::transport::{
@@ -20,7 +22,7 @@ use messenger_webhook::matrix_out::transport::{
 };
 use messenger_webhook::matrix_out::{
     ClientConfig, MatrixClient, MediaUpload, OutboundError, ReqwestTransport, RetryPolicy,
-    DEFAULT_MAX_DELAY_MS, DEFAULT_MAX_RATE_LIMIT_WAIT_MS,
+    DEFAULT_MAX_DELAY_MS, DEFAULT_MAX_RATE_LIMIT_WAIT_MS, MAX_RESPONSE_BODY_BYTES,
 };
 
 /// What the homeserver stand-in saw, and how it should behave.
@@ -46,6 +48,8 @@ async fn server() -> (String, AppState) {
         .route("/_matrix/client/v3/account/whoami", get(whoami))
         .route("/_matrix/media/v3/upload", post(upload))
         .route("/_matrix/media/v3/upload-redirect", post(upload_redirect))
+        .route("/tests/body/{size}", get(body))
+        .route("/tests/streamed-body/{size}", get(streamed_body))
         .route(
             "/_matrix/client/v3/rooms/{room}/receipt/m.read/{event}",
             post(receipt),
@@ -159,6 +163,24 @@ async fn receipt(
 ) -> (StatusCode, String) {
     record(&state, &headers, &format!("/receipt/{room}/{event}"), b"");
     (StatusCode::OK, "{}".to_owned())
+}
+
+async fn body(Path(size): Path<usize>) -> impl IntoResponse {
+    (StatusCode::OK, vec![b'x'; size])
+}
+
+async fn streamed_body(Path(size): Path<usize>) -> impl IntoResponse {
+    let chunks = (0..size)
+        .step_by(8 * 1024)
+        .map(|start| {
+            let len = (size - start).min(8 * 1024);
+            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(vec![b'x'; len]))
+        })
+        .collect::<Vec<_>>();
+    (
+        StatusCode::OK,
+        AxumBody::from_stream(futures_util::stream::iter(chunks)),
+    )
 }
 
 fn client(base: &str) -> MatrixClient {
@@ -410,4 +432,59 @@ async fn a_read_timeout_is_ambiguous_for_a_write() {
     assert!(error.is_ambiguous(), "{error:?}");
     assert!(!error.is_retryable());
     assert_eq!(seen.paths.lock().expect("log").len(), 1);
+}
+
+async fn response_body(base: &str, path: &str) -> Result<Vec<u8>, TransportError> {
+    ReqwestTransport::new()
+        .expect("a client")
+        .send(Request::new(Method::Get, format!("{base}{path}")))
+        .await
+        .map(|response| response.body().to_vec())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_response_body_at_the_limit_is_returned_unchanged() {
+    let (base, _seen) = server().await;
+
+    let body = response_body(&base, &format!("/tests/body/{MAX_RESPONSE_BODY_BYTES}"))
+        .await
+        .expect("a response at the ceiling");
+
+    assert_eq!(body.len(), MAX_RESPONSE_BODY_BYTES);
+    assert!(body.iter().all(|byte| *byte == b'x'));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_content_length_one_byte_over_the_limit_is_rejected_before_reading() {
+    let (base, _seen) = server().await;
+
+    let error = response_body(
+        &base,
+        &format!("/tests/body/{}", MAX_RESPONSE_BODY_BYTES + 1),
+    )
+    .await
+    .expect_err("the advertised body is over the ceiling");
+
+    assert_eq!(error.kind, TransportErrorKind::ResponseTooLarge);
+    assert!(error.kind.is_response_too_large());
+    assert!(error
+        .message
+        .contains(&(MAX_RESPONSE_BODY_BYTES + 1).to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_streamed_body_past_the_limit_is_rejected_without_content_length() {
+    let (base, _seen) = server().await;
+
+    let error = response_body(
+        &base,
+        &format!("/tests/streamed-body/{}", MAX_RESPONSE_BODY_BYTES + 1),
+    )
+    .await
+    .expect_err("the streamed body crosses the ceiling");
+
+    assert_eq!(error.kind, TransportErrorKind::ResponseTooLarge);
+    assert!(error
+        .message
+        .contains(&(MAX_RESPONSE_BODY_BYTES + 1).to_string()));
 }

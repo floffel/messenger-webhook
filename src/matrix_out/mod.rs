@@ -88,7 +88,7 @@ use serde_json::{json, Value};
 use url::Url;
 
 pub use error::{OutboundError, OutboundResult};
-pub use http::{ReqwestTransport, DEFAULT_REQUEST_TIMEOUT};
+pub use http::{ReqwestTransport, DEFAULT_REQUEST_TIMEOUT, MAX_RESPONSE_BODY_BYTES};
 pub use ordering::GATE_CAPACITY;
 pub use retry::{
     Operation, RetryPolicy, RetryPolicyError, Verdict, DEFAULT_BASE_DELAY_MS, DEFAULT_MAX_ATTEMPTS,
@@ -1596,7 +1596,9 @@ fn transport_failure(
     if error.kind == TransportErrorKind::TestHarness {
         return OutboundError::TestHarness { reason };
     }
-    if error.kind == TransportErrorKind::InvalidRequest {
+    if error.kind == TransportErrorKind::InvalidRequest
+        || error.kind == TransportErrorKind::ResponseTooLarge
+    {
         return OutboundError::InvalidRequest {
             reason: error.message.clone(),
         };
