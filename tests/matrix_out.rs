@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use messenger_webhook::matrix_out::testing::RecordedRequest;
-use messenger_webhook::matrix_out::transport::{Method, TransportError};
+use messenger_webhook::matrix_out::transport::{Method, TransportError, TransportErrorKind};
 use messenger_webhook::matrix_out::{
     ClientConfig, MatrixClient, MediaKind, MediaUpload, OutboundError, RecordingSleeper,
     RetryPolicy, StubTransport, TxnId,
@@ -247,6 +247,25 @@ fn an_upload_timeout_is_ambiguous_but_a_connect_failure_is_retried() {
     let uri = block_on(harness.client.upload_media(&media)).expect("uploaded");
     assert_eq!(uri.as_str(), "mxc://m.example/x");
     assert_eq!(harness.sleeper.delays(), vec![Duration::from_millis(500)]);
+}
+
+#[test]
+fn a_pre_write_request_error_on_an_upload_is_terminal_not_ambiguous() {
+    let harness = harness(|config| config);
+    harness.transport.push_failure(TransportError::new(
+        TransportErrorKind::InvalidRequest,
+        "bad header",
+    ));
+
+    let media = MediaUpload::new(b"x", "text/plain");
+    let error = block_on(harness.client.upload_media(&media)).expect_err("bad request");
+
+    assert!(matches!(error, OutboundError::InvalidRequest { .. }));
+    assert!(error.is_client_error(), "{error:?}");
+    assert!(!error.is_retryable(), "{error:?}");
+    assert!(!error.is_ambiguous(), "{error:?}");
+    assert_eq!(harness.transport.call_count(), 1);
+    assert_eq!(harness.sleeper.delays(), [] as [Duration; 0]);
 }
 
 #[test]

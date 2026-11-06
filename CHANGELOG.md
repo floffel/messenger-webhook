@@ -70,6 +70,10 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- **Pre-write request validation is terminal, not ambiguous.** `ReqwestTransport`
+  now reports an HTTP header it cannot express as an invalid request before a
+  connection is used, and the retry classifier rejects it instead of treating a
+  non-idempotent upload as "may have landed". Closes #56.
 - **Transport failures keep their source chain and drop the request URL.**
   `TransportError` now retains the underlying `reqwest::Error` as its
   `std::error::Error::source` instead of flattening it to a `String`, and the
