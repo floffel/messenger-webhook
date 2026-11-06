@@ -27,3 +27,10 @@ path = "fuzz_targets/outbound_ids.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "subscription"
+path = "fuzz_targets/subscription.rs"
+test = false
+doc = false
+bench = false

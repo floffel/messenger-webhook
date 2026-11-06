@@ -201,9 +201,11 @@ What the crate does with it:
   verification requests and bad signatures remain client rejections and should
   be answered with `403`.
 
-Pinned by `tests/subscription.rs` (29 tests, two of them proptest properties:
-"challenge returned exactly when the token matches" and "arbitrary query strings
-never panic"). The sample request above is the first test case, byte for byte.
+Pinned by `tests/subscription.rs` (34 tests, three of them proptest properties:
+"challenge returned exactly when the token matches", "arbitrary query strings
+never panic" and "accepted challenges are bounded decimal"), plus the
+`subscription` fuzz target. The sample request above is the first test case,
+byte for byte.
 
 # Telegram: `MessageEntity`
 

@@ -242,6 +242,22 @@ fn a_conflicting_duplicate_parameter_is_rejected_even_when_one_value_matches() {
 }
 
 #[test]
+fn a_conflicting_duplicate_challenge_is_rejected() {
+    let query =
+        format!("hub.mode=subscribe&hub.challenge=1&hub.challenge=2&hub.verify_token={TOKEN}");
+    let error = meta_subscription_challenge(
+        Channel::Messenger,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect_err("ambiguity rejected");
+    assert!(
+        matches!(error, Error::MalformedVerificationRequest { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn identical_duplicate_parameters_are_accepted() {
     // Repeating the same decoded value for one logical parameter is
     // unambiguous, including the issue's `hub.mode=subscribe` twice.
@@ -381,6 +397,34 @@ fn a_plus_in_the_token_is_a_space() {
 }
 
 #[test]
+fn plus_and_percent_decoding_apply_before_challenge_validation() {
+    // `%31%32%33` decodes to `123` before the integer parse, so the parser
+    // reflects the canonical decoded value, not the encoded query text.
+    let query = format!("hub.mode=subscribe&hub.challenge=%31%32%33&hub.verify_token={TOKEN}");
+    assert_eq!(
+        meta_subscription_challenge(
+            Channel::WhatsApp,
+            &Secret::new(TOKEN).expect("secret"),
+            &query
+        )
+        .expect("percent-decoded challenge"),
+        "123"
+    );
+
+    // `+` is a space in form-urlencoded data, so a plus inside the challenge is
+    // rejected rather than being reflected.
+    let query = format!("hub.mode=subscribe&hub.challenge=1+2&hub.verify_token={TOKEN}");
+    assert!(matches!(
+        meta_subscription_challenge(
+            Channel::Messenger,
+            &Secret::new(TOKEN).expect("secret"),
+            &query
+        ),
+        Err(Error::MalformedVerificationRequest { .. })
+    ));
+}
+
+#[test]
 fn an_encoded_token_matches_the_plain_secret() {
     // Encoding is an application detail; the compared values are the decoded ones.
     let query = "hub.mode=subscribe&hub.challenge=1&hub.verify_token=meaty%68amhock-meatyhamhock";
@@ -438,6 +482,25 @@ fn the_challenge_must_be_an_unsigned_integer() {
 }
 
 #[test]
+fn decoded_control_bytes_in_the_challenge_are_rejected() {
+    // These are decoded by `form_urlencoded` before the integer parse. A CR/LF
+    // sequence in particular must never be reflected into a response body.
+    for value in ["%00", "%01", "%0d", "%0a", "%0d%0a", "%0d%0aX", "1%0d%0a2"] {
+        let query = format!("hub.mode=subscribe&hub.challenge={value}&hub.verify_token={TOKEN}");
+        let error = meta_subscription_challenge(
+            Channel::Messenger,
+            &Secret::new(TOKEN).expect("secret"),
+            &query,
+        )
+        .expect_err("control bytes are not an unsigned integer");
+        assert!(
+            matches!(error, Error::MalformedVerificationRequest { .. }),
+            "challenge {value:?} gave {error}"
+        );
+    }
+}
+
+#[test]
 fn the_challenge_is_returned_as_canonical_decimal() {
     let query = request_with(META_CHALLENGE_PARAM, "0001158201444");
     let challenge = meta_subscription_challenge(
@@ -470,19 +533,23 @@ fn an_empty_challenge_is_rejected() {
 
 #[test]
 fn the_challenge_length_is_a_pre_parse_guard() {
-    let at_limit = "0".repeat(MAX_CHALLENGE_BYTES);
-    let query = request_with(META_CHALLENGE_PARAM, &at_limit);
-    assert_eq!(
-        meta_subscription_challenge(
-            Channel::WhatsApp,
-            &Secret::new(TOKEN).expect("secret"),
-            &query
-        )
-        .expect("at the ceiling"),
-        "0"
-    );
+    for length in [MAX_CHALLENGE_BYTES - 1, MAX_CHALLENGE_BYTES] {
+        let at_limit = "0".repeat(length);
+        let query = request_with(META_CHALLENGE_PARAM, &at_limit);
+        assert_eq!(
+            meta_subscription_challenge(
+                Channel::WhatsApp,
+                &Secret::new(TOKEN).expect("secret"),
+                &query
+            )
+            .expect("at or one byte below the ceiling"),
+            "0"
+        );
+    }
 
-    let past_limit = "1".repeat(MAX_CHALLENGE_BYTES + 1);
+    // All zeroes parse as a valid `u64`, so this fails only if the pre-parse
+    // length guard itself is removed or off by one.
+    let past_limit = "0".repeat(MAX_CHALLENGE_BYTES + 1);
     let query = request_with(META_CHALLENGE_PARAM, &past_limit);
     let error = meta_subscription_challenge(
         Channel::Messenger,
@@ -632,5 +699,32 @@ proptest! {
             &Secret::new(TOKEN).expect("secret"),
             &query,
         );
+    }
+
+    /// Any challenge the parser accepts is a non-empty digit string no longer
+    /// than the documented ceiling. This catches a widened reflected charset or
+    /// an off-by-one in the length guard even when the challenge is not a real
+    /// Meta integer.
+    #[test]
+    fn accepted_challenges_are_bounded_decimal(
+        raw_challenge in prop::collection::vec(any::<char>(), 0..160)
+            .prop_map(|chars| chars.into_iter().collect::<String>()),
+    ) {
+        let query = query(&[
+            (META_MODE_PARAM, META_SUBSCRIBE_MODE),
+            (META_CHALLENGE_PARAM, &raw_challenge),
+            (META_VERIFY_TOKEN_PARAM, TOKEN),
+        ]);
+        if let Ok(challenge) = meta_subscription_challenge(
+            Channel::Messenger,
+            &Secret::new(TOKEN).expect("secret"),
+            &query,
+        ) {
+            prop_assert!(!challenge.is_empty());
+            prop_assert!(challenge.len() <= MAX_CHALLENGE_BYTES);
+            prop_assert!(challenge.bytes().all(|byte| byte.is_ascii_digit()));
+            let parsed = challenge.parse::<u64>().expect("accepted challenge is u64");
+            prop_assert_eq!(challenge, parsed.to_string());
+        }
     }
 }
