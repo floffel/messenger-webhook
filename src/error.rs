@@ -64,7 +64,8 @@ pub enum Error {
     MalformedVerificationHeader {
         /// Channel whose header is malformed.
         channel: Channel,
-        /// What exactly did not match the expected shape.
+        /// What exactly did not match the expected shape. Never the received
+        /// value: that is attacker-controlled and would end up in a log.
         reason: String,
     },
 
