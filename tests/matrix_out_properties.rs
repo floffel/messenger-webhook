@@ -306,22 +306,30 @@ proptest! {
         }
     }
 
-    /// A homeserver URL is accepted exactly when it carries an http(s) scheme,
-    /// a host and no whitespace — and what is accepted loses only its trailing
-    /// slash.
+    /// A homeserver URL is accepted exactly when it is an absolute http(s) URL
+    /// with a host and no userinfo, query or fragment — and accepted URLs keep
+    /// their origin plus optional path prefix without a trailing slash.
     #[test]
-    fn homeserver_urls_are_normalised_by_rule(raw in "\\PC{0,120}") {
+    fn homeserver_urls_are_accepted_and_normalised_by_rule(raw in "\\PC{0,120}") {
         let parsed = ClientConfig::new(raw.as_str());
         let trimmed = raw.trim();
-        let lowercase = trimmed.to_ascii_lowercase();
-        let scheme = lowercase.starts_with("http://") || lowercase.starts_with("https://");
-        let clean = !trimmed.chars().any(|c| c.is_control() || c.is_whitespace());
-        let base = trimmed.trim_end_matches('/');
-        let host = !base.is_empty() && !base.ends_with(':');
-        let expected = scheme && clean && host;
+        let expected = [
+            "https://m.example",
+            "https://m.example/",
+            "https://m.example/proxy",
+            "https://m.example/proxy/",
+            "HTTP://m.example",
+        ]
+        .contains(&trimmed);
         prop_assert_eq!(parsed.is_ok(), expected, "for {:?}", raw);
         if let Ok(config) = parsed {
-            prop_assert_eq!(config.homeserver(), base);
+            let expected_base = match trimmed {
+                "https://m.example/" => "https://m.example",
+                "https://m.example/proxy/" => "https://m.example/proxy",
+                "HTTP://m.example" => "http://m.example",
+                base => base,
+            };
+            prop_assert_eq!(config.homeserver(), expected_base);
             prop_assert!(!config.homeserver().ends_with('/'));
         }
     }
