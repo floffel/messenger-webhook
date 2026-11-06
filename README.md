@@ -283,21 +283,23 @@ The contract, in three lines:
   entity this crate does not model (`date_time` today), so a new entity type is
   visible instead of being swallowed.
 
-Telegram is wired end to end for inbound entities, including `caption_entities`
-on media messages: `bold`, `italic`, `underline`, `strikethrough`, `spoiler`,
+Telegram is wired end to end for entities, including `caption_entities` on
+media messages: `bold`, `italic`, `underline`, `strikethrough`, `spoiler`,
 `code`, `pre` (with `language`), `text_link` (with `url`), `mention`, `hashtag`,
 `cashtag`, `bot_command`, `url`, `email`, `phone_number`, `text_mention` (with
 `user_id`), `custom_emoji` (with id), `blockquote` and
 `expandable_blockquote`. A structured entity whose payload is missing keeps its
-provider name as `TextFormat::Other` so the run is not lost.
+provider name as `TextFormat::Other` so the run is not lost. Outbound,
+`OutboundMessage::spans` is encoded back into `entities` or `caption_entities`;
+offsets are converted from UTF-8 bytes to UTF-16 code units and `parse_mode`
+stays unset. `text_mention` is rejected on the outbound path because Telegram
+requires a full `User` object, while the neutral span carries only `user_id`.
 
 The parts still open are tracked, not excluded: [WhatsApp interactive
 replies](https://github.com/floffel/messenger-webhook/issues/12) (a chosen
 button is a selection, not formatting), [Matrix
 `formatted_body`](https://github.com/floffel/messenger-webhook/issues/13) (HTML
-needs a parser this crate has to justify and bound) and [outbound Telegram
-entities](https://github.com/floffel/messenger-webhook/issues/14) (`encode` still
-sends plain text).
+needs a parser this crate has to justify and bound).
 
 ## The subscription handshake
 

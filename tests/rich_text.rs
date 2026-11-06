@@ -13,7 +13,9 @@
 use messenger_webhook::telegram::TelegramAdapter;
 #[cfg(any(feature = "telegram", feature = "whatsapp"))]
 use messenger_webhook::Adapter;
-use messenger_webhook::{Channel, NormalizedMessage, SpanError, TextFormat, TextSpan};
+use messenger_webhook::{
+    Channel, NormalizedMessage, OutboundMessage, SpanError, TextFormat, TextSpan,
+};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 
@@ -54,6 +56,16 @@ fn only_span(message: &NormalizedMessage) -> (TextFormat, String) {
         span.format.clone(),
         span.slice(text).expect("span slices its text").to_owned(),
     )
+}
+
+#[cfg(feature = "telegram")]
+fn encode(message: &OutboundMessage) -> serde_json::Value {
+    TelegramAdapter::new("secret-secret-secret")
+        .expect("adapter")
+        .encode(message)
+        .expect("encode")
+        .json()
+        .expect("json")
 }
 
 #[cfg(feature = "telegram")]
@@ -388,6 +400,176 @@ fn readme_example_runs() {
     assert!(span.covers(6));
 }
 
+#[cfg(feature = "telegram")]
+#[test]
+fn telegram_encode_maps_spans_to_entities() {
+    let text = "Hallo Welt";
+    let span = TextSpan::new(text, 6, 10, TextFormat::Bold).expect("valid span");
+    let message = OutboundMessage::text(Channel::Telegram, "-1001", text).with_spans([span]);
+
+    let body = encode(&message);
+    assert_eq!(body["text"], text);
+    assert!(
+        body.get("parse_mode").is_none(),
+        "entities replace parse_mode"
+    );
+    assert_eq!(
+        body["entities"],
+        json!([{ "type": "bold", "offset": 6, "length": 4 }])
+    );
+}
+
+#[cfg(feature = "telegram")]
+#[test]
+fn telegram_encode_offsets_astral_characters_in_utf16_units() {
+    let text = "a😀b";
+    let emoji = TextSpan::new(text, 1, 5, TextFormat::Italic).expect("emoji span");
+    let all = TextSpan::new(text, 0, text.len(), TextFormat::Code).expect("full span");
+    let message = OutboundMessage::text(Channel::Telegram, "-1001", text).with_spans([emoji, all]);
+
+    let body = encode(&message);
+    assert_eq!(
+        body["entities"],
+        json!([
+            { "type": "italic", "offset": 1, "length": 2 },
+            { "type": "code", "offset": 0, "length": 4 },
+        ])
+    );
+}
+
+#[cfg(feature = "telegram")]
+#[test]
+fn telegram_encode_caption_entities_use_caption_offsets() {
+    let text = "ein Bild";
+    let span = TextSpan::new(text, 4, 8, TextFormat::Underline).expect("caption span");
+    let mut message = OutboundMessage::text(Channel::Telegram, "-1001", text).with_spans([span]);
+    let mut photo = messenger_webhook::Attachment::new(messenger_webhook::AttachmentKind::Image);
+    photo.id = Some("AgAC-file".to_owned());
+    message.attachments.push(photo);
+
+    let body = encode(&message);
+    assert_eq!(body["caption"], text);
+    assert_eq!(
+        body["caption_entities"],
+        json!([{ "type": "underline", "offset": 4, "length": 4 }])
+    );
+    assert!(body.get("entities").is_none());
+    assert!(body.get("parse_mode").is_none());
+}
+
+#[cfg(feature = "telegram")]
+#[test]
+fn telegram_encode_rejects_span_that_does_not_slice_text() {
+    let text = "Hallo Welt";
+    let over = TextSpan {
+        start: 6,
+        end: text.len() + 1,
+        format: TextFormat::Bold,
+    };
+    let message = OutboundMessage::text(Channel::Telegram, "-1001", text).with_spans([over]);
+
+    let error = TelegramAdapter::new("secret-secret-secret")
+        .expect("adapter")
+        .encode(&message)
+        .expect_err("invalid span");
+    assert!(
+        matches!(
+            &error,
+            messenger_webhook::Error::InvalidMessage { reason, .. }
+                if reason.contains("span 6..11")
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[cfg(feature = "telegram")]
+#[test]
+fn telegram_encode_maps_every_format_or_rejects_it() {
+    let text = "abc";
+    let cases = [
+        (TextFormat::Bold, "bold"),
+        (TextFormat::Italic, "italic"),
+        (TextFormat::Underline, "underline"),
+        (TextFormat::Strikethrough, "strikethrough"),
+        (TextFormat::Spoiler, "spoiler"),
+        (TextFormat::Code, "code"),
+        (TextFormat::Pre { language: None }, "pre"),
+        (
+            TextFormat::Pre {
+                language: Some("rust".to_owned()),
+            },
+            "pre",
+        ),
+        (TextFormat::Mention, "mention"),
+        (TextFormat::Hashtag, "hashtag"),
+        (TextFormat::Cashtag, "cashtag"),
+        (TextFormat::BotCommand, "bot_command"),
+        (TextFormat::Url, "url"),
+        (TextFormat::Email, "email"),
+        (TextFormat::PhoneNumber, "phone_number"),
+        (TextFormat::Blockquote, "blockquote"),
+        (TextFormat::ExpandableBlockquote, "expandable_blockquote"),
+        (TextFormat::Other("date_time".to_owned()), "date_time"),
+    ];
+    for (format, kind) in cases {
+        let span = TextSpan::new(text, 0, text.len(), format).expect("span");
+        let body = encode(&OutboundMessage::text(Channel::Telegram, "1", text).with_spans([span]));
+        assert_eq!(body["entities"][0]["type"], kind);
+    }
+
+    let link = TextSpan::new(
+        text,
+        0,
+        text.len(),
+        TextFormat::Link {
+            url: "https://example.com".to_owned(),
+        },
+    )
+    .expect("span");
+    let body = encode(&OutboundMessage::text(Channel::Telegram, "1", text).with_spans([link]));
+    assert_eq!(body["entities"][0]["type"], "text_link");
+    assert_eq!(body["entities"][0]["url"], "https://example.com");
+
+    let emoji = TextSpan::new(
+        text,
+        0,
+        text.len(),
+        TextFormat::CustomEmoji {
+            id: "5368324170671202286".to_owned(),
+        },
+    )
+    .expect("span");
+    let body = encode(&OutboundMessage::text(Channel::Telegram, "1", text).with_spans([emoji]));
+    assert_eq!(body["entities"][0]["type"], "custom_emoji");
+    assert_eq!(
+        body["entities"][0]["custom_emoji_id"],
+        "5368324170671202286"
+    );
+}
+
+#[cfg(feature = "telegram")]
+#[test]
+fn telegram_encode_rejects_unexpressible_structured_formats() {
+    let text = "abc";
+    for format in [
+        TextFormat::TextMention {
+            user_id: "42".to_owned(),
+        },
+        TextFormat::CustomEmoji { id: String::new() },
+        TextFormat::Other(String::new()),
+    ] {
+        let span = TextSpan::new(text, 0, text.len(), format).expect("span");
+        let error = TelegramAdapter::new("secret-secret-secret")
+            .expect("adapter")
+            .encode(&OutboundMessage::text(Channel::Telegram, "1", text).with_spans([span]))
+            .expect_err("format must be rejected");
+        assert!(
+            matches!(error, messenger_webhook::Error::InvalidMessage { .. }),
+            "unexpected error: {error:?}"
+        );
+    }
+}
+
 #[test]
 fn every_format_has_a_stable_name() {
     let cases = [
@@ -553,7 +735,8 @@ mod text_span_invariant {
 
 #[cfg(feature = "telegram")]
 mod utf16_round_trip {
-    use super::{any_text, with_entities};
+    use super::{adapt, any_text, encode, with_entities};
+    use messenger_webhook::{Adapter, Channel, OutboundMessage, TextFormat, TextSpan};
     use proptest::prelude::*;
     use serde_json::json;
 
@@ -586,6 +769,46 @@ mod utf16_round_trip {
             let span = &message.spans()[0];
             prop_assert_eq!((span.start, span.end), (start, end));
             prop_assert_eq!(span.slice(&text), Some(&text[start..end]));
+        }
+
+        #[test]
+        fn decode_encode_decode_round_trips_spans(
+            text in any_text(),
+            a in 0_usize..24,
+            b in 0_usize..24,
+        ) {
+            let boundaries: Vec<usize> = text
+                .char_indices()
+                .map(|(byte, _)| byte)
+                .chain(std::iter::once(text.len()))
+                .collect();
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            let lo = lo.min(boundaries.len() - 1);
+            let hi = hi.min(boundaries.len() - 1);
+            let start = boundaries[lo];
+            let end = boundaries[hi];
+            prop_assume!(start < end);
+
+            let offset = text[..start].encode_utf16().count();
+            let length = text[start..end].encode_utf16().count();
+            let decoded = with_entities(&text, &json!([{ "type": "bold", "offset": offset, "length": length }]));
+            let span = &decoded.spans()[0];
+            let outbound = OutboundMessage::text(Channel::Telegram, "1", &text)
+                .with_spans([span.clone()]);
+            let body = encode(&outbound);
+            let round_tripped = adapt(&json!({
+                "message_id": 7,
+                "from": { "id": 42 },
+                "chat": { "id": -1001 },
+                "date": 1_729_600_000,
+                "text": text,
+                "entities": body["entities"],
+            }));
+
+            prop_assert_eq!(round_tripped.spans().len(), 1);
+            let round_tripped_span = &round_tripped.spans()[0];
+            prop_assert_eq!(round_tripped_span.format.clone(), TextFormat::Bold);
+            prop_assert_eq!((round_tripped_span.start, round_tripped_span.end), (start, end));
         }
     }
 }

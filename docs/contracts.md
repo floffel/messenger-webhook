@@ -250,6 +250,11 @@ What the crate does with it:
   malformed entity cannot erase a run (`structured_entities_without_their_payload_keep_the_provider_name`).
 - `caption_entities` describes `caption`, not `text`; a media message is pinned
   by `caption_entities_describe_the_caption`.
+- Outbound, `OutboundMessage::spans` is encoded back into `entities` or
+  `caption_entities`; offsets are converted from UTF-8 bytes to UTF-16 code
+  units and `parse_mode` stays unset because Telegram treats entities and
+  markdown as mutually exclusive. `text_mention` is rejected because Telegram
+  requires a full `User` object, while the neutral span carries only `user_id`.
 
 Unverified: the visible result of `date_time` formatting (it depends on the
 client's locale), and whether `custom_emoji` markup survives forwarding — neither

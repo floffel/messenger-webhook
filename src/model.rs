@@ -1175,6 +1175,14 @@ pub struct OutboundMessage {
     /// Providers that expose reactions through a separate endpoint reject this
     /// field in `encode`, just as they do for edits.
     pub reaction: Option<Reaction>,
+    /// Formatted runs inside [`Self::text`], in caller order.
+    ///
+    /// Offsets are UTF-8 byte offsets into `text`, matching
+    /// [`NormalizedMessage::spans`](crate::NormalizedMessage::spans). A span
+    /// that does not slice the outbound text is rejected by `encode` with
+    /// [`Error::InvalidMessage`](crate::Error::InvalidMessage) instead of
+    /// being silently dropped.
+    pub spans: Vec<TextSpan>,
 }
 
 impl OutboundMessage {
@@ -1205,7 +1213,69 @@ impl OutboundMessage {
             thread_id: None,
             edit_of: None,
             reaction: None,
+            spans: Vec::new(),
         }
+    }
+
+    /// The formatted runs this request carries.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, OutboundMessage, TextFormat, TextSpan};
+    ///
+    /// let span = TextSpan::new("Hallo Welt", 6, 10, TextFormat::Bold)?;
+    /// let message = OutboundMessage::text(Channel::Telegram, "-1001", "Hallo Welt")
+    ///     .with_spans([span]);
+    /// assert_eq!(message.spans().len(), 1);
+    /// # Ok::<(), messenger_webhook::SpanError>(())
+    /// ```
+    #[must_use]
+    pub fn spans(&self) -> &[TextSpan] {
+        &self.spans
+    }
+
+    /// Returns this request with formatted runs set from `spans`.
+    ///
+    /// The setter stores the spans as given. [`Adapter::encode`](crate::Adapter::encode)
+    /// validates them against the final text before a provider payload is
+    /// built, so a mismatched span becomes [`Error::InvalidMessage`](crate::Error::InvalidMessage)
+    /// rather than disappearing.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, OutboundMessage, TextFormat, TextSpan};
+    ///
+    /// let span = TextSpan::new("Hallo Welt", 0, 5, TextFormat::Italic)?;
+    /// let message = OutboundMessage::text(Channel::Telegram, "-1001", "Hallo Welt")
+    ///     .with_spans([span]);
+    /// assert_eq!(message.spans()[0].format, TextFormat::Italic);
+    /// # Ok::<(), messenger_webhook::SpanError>(())
+    /// ```
+    #[must_use]
+    pub fn with_spans(mut self, spans: impl IntoIterator<Item = TextSpan>) -> Self {
+        self.spans = spans.into_iter().collect();
+        self
+    }
+
+    /// Returns this request with `text` and formatted runs set together.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, OutboundMessage, TextFormat, TextSpan};
+    ///
+    /// let span = TextSpan::new("Hallo Welt", 6, 10, TextFormat::Bold)?;
+    /// let message = OutboundMessage::text(Channel::Telegram, "-1001", "")
+    ///     .with_text_and_spans("Hallo Welt", [span]);
+    /// assert_eq!(message.text.as_deref(), Some("Hallo Welt"));
+    /// assert_eq!(message.spans()[0].end, 10);
+    /// # Ok::<(), messenger_webhook::SpanError>(())
+    /// ```
+    #[must_use]
+    pub fn with_text_and_spans(
+        mut self,
+        text: impl Into<String>,
+        spans: impl IntoIterator<Item = TextSpan>,
+    ) -> Self {
+        self.text = Some(text.into());
+        self.spans = spans.into_iter().collect();
+        self
     }
 
     /// The first attachment, if the request carries media.

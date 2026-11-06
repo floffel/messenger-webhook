@@ -215,7 +215,10 @@ src/model.rs:impl NormalizedMessage:fn with_text
 src/model.rs:impl NormalizedMessage:fn with_text_and_spans
 src/model.rs:impl NormalizedMessage:fn without_text
 src/model.rs:impl OutboundMessage:fn first_attachment
+src/model.rs:impl OutboundMessage:fn spans
 src/model.rs:impl OutboundMessage:fn text
+src/model.rs:impl OutboundMessage:fn with_spans
+src/model.rs:impl OutboundMessage:fn with_text_and_spans
 src/model.rs:impl ProviderMethod:fn as_str
 src/model.rs:impl ProviderPayload:fn body
 src/model.rs:impl ProviderPayload:fn channel

@@ -199,7 +199,7 @@ mod telegram {
     use messenger_webhook::{
         telegram::{MAX_CAPTION_UTF16, MAX_TEXT_UTF16},
         Adapter, Attachment, AttachmentKind, Channel, Error, LimitUnit, OutboundMessage,
-        RetryPolicy, TelegramAdapter,
+        RetryPolicy, TelegramAdapter, TextFormat, TextSpan,
     };
 
     fn adapter() -> TelegramAdapter {
@@ -216,6 +216,48 @@ mod telegram {
         assert_eq!(body["chat_id"], "-1001");
         assert_eq!(body["text"], "Hallo");
         assert!(body.get("caption").is_none());
+    }
+
+    #[test]
+    fn text_entities_are_encoded_at_the_boundary() {
+        let text = "a😀bc";
+        let just_inside = TextSpan::new(text, 1, 5, TextFormat::Bold).expect("inside");
+        let at_limit = TextSpan::new(text, 0, text.len(), TextFormat::Italic).expect("at limit");
+        let message = OutboundMessage::text(Channel::Telegram, "-1001", text)
+            .with_spans([just_inside, at_limit]);
+
+        let body = adapter().encode(&message).unwrap().json().unwrap();
+        assert_eq!(body["entities"][0]["offset"], 1);
+        assert_eq!(body["entities"][0]["length"], 2);
+        assert_eq!(body["entities"][1]["offset"], 0);
+        assert_eq!(body["entities"][1]["length"], 5);
+        assert!(body.get("parse_mode").is_none());
+
+        let past_end = TextSpan {
+            start: 0,
+            end: text.len() + 1,
+            format: TextFormat::Code,
+        };
+        let error = adapter()
+            .encode(&OutboundMessage::text(Channel::Telegram, "-1001", text).with_spans([past_end]))
+            .unwrap_err();
+        assert!(
+            matches!(&error, Error::InvalidMessage { reason, .. } if reason.contains("span 0..8")),
+            "unexpected error: {error:?}"
+        );
+
+        let mid_char = TextSpan {
+            start: 1,
+            end: 3,
+            format: TextFormat::Code,
+        };
+        let error = adapter()
+            .encode(&OutboundMessage::text(Channel::Telegram, "-1001", text).with_spans([mid_char]))
+            .unwrap_err();
+        assert!(
+            matches!(&error, Error::InvalidMessage { reason, .. } if reason.contains("span 1..3")),
+            "unexpected error: {error:?}"
+        );
     }
 
     #[test]
