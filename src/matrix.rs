@@ -30,7 +30,7 @@ use crate::model::{
     ProviderPayload, Reaction, RetryPolicy,
 };
 use crate::secret::Secret;
-use crate::{check_body, payload, recipient, Adapter, MAX_BODY_BYTES};
+use crate::{check_body, payload, recipient, Adapter};
 
 /// Process-wide sequence for Matrix adapter transaction ids.
 static MATRIX_TXN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -87,7 +87,7 @@ impl Adapter for MatrixAdapter {
     }
 
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()> {
-        check_body(MAX_BODY_BYTES, body.len())?;
+        check_body(body.len())?;
         if self.token.is_empty() {
             return Err(Error::MissingSecret {
                 channel: Channel::Matrix,
@@ -122,7 +122,7 @@ impl Adapter for MatrixAdapter {
     }
 
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
-        check_body(MAX_BODY_BYTES, payload.len())?;
+        check_body(payload.len())?;
         let root: Value =
             serde_json::from_slice(payload).map_err(|error| Error::Payload(error.to_string()))?;
         if !root.is_object() {

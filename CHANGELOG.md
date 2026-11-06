@@ -101,6 +101,10 @@ carry a `!` in the conventional-commit subject.
   reported `server_name() == "x"` and an empty `media_id()`, contradicting the
   type's own invariant. The parsed split is now stored on the value and returned
   directly, so the accessors cannot disagree with validation.
+- **The body ceiling is enforced by the dispatch path.** `Registry::verify`,
+  `Registry::adapt` and `Registry::handle` now reject a body above
+  `MAX_BODY_BYTES` before calling the registered adapter, so a custom `Adapter`
+  cannot silently widen the documented crate-wide ceiling. Closes #36.
 
 ## [0.3.3] - 2026-10-27
 

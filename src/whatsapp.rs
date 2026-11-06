@@ -29,7 +29,7 @@ use crate::model::{
 };
 use crate::secret::Secret;
 use crate::signature::{self, META_SIGNATURE_HEADER};
-use crate::{check_body, json_payload, recipient, Adapter, MAX_BODY_BYTES};
+use crate::{check_body, json_payload, recipient, Adapter};
 
 /// Maximum length of a `WhatsApp` text body, in bytes.
 ///
@@ -104,7 +104,7 @@ impl Adapter for WhatsAppAdapter {
 
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()> {
         // Size before hashing: never spend work on an oversized body.
-        check_body(MAX_BODY_BYTES, body.len())?;
+        check_body(body.len())?;
         if self.secret.is_empty() {
             return Err(Error::MissingSecret {
                 channel: Channel::WhatsApp,
@@ -121,7 +121,7 @@ impl Adapter for WhatsAppAdapter {
     }
 
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
-        check_body(MAX_BODY_BYTES, payload.len())?;
+        check_body(payload.len())?;
         let root: Value =
             serde_json::from_slice(payload).map_err(|error| Error::Payload(error.to_string()))?;
         if !root.is_object() {

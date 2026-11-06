@@ -130,7 +130,9 @@ pub use subscription::meta_subscription_challenge;
 /// Hard ceiling on a request body, enforced before any hashing or JSON parsing.
 ///
 /// Providers cap webhook bodies well below this; the point is to bound the work
-/// an unauthenticated caller can make the process do.
+/// an unauthenticated caller can make the process do. The crate's adapters and
+/// [`Registry`] reject a body above this ceiling before dispatch, hashing or
+/// JSON parsing.
 ///
 /// ```
 /// use messenger_webhook::MAX_BODY_BYTES;
@@ -307,6 +309,10 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     /// entry that carries none of the provider's own fields — a body forwarded
     /// from another provider — is skipped rather than turned into an invented
     /// event.
+    ///
+    /// The [`MAX_BODY_BYTES`] ceiling is unconditional and is checked before
+    /// JSON parsing. [`Registry`] enforces it before dispatching to a custom
+    /// adapter.
     ///
     /// # Errors
     ///
@@ -493,10 +499,12 @@ fn invalid_recipient(channel: Channel, reason: impl Into<String>) -> Error {
 }
 
 /// Rejects bodies above the crate-wide ceiling.
-#[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
-pub(crate) fn check_body(limit: usize, actual: usize) -> Result<()> {
-    if actual > limit {
-        Err(Error::BodyTooLarge { limit, actual })
+pub(crate) fn check_body(actual: usize) -> Result<()> {
+    if actual > MAX_BODY_BYTES {
+        Err(Error::BodyTooLarge {
+            limit: MAX_BODY_BYTES,
+            actual,
+        })
     } else {
         Ok(())
     }
