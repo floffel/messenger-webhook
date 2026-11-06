@@ -229,7 +229,19 @@ fn a_synthetic_key_is_prefixed_and_never_empty() {
     for event in whatsapp_events.iter().chain(matrix_events.iter()) {
         assert!(event.has_synthetic_id());
         assert_eq!(event.external_id.len(), SYNTHETIC_ID_PREFIX.len() + 64);
-        assert!(event.external_id.starts_with(SYNTHETIC_ID_PREFIX));
+        let suffix = event
+            .external_id
+            .strip_prefix(SYNTHETIC_ID_PREFIX)
+            .expect("the synthetic prefix is present");
+        assert_eq!(suffix.len(), 64);
+        assert!(
+            suffix.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "the digest suffix must be 64 hex digits: {suffix:?}"
+        );
+        assert!(
+            suffix.bytes().all(|byte| !byte.is_ascii_uppercase()),
+            "the digest suffix must be lower-case hex: {suffix:?}"
+        );
     }
     assert_ne!(
         whatsapp_events[0].external_id, matrix_events[0].external_id,
