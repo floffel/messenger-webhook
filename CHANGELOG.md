@@ -59,6 +59,16 @@ carry a `!` in the conventional-commit subject.
   `str::eq_ignore_ascii_case`, so the per-request allocation is gone and the
   matching semantics are unchanged: ASCII case folds, non-ASCII bytes still
   compare exactly. Closes #28.
+- **Outbound recipients are validated as a boundary, not for emptiness.**
+  The one shared `encode` recipient check only rejected an empty
+  `conversation_id`, so a `1 MiB` id, a value carrying `\n`, NUL or a
+  zero-width format character, or a non-numeric id for a provider that needs a
+  numeric one all reached the provider request body. Validation now lives in
+  the shared helper with a per-channel rule — the trimmed id must be printable
+  and at most `MAX_RECIPIENT_BYTES` (256), `WhatsApp` takes E.164 digits,
+  Telegram a signed `i64` chat id and Matrix a `!`-prefixed room id — and every
+  adapter inherits it. `MAX_RECIPIENT_BYTES` is the new public ceiling. Closes
+  #37.
 
 ### Breaking
 

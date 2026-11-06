@@ -49,6 +49,10 @@ tokio = { version = "1", default-features = false, features = [
 # place this crate reads a query string.
 form_urlencoded = { version = "1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
+# `char::is_control` does not catch format characters such as U+200B, which a
+# recipient id must not carry either. The general category is the exact tool
+# for "is this a character a reader would see"; pure data table, no code.
+unicode-general-category = "1.1.0"
 
 [dev-dependencies]
 proptest = "1"

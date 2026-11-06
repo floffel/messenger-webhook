@@ -153,12 +153,6 @@ impl Adapter for WhatsAppAdapter {
 
     fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
         let to = recipient(Channel::WhatsApp, message)?;
-        if !to.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(Error::InvalidMessage {
-                channel: Channel::WhatsApp,
-                reason: format!("WhatsApp recipients are E.164 digits, got {to:?}"),
-            });
-        }
 
         let text = message.text.as_deref().unwrap_or_default();
         let mut body = serde_json::Map::new();
