@@ -299,6 +299,12 @@ impl TextSpan {
 /// Crate-private: the Telegram adapter is the only caller, and its tests
 /// exercise the conversion through a real update body. The batch form returns
 /// one slot per input range in provider order.
+///
+/// `string-offsets` 0.2.1 maps UTF-8 bytes, code points and lines *to* UTF-16
+/// code units, but this adapter needs the inverse for Telegram's UTF-16 ranges
+/// into a Rust UTF-8 `str`, and it has no mid-surrogate error to map onto this
+/// crate's drop-the-entity behavior. Keep the inverse conversion in one local
+/// helper with the boundary semantics `TextSpan` requires.
 // Only the Telegram adapter counts units today; a Matrix or WhatsApp entity
 // source would need the same helper, so it stays in one place.
 #[cfg_attr(not(feature = "telegram"), allow(dead_code))]
@@ -307,9 +313,6 @@ where
     I: IntoIterator<Item = Option<(u64, u64)>>,
 {
     let ranges = ranges.into_iter().collect::<Vec<_>>();
-    if let [Some((offset, length))] = ranges.as_slice() {
-        return vec![utf16_to_byte_range(text, *offset, *length)];
-    }
     if ranges.is_empty() {
         return Vec::new();
     }
@@ -372,37 +375,17 @@ where
         .collect()
 }
 
-/// Converts one UTF-16 range by walking the text once.
-fn utf16_to_byte_range(text: &str, offset: u64, length: u64) -> Option<(usize, usize)> {
-    let end_unit = offset.checked_add(length)?;
-    if end_unit <= offset {
-        return None;
-    }
-    let mut units = 0_u64;
-    let mut start = (offset == 0).then_some(0_usize);
-    let mut end = None;
-    for (byte, character) in text.char_indices() {
-        units += u64::try_from(character.len_utf16()).ok()?;
-        let next = byte + character.len_utf8();
-        // A range boundary is only usable when it lands exactly on the end of a
-        // character; landing mid-surrogate leaves the slot `None`.
-        if units == offset {
-            start = Some(next);
-        }
-        if units == end_unit {
-            end = Some(next);
-        }
-        if start.is_some() && end.is_some() {
-            break;
-        }
-    }
-    Some((start?, end?))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{utf16_to_byte_range, utf16_to_byte_ranges, SpanError, TextFormat, TextSpan};
+    use super::{utf16_to_byte_ranges, SpanError, TextFormat, TextSpan};
     use proptest::strategy::Strategy;
+
+    fn utf16_to_byte_range(text: &str, offset: u64, length: u64) -> Option<(usize, usize)> {
+        utf16_to_byte_ranges(text, [Some((offset, length))])
+            .into_iter()
+            .next()
+            .flatten()
+    }
 
     fn any_text() -> impl proptest::strategy::Strategy<Value = String> {
         proptest::collection::vec(
@@ -501,6 +484,16 @@ mod tests {
                 None,
             ]
         );
+    }
+
+    #[test]
+    fn batched_conversion_single_range_keeps_mid_surrogate_contract() {
+        assert_eq!(
+            utf16_to_byte_ranges("a😀b", [Some((1, 2))]),
+            vec![Some((1, 5))]
+        );
+        assert_eq!(utf16_to_byte_ranges("a😀b", [Some((2, 1))]), vec![None]);
+        assert_eq!(utf16_to_byte_ranges("a😀b", [Some((0, 5))]), vec![None]);
     }
 
     #[test]
