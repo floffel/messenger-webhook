@@ -534,3 +534,102 @@ pub(crate) fn check_body(actual: usize) -> Result<()> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{check_body, Error, MAX_BODY_BYTES};
+
+    #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+    use super::{is_graphic, recipient, utf16_len, Channel, OutboundMessage, MAX_RECIPIENT_BYTES};
+
+    #[test]
+    fn check_body_accepts_at_limit_and_rejects_above_it() {
+        assert!(check_body(0).is_ok());
+        assert!(check_body(MAX_BODY_BYTES - 1).is_ok());
+        assert!(check_body(MAX_BODY_BYTES).is_ok());
+        assert!(matches!(
+            check_body(MAX_BODY_BYTES + 1),
+            Err(Error::BodyTooLarge {
+                limit,
+                actual,
+            }) if limit == MAX_BODY_BYTES && actual == MAX_BODY_BYTES + 1
+        ));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn check_body_accepts_exactly_values_within_the_ceiling(actual in 0usize..=(MAX_BODY_BYTES + 2)) {
+            proptest::prop_assert_eq!(check_body(actual).is_ok(), actual <= MAX_BODY_BYTES);
+        }
+    }
+
+    #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+    #[test]
+    fn utf16_len_counts_ascii_bmp_and_astral_units() {
+        assert_eq!(utf16_len(""), 0);
+        assert_eq!(utf16_len("ascii"), 5);
+        assert_eq!(utf16_len("a\u{e4}\u{20ac}"), 3);
+        assert_eq!(utf16_len("a\u{1f600}b"), 4);
+    }
+
+    #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+    #[test]
+    fn recipient_trims_echoes_and_enforces_the_byte_ceiling() {
+        let channel = Channel::other("custom").expect("custom channel name");
+        let message = OutboundMessage::text(channel.clone(), "  abc  ", "hi");
+        assert_eq!(recipient(channel.clone(), &message).ok(), Some("abc"));
+
+        let message = OutboundMessage::text(channel.clone(), " \t\n ", "hi");
+        assert!(recipient(channel.clone(), &message).is_err());
+
+        let just_inside = "a".repeat(MAX_RECIPIENT_BYTES - 1);
+        let at_limit = "a".repeat(MAX_RECIPIENT_BYTES);
+        let over_limit = "a".repeat(MAX_RECIPIENT_BYTES + 1);
+
+        let message = OutboundMessage::text(channel.clone(), just_inside.as_str(), "hi");
+        assert_eq!(
+            recipient(channel.clone(), &message).ok(),
+            Some(just_inside.as_str())
+        );
+
+        let message = OutboundMessage::text(channel.clone(), at_limit.as_str(), "hi");
+        assert_eq!(
+            recipient(channel.clone(), &message).ok(),
+            Some(at_limit.as_str())
+        );
+
+        let message = OutboundMessage::text(channel.clone(), over_limit.as_str(), "hi");
+        assert!(recipient(channel, &message).is_err());
+    }
+
+    #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+    proptest::proptest! {
+        #[test]
+        fn utf16_len_matches_rust_utf16_encoding(text in proptest::prelude::any::<String>()) {
+            proptest::prop_assert_eq!(utf16_len(&text), text.encode_utf16().count());
+        }
+
+        #[test]
+        fn recipient_accepts_exactly_non_empty_graphic_trimmed_ids(
+            id in proptest::prelude::any::<String>(),
+        ) {
+            let channel = Channel::other("custom").expect("custom channel name");
+            let message = OutboundMessage::text(channel.clone(), id.as_str(), "hi");
+            let trimmed = id.trim();
+            let expected = if trimmed.is_empty()
+                || trimmed.len() > MAX_RECIPIENT_BYTES
+                || trimmed.chars().any(|character| !is_graphic(character))
+            {
+                None
+            } else {
+                Some(trimmed)
+            };
+
+            match recipient(channel, &message) {
+                Ok(actual) => proptest::prop_assert_eq!(expected, Some(actual)),
+                Err(Error::InvalidMessage { .. }) => proptest::prop_assert_eq!(expected, None),
+                Err(other) => proptest::prop_assert!(false, "unexpected error: {other:?}"),
+            }
+        }
+    }
+}
