@@ -89,7 +89,7 @@ use url::Url;
 
 pub use error::{OutboundError, OutboundResult};
 pub use http::{ReqwestTransport, DEFAULT_REQUEST_TIMEOUT, MAX_RESPONSE_BODY_BYTES};
-pub use ordering::GATE_CAPACITY;
+pub use ordering::{GATE_CAPACITY, GATE_WAITERS_PER_ROOM, GATE_WAIT_TIMEOUT};
 pub use retry::{
     Operation, RetryPolicy, RetryPolicyError, Verdict, DEFAULT_BASE_DELAY_MS, DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_DELAY_MS, DEFAULT_MAX_RATE_LIMIT_WAIT_MS,
@@ -1261,7 +1261,7 @@ impl MatrixClient {
             let request = self.build(&call);
             let response = match room_key {
                 Some(room_key) => {
-                    let _gate = self.gates.acquire(room_key).await;
+                    let _gate = self.gates.acquire(room_key).await?;
                     self.transport.send(request).await
                 }
                 None => self.transport.send(request).await,

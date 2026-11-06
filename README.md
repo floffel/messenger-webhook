@@ -180,11 +180,14 @@ write carries the transaction id, and repeating that send with it
 
 Sends into one room are serialised (one request in flight, any number across
 rooms) so a bot's two-part reply cannot arrive out of order; turn it off with
-`ClientConfig::with_per_room_ordering(false)`. Limits are checked before a
-request exists: content against the 65 536-byte event ceiling, media against the
-configured `max_upload_bytes` (read the homeserver's real value from
-`m.upload.size` in `/capabilities`). The wire shapes and their sources are
-quoted in [docs/contracts.md](docs/contracts.md).
+`ClientConfig::with_per_room_ordering(false)`. `GATE_CAPACITY` bounds the
+number of room keys cached, not bytes, and each room accepts at most
+`GATE_WAITERS_PER_ROOM` queued callers; a queue wait longer than
+`GATE_WAIT_TIMEOUT` fails with `GateTimeout` instead of awaiting forever.
+Limits are checked before a request exists: content against the 65 536-byte
+event ceiling, media against the configured `max_upload_bytes` (read the
+homeserver's real value from `m.upload.size` in `/capabilities`). The wire
+shapes and their sources are quoted in [docs/contracts.md](docs/contracts.md).
 
 ### How this crate absorbed `channel-core` and `matrix-out`
 

@@ -38,6 +38,11 @@ carry a `!` in the conventional-commit subject.
 - Per-room outbound ordering now uses a bounded `moka` async cache instead of a
   blocking `std::sync::Mutex<HashMap<..>>`, so full-cache pressure no longer
   scans the whole map under a lock. Closes #70.
+- **Per-room outbound ordering queues are now bounded.** `GATE_CAPACITY` is
+  documented as a count of room keys rather than a byte bound; each room also
+  accepts at most `GATE_WAITERS_PER_ROOM` queued callers, and a caller that
+  waits longer than `GATE_WAIT_TIMEOUT` gets typed `OutboundError::GateTimeout`
+  or `OutboundError::GateOverflow` before any request is attempted. Closes #67.
 - **The Meta subscription handshake now bounds the raw query and verify token
   before decoding or comparison.** `meta_subscription_challenge` rejects a raw
   query longer than `MAX_QUERY_BYTES` (4 KiB) before parsing and rejects a
