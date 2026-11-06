@@ -105,7 +105,12 @@ fn thirty_two_tasks_share_one_registry() {
                     for event in &events {
                         assert_eq!(event.channel, *channel);
                         // Encoding from many threads at once must be safe too.
-                        let _ = registry.encode(channel, event);
+                        let outbound = messenger_webhook::OutboundMessage::text(
+                            event.channel.clone(),
+                            event.conversation_id.clone(),
+                            event.text.clone().unwrap_or_default(),
+                        );
+                        let _ = registry.encode(channel, &outbound);
                     }
                 }
             }

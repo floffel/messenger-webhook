@@ -5,7 +5,8 @@
 #[cfg(feature = "whatsapp")]
 mod whatsapp {
     use messenger_webhook::{
-        Adapter, Attachment, AttachmentKind, Channel, NormalizedMessage, WhatsAppAdapter,
+        Adapter, Attachment, AttachmentKind, Channel, NormalizedMessage, OutboundMessage,
+        WhatsAppAdapter,
     };
 
     fn adapter() -> WhatsAppAdapter {
@@ -178,7 +179,7 @@ mod whatsapp {
             (AttachmentKind::Sticker, "sticker"),
         ];
         for (kind, field) in cases {
-            let mut message = NormalizedMessage::text(Channel::WhatsApp, "49", "");
+            let mut message = OutboundMessage::text(Channel::WhatsApp, "49", "");
             message.text = None;
             let mut attachment = Attachment::new(kind.clone());
             attachment.url = Some(format!("https://example.org/{field}"));
@@ -192,7 +193,7 @@ mod whatsapp {
 
     #[test]
     fn media_without_a_reference_is_rejected() {
-        let mut message = NormalizedMessage::text(Channel::WhatsApp, "49", "");
+        let mut message = OutboundMessage::text(Channel::WhatsApp, "49", "");
         message.text = None;
         message
             .attachments
@@ -204,7 +205,7 @@ mod whatsapp {
 #[cfg(feature = "telegram")]
 mod telegram {
     use messenger_webhook::{
-        Adapter, Attachment, AttachmentKind, Channel, NormalizedMessage, TelegramAdapter,
+        Adapter, Attachment, AttachmentKind, Channel, OutboundMessage, TelegramAdapter,
     };
 
     fn adapter() -> TelegramAdapter {
@@ -222,7 +223,7 @@ mod telegram {
             (AttachmentKind::Sticker, "sticker"),
         ];
         for (kind, field) in cases {
-            let mut message = NormalizedMessage::text(Channel::Telegram, "1", "");
+            let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
             message.text = None;
             let mut attachment = Attachment::new(kind.clone());
             attachment.id = Some("file-id".to_owned());
@@ -235,7 +236,7 @@ mod telegram {
 
     #[test]
     fn media_without_a_reference_is_rejected() {
-        let mut message = NormalizedMessage::text(Channel::Telegram, "1", "");
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
         message.text = None;
         message
             .attachments
@@ -245,7 +246,7 @@ mod telegram {
 
     #[test]
     fn caption_is_used_when_text_accompanies_media() {
-        let mut message = NormalizedMessage::text(Channel::Telegram, "1", "Look");
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "Look");
         let mut attachment = Attachment::new(AttachmentKind::Video);
         attachment.id = Some("v1".to_owned());
         message.attachments.push(attachment);
@@ -257,14 +258,14 @@ mod telegram {
 
     #[test]
     fn empty_messages_are_rejected() {
-        let mut message = NormalizedMessage::text(Channel::Telegram, "1", "");
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
         message.text = None;
         assert!(adapter().encode(&message).is_err());
     }
 
     #[test]
     fn location_cannot_be_sent_but_is_normalised_inbound() {
-        let mut message = NormalizedMessage::text(Channel::Telegram, "1", "");
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
         message.text = None;
         message
             .attachments
@@ -285,6 +286,7 @@ mod telegram {
 mod matrix {
     use messenger_webhook::{
         Adapter, Attachment, AttachmentKind, Channel, MatrixAdapter, NormalizedMessage,
+        OutboundMessage,
     };
 
     fn adapter() -> MatrixAdapter {
@@ -436,7 +438,7 @@ mod matrix {
             (AttachmentKind::Sticker, "m.sticker"),
         ];
         for (kind, msgtype) in cases {
-            let mut message = NormalizedMessage::text(Channel::Matrix, "!r:s", "");
+            let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "");
             message.text = None;
             let mut attachment = Attachment::new(kind.clone());
             attachment.url = Some("mxc://s/x".to_owned());
@@ -452,7 +454,7 @@ mod matrix {
         }
 
         // With text but no filename or caption, the text becomes the body.
-        let mut message = NormalizedMessage::text(Channel::Matrix, "!r:s", "Look");
+        let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "Look");
         let mut attachment = Attachment::new(AttachmentKind::Image);
         attachment.url = Some("mxc://s/x".to_owned());
         attachment.duration_seconds = Some(3);
@@ -464,7 +466,7 @@ mod matrix {
 
     #[test]
     fn encode_rejects_media_without_a_reference() {
-        let mut message = NormalizedMessage::text(Channel::Matrix, "!r:s", "");
+        let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "");
         message.text = None;
         message
             .attachments

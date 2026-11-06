@@ -6,8 +6,7 @@
 //! ```
 
 use messenger_webhook::{
-    signature::meta_signature, Adapter, Channel, Headers, NormalizedMessage, Secret,
-    WhatsAppAdapter,
+    signature::meta_signature, Adapter, Channel, Headers, OutboundMessage, Secret, WhatsAppAdapter,
 };
 
 /// The app secret Meta shows in the app dashboard. A real service reads it from
@@ -41,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Outbound: the same adapter renders the provider's own request body, so the
     // caller only has to POST it (with its token) — the wire shape stays here.
-    let reply = NormalizedMessage::text(Channel::WhatsApp, "4915112345678", "Hallo zurück");
+    let reply = OutboundMessage::text(Channel::WhatsApp, "4915112345678", "Hallo zurück");
     let payload = adapter.encode(&reply)?;
     println!(
         "{} {} ({} bytes)",

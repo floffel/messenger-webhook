@@ -6,17 +6,25 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(dead_code, unused_imports, unused_mut, unused_variables)]
 
-use messenger_webhook::{Adapter, Channel, NormalizedMessage};
+use messenger_webhook::{Adapter, Channel, OutboundMessage};
 
-fn text(channel: Channel, conversation: &str, body: &str) -> NormalizedMessage {
-    NormalizedMessage::text(channel, conversation, body)
+fn text(channel: Channel, conversation: &str, body: &str) -> OutboundMessage {
+    OutboundMessage::text(channel, conversation, body)
+}
+
+#[test]
+fn outbound_text_has_no_provider_event_id_field() {
+    let message = OutboundMessage::text(Channel::Telegram, "-1001", "Hallo");
+    assert_eq!(message.conversation_id, "-1001");
+    assert_eq!(message.text.as_deref(), Some("Hallo"));
+    assert!(message.first_attachment().is_none());
 }
 
 #[cfg(feature = "whatsapp")]
 mod whatsapp {
     use messenger_webhook::{
         whatsapp::{MAX_CAPTION_BYTES, MAX_TEXT_BYTES},
-        Adapter, Attachment, AttachmentKind, Channel, Error, NormalizedMessage, RetryPolicy,
+        Adapter, Attachment, AttachmentKind, Channel, Error, OutboundMessage, RetryPolicy,
         WhatsAppAdapter,
     };
 
@@ -26,7 +34,7 @@ mod whatsapp {
 
     #[test]
     fn text_payload_has_the_cloud_api_shape() {
-        let message = NormalizedMessage::text(Channel::WhatsApp, "4915112345678", "Hallo");
+        let message = OutboundMessage::text(Channel::WhatsApp, "4915112345678", "Hallo");
         let payload = adapter().encode(&message).unwrap();
         assert_eq!(payload.method(), "POST");
         assert_eq!(payload.content_type(), "application/json");
@@ -75,7 +83,7 @@ mod whatsapp {
 
     #[test]
     fn caption_limit_matches_the_text_limit_rules() {
-        let mut message = NormalizedMessage::text(Channel::WhatsApp, "49", "");
+        let mut message = OutboundMessage::text(Channel::WhatsApp, "49", "");
         message.attachments.push(Attachment {
             kind: AttachmentKind::Image,
             url: Some("https://example.org/a.jpg".to_owned()),
@@ -97,7 +105,7 @@ mod whatsapp {
 
     #[test]
     fn media_uses_link_and_caption() {
-        let mut message = NormalizedMessage::text(Channel::WhatsApp, "49", "Look");
+        let mut message = OutboundMessage::text(Channel::WhatsApp, "49", "Look");
         message.attachments.push(Attachment {
             kind: AttachmentKind::Image,
             url: Some("https://example.org/cat.jpg".to_owned()),
@@ -111,7 +119,7 @@ mod whatsapp {
 
     #[test]
     fn document_carries_the_file_name() {
-        let mut message = NormalizedMessage::text(Channel::WhatsApp, "49", "");
+        let mut message = OutboundMessage::text(Channel::WhatsApp, "49", "");
         message.attachments.push(Attachment {
             kind: AttachmentKind::Document,
             id: Some("media-1".to_owned()),
@@ -129,7 +137,7 @@ mod whatsapp {
         // Empty recipient.
         assert!(matches!(
             adapter()
-                .encode(&NormalizedMessage::text(Channel::WhatsApp, "", "hi"))
+                .encode(&OutboundMessage::text(Channel::WhatsApp, "", "hi"))
                 .unwrap_err(),
             Error::InvalidMessage { .. }
         ));
@@ -137,13 +145,13 @@ mod whatsapp {
         // Recipient is not E.164 digits.
         assert!(matches!(
             adapter()
-                .encode(&NormalizedMessage::text(Channel::WhatsApp, "+49 151", "hi"))
+                .encode(&OutboundMessage::text(Channel::WhatsApp, "+49 151", "hi"))
                 .unwrap_err(),
             Error::InvalidMessage { .. }
         ));
 
         // Neither text nor attachment.
-        let mut empty = NormalizedMessage::text(Channel::WhatsApp, "49", "");
+        let mut empty = OutboundMessage::text(Channel::WhatsApp, "49", "");
         empty.text = None;
         assert!(matches!(
             adapter().encode(&empty).unwrap_err(),
@@ -151,7 +159,7 @@ mod whatsapp {
         ));
 
         // Attachment without url or id.
-        let mut orphan = NormalizedMessage::text(Channel::WhatsApp, "49", "");
+        let mut orphan = OutboundMessage::text(Channel::WhatsApp, "49", "");
         orphan
             .attachments
             .push(Attachment::new(AttachmentKind::Image));
@@ -161,7 +169,7 @@ mod whatsapp {
         ));
 
         // A location cannot be sent through this endpoint.
-        let mut location = NormalizedMessage::text(Channel::WhatsApp, "49", "");
+        let mut location = OutboundMessage::text(Channel::WhatsApp, "49", "");
         location
             .attachments
             .push(Attachment::new(AttachmentKind::Location));
@@ -171,7 +179,7 @@ mod whatsapp {
         ));
 
         // Edits need the original message id, not a send.
-        let mut edit = NormalizedMessage::text(Channel::WhatsApp, "49", "fixed");
+        let mut edit = OutboundMessage::text(Channel::WhatsApp, "49", "fixed");
         edit.edit_of = Some("wamid.1".to_owned());
         assert!(matches!(
             adapter().encode(&edit).unwrap_err(),
@@ -184,7 +192,7 @@ mod whatsapp {
 mod telegram {
     use messenger_webhook::{
         telegram::{MAX_CAPTION_UTF16, MAX_TEXT_UTF16},
-        Adapter, Attachment, AttachmentKind, Channel, Error, NormalizedMessage, RetryPolicy,
+        Adapter, Attachment, AttachmentKind, Channel, Error, OutboundMessage, RetryPolicy,
         TelegramAdapter,
     };
 
@@ -194,7 +202,7 @@ mod telegram {
 
     #[test]
     fn text_payload_has_the_bot_api_shape() {
-        let message = NormalizedMessage::text(Channel::Telegram, "-1001", "Hallo");
+        let message = OutboundMessage::text(Channel::Telegram, "-1001", "Hallo");
         let payload = adapter().encode(&message).unwrap();
         assert_eq!(payload.retry(), RetryPolicy::UnsafeUnlessKeyPresent);
         assert!(payload.idempotency_key().is_none());
@@ -233,7 +241,7 @@ mod telegram {
 
     #[test]
     fn caption_limit_is_1024_units() {
-        let mut message = NormalizedMessage::text(Channel::Telegram, "1", "");
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
         message.attachments.push(Attachment {
             kind: AttachmentKind::Image,
             id: Some("AgAC-file".to_owned()),
@@ -256,7 +264,7 @@ mod telegram {
 
     #[test]
     fn reply_and_thread_are_encoded_as_numbers() {
-        let mut message = NormalizedMessage::text(Channel::Telegram, "-1001", "hi");
+        let mut message = OutboundMessage::text(Channel::Telegram, "-1001", "hi");
         message.thread_id = Some("5".to_owned());
         message.reply_to = Some("7".to_owned());
         let body = adapter().encode(&message).unwrap().json().unwrap();
@@ -266,14 +274,14 @@ mod telegram {
 
     #[test]
     fn non_numeric_ids_are_rejected() {
-        let mut message = NormalizedMessage::text(Channel::Telegram, "-1001", "hi");
+        let mut message = OutboundMessage::text(Channel::Telegram, "-1001", "hi");
         message.thread_id = Some("topic-5".to_owned());
         assert!(matches!(
             adapter().encode(&message).unwrap_err(),
             Error::InvalidMessage { .. }
         ));
 
-        let mut message = NormalizedMessage::text(Channel::Telegram, "-1001", "hi");
+        let mut message = OutboundMessage::text(Channel::Telegram, "-1001", "hi");
         message.reply_to = Some("not-an-id".to_owned());
         assert!(matches!(
             adapter().encode(&message).unwrap_err(),
@@ -283,7 +291,7 @@ mod telegram {
 
     #[test]
     fn media_prefers_the_file_id_and_falls_back_to_a_url() {
-        let mut message = NormalizedMessage::text(Channel::Telegram, "1", "");
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
         let mut photo = Attachment::new(AttachmentKind::Image);
         photo.id = Some("AgAC-file".to_owned());
         photo.url = Some("https://example.org/cat.jpg".to_owned());
@@ -291,7 +299,7 @@ mod telegram {
         let body = adapter().encode(&message).unwrap().json().unwrap();
         assert_eq!(body["photo"], "AgAC-file");
 
-        let mut message = NormalizedMessage::text(Channel::Telegram, "1", "");
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
         let mut voice = Attachment::new(AttachmentKind::Voice);
         voice.url = Some("https://example.org/a.ogg".to_owned());
         message.attachments.push(voice);
@@ -301,14 +309,14 @@ mod telegram {
 
     #[test]
     fn unsupported_messages_are_rejected() {
-        let mut edit = NormalizedMessage::text(Channel::Telegram, "1", "fixed");
+        let mut edit = OutboundMessage::text(Channel::Telegram, "1", "fixed");
         edit.edit_of = Some("7".to_owned());
         assert!(matches!(
             adapter().encode(&edit).unwrap_err(),
             Error::InvalidMessage { .. }
         ));
 
-        let mut location = NormalizedMessage::text(Channel::Telegram, "1", "");
+        let mut location = OutboundMessage::text(Channel::Telegram, "1", "");
         location
             .attachments
             .push(Attachment::new(AttachmentKind::Location));
@@ -319,7 +327,7 @@ mod telegram {
 
         assert!(matches!(
             adapter()
-                .encode(&NormalizedMessage::text(Channel::Telegram, "", "hi"))
+                .encode(&OutboundMessage::text(Channel::Telegram, "", "hi"))
                 .unwrap_err(),
             Error::InvalidMessage { .. }
         ));
@@ -327,7 +335,7 @@ mod telegram {
 
     #[test]
     fn edit_with_attachment_is_rejected_before_building_a_send() {
-        let mut edit = NormalizedMessage::text(Channel::Telegram, "1", "fixed");
+        let mut edit = OutboundMessage::text(Channel::Telegram, "1", "fixed");
         edit.edit_of = Some("7".to_owned());
         let mut photo = Attachment::new(AttachmentKind::Image);
         photo.id = Some("AgAC-file".to_owned());
@@ -349,7 +357,7 @@ mod telegram {
 #[cfg(feature = "matrix")]
 mod matrix {
     use messenger_webhook::{
-        Adapter, Attachment, AttachmentKind, Channel, Error, MatrixAdapter, NormalizedMessage,
+        Adapter, Attachment, AttachmentKind, Channel, Error, MatrixAdapter, OutboundMessage,
         RetryPolicy,
     };
 
@@ -359,7 +367,7 @@ mod matrix {
 
     #[test]
     fn text_payload_is_room_content() {
-        let message = NormalizedMessage::text(Channel::Matrix, "!r:example.org", "Hallo");
+        let message = OutboundMessage::text(Channel::Matrix, "!r:example.org", "Hallo");
         let payload = adapter().encode(&message).unwrap();
         assert_eq!(payload.method(), "PUT");
         assert_eq!(payload.retry(), RetryPolicy::Safe);
@@ -373,7 +381,7 @@ mod matrix {
 
     #[test]
     fn matrix_payloads_carry_distinct_transaction_keys() {
-        let message = NormalizedMessage::text(Channel::Matrix, "!r:example.org", "Hallo");
+        let message = OutboundMessage::text(Channel::Matrix, "!r:example.org", "Hallo");
         let first = adapter().encode(&message).unwrap();
         let second = adapter().encode(&message).unwrap();
 
@@ -393,7 +401,7 @@ mod matrix {
 
     #[test]
     fn media_content_carries_url_and_info() {
-        let mut message = NormalizedMessage::text(Channel::Matrix, "!r:s", "");
+        let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "");
         let mut image = Attachment::new(AttachmentKind::Image);
         image.url = Some("mxc://example.org/cat".to_owned());
         image.mime_type = Some("image/jpeg".to_owned());
@@ -415,12 +423,12 @@ mod matrix {
 
     #[test]
     fn reply_thread_and_edit_relations() {
-        let mut reply = NormalizedMessage::text(Channel::Matrix, "!r:s", "hi");
+        let mut reply = OutboundMessage::text(Channel::Matrix, "!r:s", "hi");
         reply.reply_to = Some("$1".to_owned());
         let content = adapter().encode(&reply).unwrap().json().unwrap();
         assert_eq!(content["m.relates_to"]["m.in_reply_to"]["event_id"], "$1");
 
-        let mut threaded = NormalizedMessage::text(Channel::Matrix, "!r:s", "hi");
+        let mut threaded = OutboundMessage::text(Channel::Matrix, "!r:s", "hi");
         threaded.thread_id = Some("$root".to_owned());
         threaded.reply_to = Some("$1".to_owned());
         let content = adapter().encode(&threaded).unwrap().json().unwrap();
@@ -428,7 +436,7 @@ mod matrix {
         assert_eq!(content["m.relates_to"]["event_id"], "$root");
         assert_eq!(content["m.relates_to"]["m.in_reply_to"]["event_id"], "$1");
 
-        let mut edit = NormalizedMessage::text(Channel::Matrix, "!r:s", "fixed");
+        let mut edit = OutboundMessage::text(Channel::Matrix, "!r:s", "fixed");
         edit.edit_of = Some("$1".to_owned());
         let content = adapter().encode(&edit).unwrap().json().unwrap();
         assert_eq!(content["m.relates_to"]["rel_type"], "m.replace");
@@ -442,13 +450,13 @@ mod matrix {
         // Not a room id.
         assert!(matches!(
             adapter()
-                .encode(&NormalizedMessage::text(Channel::Matrix, "@user:s", "hi"))
+                .encode(&OutboundMessage::text(Channel::Matrix, "@user:s", "hi"))
                 .unwrap_err(),
             Error::InvalidMessage { .. }
         ));
 
         // Media url is not an mxc:// uri.
-        let mut message = NormalizedMessage::text(Channel::Matrix, "!r:s", "");
+        let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "");
         let mut image = Attachment::new(AttachmentKind::Image);
         image.url = Some("https://example.org/cat.jpg".to_owned());
         message.attachments.push(image);
@@ -458,7 +466,7 @@ mod matrix {
         ));
 
         // Location cannot be an m.room.message.
-        let mut location = NormalizedMessage::text(Channel::Matrix, "!r:s", "");
+        let mut location = OutboundMessage::text(Channel::Matrix, "!r:s", "");
         location
             .attachments
             .push(Attachment::new(AttachmentKind::Location));
@@ -468,7 +476,7 @@ mod matrix {
         ));
 
         // Empty message.
-        let mut empty = NormalizedMessage::text(Channel::Matrix, "!r:s", "");
+        let mut empty = OutboundMessage::text(Channel::Matrix, "!r:s", "");
         empty.text = None;
         assert!(matches!(
             adapter().encode(&empty).unwrap_err(),
@@ -485,7 +493,7 @@ fn payload_type_is_channel_typed() {
     {
         use messenger_webhook::TelegramAdapter;
         let payload = TelegramAdapter::new("s")
-            .encode(&NormalizedMessage::text(Channel::Telegram, "1", "hi"))
+            .encode(&OutboundMessage::text(Channel::Telegram, "1", "hi"))
             .unwrap();
         assert_eq!(payload.channel(), &Channel::Telegram);
     }
@@ -494,7 +502,7 @@ fn payload_type_is_channel_typed() {
     {
         use messenger_webhook::WhatsAppAdapter;
         let payload = WhatsAppAdapter::new("s")
-            .encode(&NormalizedMessage::text(Channel::WhatsApp, "49", "hi"))
+            .encode(&OutboundMessage::text(Channel::WhatsApp, "49", "hi"))
             .unwrap();
         assert_eq!(payload.channel(), &Channel::WhatsApp);
     }
@@ -503,10 +511,10 @@ fn payload_type_is_channel_typed() {
     {
         use messenger_webhook::MatrixAdapter;
         let payload = MatrixAdapter::new("s")
-            .encode(&NormalizedMessage::text(Channel::Matrix, "!r:s", "hi"))
+            .encode(&OutboundMessage::text(Channel::Matrix, "!r:s", "hi"))
             .unwrap();
         assert_eq!(payload.channel(), &Channel::Matrix);
     }
 
-    let _: fn(messenger_webhook::Channel, &str, &str) -> NormalizedMessage = text;
+    let _: fn(messenger_webhook::Channel, &str, &str) -> OutboundMessage = text;
 }

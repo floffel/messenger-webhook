@@ -9,13 +9,13 @@
 //! enforces Telegram's 4096/1024 UTF-16 unit limits:
 //!
 //! ```
-//! use messenger_webhook::{Adapter, Channel, NormalizedMessage, TelegramAdapter};
+//! use messenger_webhook::{Adapter, Channel, OutboundMessage, TelegramAdapter};
 //!
 //! let adapter = TelegramAdapter::new("bot-secret");
-//! let message = NormalizedMessage::text(Channel::Telegram, "-1001", "Hallo");
+//! let message = OutboundMessage::text(Channel::Telegram, "-1001", "Hallo");
 //! assert_eq!(adapter.encode(&message)?.json()?["text"], "Hallo");
 //!
-//! let too_long = NormalizedMessage::text(Channel::Telegram, "-1001", &"a".repeat(4097));
+//! let too_long = OutboundMessage::text(Channel::Telegram, "-1001", &"a".repeat(4097));
 //! assert!(adapter.encode(&too_long).is_err());
 //! # Ok::<(), messenger_webhook::Error>(())
 //! ```
@@ -27,7 +27,9 @@ use crate::headers::Headers;
 use crate::id;
 use crate::json;
 use crate::model::ProviderPayload;
-use crate::model::{Attachment, AttachmentKind, Channel, NormalizedMessage, Reaction};
+use crate::model::{
+    Attachment, AttachmentKind, Channel, NormalizedMessage, OutboundMessage, Reaction,
+};
 use crate::rich::{utf16_to_byte_ranges, TextFormat, TextSpan};
 use crate::secret::Secret;
 use crate::{check_body, json_payload, recipient, utf16_len, Adapter};
@@ -148,7 +150,7 @@ impl Adapter for TelegramAdapter {
         Ok(events)
     }
 
-    fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
+    fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
         let chat_id = recipient(Channel::Telegram, message)?;
         if message.edit_of.is_some() {
             let method = if message.first_attachment().is_some() {

@@ -8,7 +8,7 @@
 
 use messenger_webhook::{
     signature, Attachment, AttachmentKind, Channel, DeliveryStatus, Error, Headers, IdempotencyKey,
-    NormalizedMessage, ProviderPayload, Reaction, Registry, RetryPolicy, Secret,
+    NormalizedMessage, OutboundMessage, ProviderPayload, Reaction, Registry, RetryPolicy, Secret,
     MAX_BODY_READ_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
 };
 
@@ -71,10 +71,10 @@ fn attachment_helpers() {
 
 #[test]
 fn normalized_message_helpers() {
-    let mut message = NormalizedMessage::text(Channel::Telegram, "42", "hi");
+    let mut message = NormalizedMessage::inbound_text(Channel::Telegram, "7", "42", "hi");
     assert_eq!(message.conversation_id, "42");
     assert_eq!(message.text.as_deref(), Some("hi"));
-    assert_eq!(message.external_id.len(), 0);
+    assert_eq!(message.external_id, "7");
     assert!(message.first_attachment().is_none());
 
     message
@@ -99,6 +99,15 @@ fn normalized_message_helpers() {
         removed: false,
     };
     assert!(!reaction.removed);
+}
+
+#[test]
+fn outbound_message_helpers() {
+    let message = OutboundMessage::text(Channel::WhatsApp, "4915112345678", "hi");
+    assert_eq!(message.channel, Channel::WhatsApp);
+    assert_eq!(message.conversation_id, "4915112345678");
+    assert_eq!(message.text.as_deref(), Some("hi"));
+    assert!(message.first_attachment().is_none());
 }
 
 #[test]

@@ -404,12 +404,14 @@ pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 255;
 /// ```
 /// use messenger_webhook::{Channel, NormalizedMessage};
 ///
-/// let message = NormalizedMessage::text(Channel::Telegram, "-1001", "Hallo");
+/// let message = NormalizedMessage::inbound_text(Channel::Telegram, "update-1", "-1001", "Hallo");
+/// assert_eq!(message.external_id, "update-1");
 /// assert_eq!(message.conversation_id, "-1001");
 /// assert_eq!(message.text.as_deref(), Some("Hallo"));
 /// assert!(message.attachments.is_empty());
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct NormalizedMessage {
     /// Origin channel.
     pub channel: Channel,
@@ -457,27 +459,33 @@ pub struct NormalizedMessage {
 }
 
 impl NormalizedMessage {
-    /// Builds a plain text message — the shape the outbound encoder sends.
+    /// Builds a plain inbound text event with the provider's event id.
     ///
-    /// `external_id` and `sender_id` stay empty: providers assign them, an
-    /// application sending a message has no id yet.
+    /// This constructor is for tests, examples and event forwarding. Real
+    /// adapters fill the same fields from the provider's own payload.
     ///
     /// ```
     /// use messenger_webhook::{Channel, NormalizedMessage};
     ///
-    /// let message = NormalizedMessage::text(Channel::WhatsApp, "4915112345678", "Hallo");
+    /// let message = NormalizedMessage::inbound_text(
+    ///     Channel::WhatsApp,
+    ///     "wamid.1",
+    ///     "4915112345678",
+    ///     "Hallo",
+    /// );
     /// assert_eq!(message.channel, Channel::WhatsApp);
-    /// assert_eq!(message.external_id, "");
+    /// assert_eq!(message.external_id, "wamid.1");
     /// ```
     #[must_use]
-    pub fn text(
+    pub fn inbound_text(
         channel: Channel,
+        external_id: impl Into<String>,
         conversation_id: impl Into<String>,
         text: impl Into<String>,
     ) -> Self {
         Self {
             channel,
-            external_id: String::new(),
+            external_id: external_id.into(),
             conversation_id: conversation_id.into(),
             sender_id: String::new(),
             text: Some(text.into()),
@@ -505,7 +513,7 @@ impl NormalizedMessage {
     /// ```
     /// use messenger_webhook::{Channel, NormalizedMessage};
     ///
-    /// let mut event = NormalizedMessage::text(Channel::Matrix, "!r:s", "hi");
+    /// let mut event = NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "hi");
     /// assert!(!event.has_synthetic_id());
     /// event.external_id = "synthetic:00ff".into();
     /// assert!(event.has_synthetic_id());
@@ -520,7 +528,9 @@ impl NormalizedMessage {
     /// ```
     /// use messenger_webhook::{Channel, NormalizedMessage};
     ///
-    /// assert!(NormalizedMessage::text(Channel::Matrix, "!r:s", "hi").first_attachment().is_none());
+    /// assert!(NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "hi")
+    ///     .first_attachment()
+    ///     .is_none());
     /// ```
     #[must_use]
     pub fn first_attachment(&self) -> Option<&Attachment> {
@@ -532,7 +542,7 @@ impl NormalizedMessage {
     /// ```
     /// use messenger_webhook::{Channel, DeliveryStatus, NormalizedMessage};
     ///
-    /// let mut event = NormalizedMessage::text(Channel::WhatsApp, "49", "");
+    /// let mut event = NormalizedMessage::inbound_text(Channel::WhatsApp, "wamid.1", "49", "");
     /// assert!(!event.is_status_update());
     /// event.status = Some(DeliveryStatus::Read);
     /// assert!(event.is_status_update());
@@ -547,7 +557,7 @@ impl NormalizedMessage {
     /// ```
     /// use messenger_webhook::{Channel, NormalizedMessage};
     ///
-    /// let mut event = NormalizedMessage::text(Channel::Telegram, "1", "fixed typo");
+    /// let mut event = NormalizedMessage::inbound_text(Channel::Telegram, "2", "1", "fixed typo");
     /// event.edit_of = Some("77".into());
     /// assert!(event.is_edit());
     /// ```
@@ -561,11 +571,97 @@ impl NormalizedMessage {
     /// ```
     /// use messenger_webhook::{Channel, NormalizedMessage};
     ///
-    /// assert!(!NormalizedMessage::text(Channel::Matrix, "!r:s", "plain").is_formatted());
+    /// assert!(!NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "plain").is_formatted());
     /// ```
     #[must_use]
     pub fn is_formatted(&self) -> bool {
         !self.spans.is_empty()
+    }
+}
+
+/// One outbound request, provider independent.
+///
+/// This is the shape [`Adapter::encode`](crate::Adapter::encode) accepts. It
+/// carries only fields an application can know before the provider assigns an
+/// event id; provider-assigned ids belong to [`NormalizedMessage`] on the
+/// inbound side and [`ProviderPayload::idempotency_key`] on the outbound side.
+///
+/// ```
+/// use messenger_webhook::{Channel, OutboundMessage};
+///
+/// let message = OutboundMessage::text(Channel::Telegram, "-1001", "Hallo");
+/// assert_eq!(message.conversation_id, "-1001");
+/// assert_eq!(message.text.as_deref(), Some("Hallo"));
+/// assert!(message.attachments.is_empty());
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct OutboundMessage {
+    /// Destination channel.
+    pub channel: Channel,
+    /// Conversation the request is addressed to (chat id, room id, phone
+    /// number).
+    pub conversation_id: String,
+    /// Plain text to send.
+    pub text: Option<String>,
+    /// Media carried by the request, in provider order.
+    pub attachments: Vec<Attachment>,
+    /// External id of the message this one replies to.
+    pub reply_to: Option<String>,
+    /// Thread or topic id, when the provider threads messages.
+    pub thread_id: Option<String>,
+    /// When this request is an edit: external id of the message it replaces.
+    pub edit_of: Option<String>,
+    /// Reaction carried by this request.
+    ///
+    /// Providers that expose reactions through a separate endpoint reject this
+    /// field in `encode`, just as they do for edits.
+    pub reaction: Option<Reaction>,
+}
+
+impl OutboundMessage {
+    /// Builds a plain text outbound request.
+    ///
+    /// The idempotency key for an outbound retry is provider-specific and
+    /// travels on [`ProviderPayload`], not here.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, OutboundMessage};
+    ///
+    /// let message = OutboundMessage::text(Channel::WhatsApp, "4915112345678", "Hallo");
+    /// assert_eq!(message.channel, Channel::WhatsApp);
+    /// assert_eq!(message.text.as_deref(), Some("Hallo"));
+    /// ```
+    #[must_use]
+    pub fn text(
+        channel: Channel,
+        conversation_id: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
+        Self {
+            channel,
+            conversation_id: conversation_id.into(),
+            text: Some(text.into()),
+            attachments: Vec::new(),
+            reply_to: None,
+            thread_id: None,
+            edit_of: None,
+            reaction: None,
+        }
+    }
+
+    /// The first attachment, if the request carries media.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, OutboundMessage};
+    ///
+    /// assert!(OutboundMessage::text(Channel::Matrix, "!r:s", "hi")
+    ///     .first_attachment()
+    ///     .is_none());
+    /// ```
+    #[must_use]
+    pub fn first_attachment(&self) -> Option<&Attachment> {
+        self.attachments.first()
     }
 }
 
