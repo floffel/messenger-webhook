@@ -182,7 +182,7 @@ fn a_5xx_on_a_txn_keyed_send_is_retried_with_the_same_transaction_id() {
 }
 
 #[test]
-fn an_exhausted_send_is_ambiguous_and_carries_the_transaction_id() {
+fn an_exhausted_send_follows_the_retry_verdict_and_reuses_the_transaction_id() {
     let harness = harness(|config| config);
     for _ in 0..3 {
         harness
@@ -192,38 +192,55 @@ fn an_exhausted_send_is_ambiguous_and_carries_the_transaction_id() {
 
     let error = block_on(harness.client.send_text("!r:example.org", "Hallo")).expect_err("5xx");
 
-    let txn = match &error {
-        OutboundError::Ambiguous {
-            txn_id: Some(txn),
-            attempts: 3,
+    match &error {
+        OutboundError::Server {
+            status,
+            errcode,
+            message,
+            attempts,
             ..
-        } => txn.clone(),
-        other => panic!("expected an ambiguous write, got {other:?}"),
-    };
-    assert!(error.is_ambiguous());
+        } => {
+            assert_eq!(*status, 503);
+            assert_eq!(errcode, "M_UNKNOWN");
+            assert_eq!(message, "overloaded");
+            assert_eq!(*attempts, 3);
+        }
+        other => panic!("expected the retry verdict's server error, got {other:?}"),
+    }
     assert!(
         !error.is_retryable(),
-        "an ambiguous write must not be retried blindly"
+        "an exhausted transaction-keyed send is safe only under the same transaction id"
+    );
+    assert!(
+        error.is_ambiguous(),
+        "an exhausted send may still have been applied, so it is ambiguous"
     );
     assert_eq!(harness.transport.call_count(), 3);
     assert_eq!(harness.sleeper.delays().len(), 2);
-    // The error tells the caller how to repeat it safely.
-    assert!(error.to_string().contains(txn.as_str()));
+
+    let calls = requests(&harness);
+    assert_eq!(calls[0].url, calls[1].url);
+    assert_eq!(calls[1].url, calls[2].url);
+    let txn = calls[2]
+        .url
+        .rsplit('/')
+        .next()
+        .expect("a transaction id path segment");
 
     // Repeating with that id is the documented recovery path, and it works.
     harness.transport.push_json(200, r#"{"event_id":"$late"}"#);
     let outcome = block_on(harness.client.send_text_with_txn(
-        txn.clone(),
+        TxnId::new(txn).expect("the transaction id is valid"),
         "!r:example.org",
         "Hallo",
     ))
     .expect("the retry lands");
-    assert_eq!(outcome.txn_id, txn);
+    assert_eq!(outcome.txn_id.as_str(), txn);
     assert!(requests(&harness)
         .last()
         .expect("a request")
         .url
-        .ends_with(txn.as_str()));
+        .ends_with(txn));
 }
 
 #[test]
