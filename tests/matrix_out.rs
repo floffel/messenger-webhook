@@ -15,8 +15,8 @@ use messenger_webhook::matrix_out::transport::{
     Method, Response, TransportError, TransportErrorKind,
 };
 use messenger_webhook::matrix_out::{
-    ClientConfig, MatrixClient, MediaKind, MediaSendError, MediaUpload, MxcUri, Operation,
-    OutboundError, RecordingSleeper, RetryPolicy, StubTransport, TxnId,
+    ClientConfig, MatrixClient, MediaKind, MediaSendError, MediaUpload, MegolmEncryptedContent,
+    MxcUri, Operation, OutboundError, RecordingSleeper, RetryPolicy, StubTransport, TxnId,
 };
 
 /// A client wired to a stub and a recording sleeper, plus both handles.
@@ -179,6 +179,34 @@ fn a_5xx_on_a_txn_keyed_send_is_retried_with_the_same_transaction_id() {
     let delays = harness.sleeper.delays();
     assert_eq!(delays.len(), 1);
     assert_in_jitter_window(RetryPolicy::default(), delays[0]);
+}
+
+#[test]
+fn an_encrypted_5xx_is_retried_with_the_same_transaction_id() {
+    let harness = harness(|config| config);
+    harness
+        .transport
+        .push_json(502, r#"{"errcode":"M_UNKNOWN"}"#)
+        .push_json(200, r#"{"event_id":"$enc"}"#);
+
+    let content = MegolmEncryptedContent::new("AwgA", "3C5B", "DEV", "SESS").expect("content");
+    let outcome = block_on(
+        harness
+            .client
+            .send_encrypted("!r:example.org", content.into()),
+    )
+    .expect("sent");
+
+    assert_eq!(outcome.attempts, 2);
+    let calls = requests(&harness);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].url, calls[1].url, "a retry must reuse the txn id");
+    assert!(
+        calls[0].url.contains("/send/m.room.encrypted/"),
+        "{}",
+        calls[0].url
+    );
+    assert_eq!(calls[0].body, calls[1].body);
 }
 
 #[test]

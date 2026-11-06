@@ -18,6 +18,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
+use base64::Engine as _;
 use uuid::Uuid;
 
 use crate::matrix_out::error::OutboundError;
@@ -99,6 +100,78 @@ pub const DEFAULT_MAX_UPLOAD_BYTES: u64 = 50_000_000;
 /// assert_eq!(DEFAULT_TYPING_TIMEOUT_MS, 4_000);
 /// ```
 pub const DEFAULT_TYPING_TIMEOUT_MS: u32 = 4_000;
+
+/// The Megolm v1 messaging algorithm name (`m.megolm.v1.aes-sha2`).
+///
+/// The Matrix specification's *End-to-End Encryption → Messaging Algorithms*
+/// section (v1.19) fixes this exact string as the `algorithm` of a Megolm
+/// `m.room.encrypted` room event and of the `m.room.encryption` state event
+/// that turns a room encrypted. This crate models that one algorithm, so the
+/// name is a constant rather than a free-form string.
+///
+/// ```
+/// use messenger_webhook::matrix_out::MEGOLM_V1_AES_SHA2;
+///
+/// assert_eq!(MEGOLM_V1_AES_SHA2, "m.megolm.v1.aes-sha2");
+/// ```
+pub const MEGOLM_V1_AES_SHA2: &str = "m.megolm.v1.aes-sha2";
+
+/// Largest base64 `ciphertext` the client accepts, in bytes.
+///
+/// The specification puts no ceiling on a single encrypted payload; it caps the
+/// *complete event* at 65 536 bytes (`MAX_CONTENT_BYTES`). The other Megolm
+/// content fields are bounded by [`MAX_ENCRYPTED_SESSION_ID_BYTES`],
+/// [`MAX_ENCRYPTED_DEVICE_ID_BYTES`] and [`MAX_ENCRYPTED_SENDER_KEY_BYTES`], so
+/// 60 000 bytes of base64 ciphertext plus that envelope stays under the event
+/// ceiling. The value is a local pre-flight guard (the same spirit as
+/// [`MAX_TXN_ID_BYTES`]): a caller cannot hand us a megabyte of ciphertext that
+/// the homeserver would reject after the write.
+///
+/// ```
+/// use messenger_webhook::matrix_out::MAX_ENCRYPTED_CIPHERTEXT_BYTES;
+///
+/// assert_eq!(MAX_ENCRYPTED_CIPHERTEXT_BYTES, 60_000);
+/// ```
+pub const MAX_ENCRYPTED_CIPHERTEXT_BYTES: usize = 60_000;
+
+/// Largest Megolm `session_id` the client accepts, in bytes.
+///
+/// The specification gives no explicit length for a session id, but the
+/// *Appendices → Room IDs and Event IDs* rule reserves 255 bytes for the id
+/// fields it does define, and a session id is the same kind of opaque handle.
+/// 255 is that general rule applied as a local guard.
+///
+/// ```
+/// use messenger_webhook::matrix_out::MAX_ENCRYPTED_SESSION_ID_BYTES;
+///
+/// assert_eq!(MAX_ENCRYPTED_SESSION_ID_BYTES, 255);
+/// ```
+pub const MAX_ENCRYPTED_SESSION_ID_BYTES: usize = 255;
+
+/// Largest `device_id` the client accepts, in bytes.
+///
+/// Device ids are opaque; this is the specification's general 255-byte id rule
+/// applied as a local guard, so a caller cannot past a megabyte of "id" into
+/// the event.
+///
+/// ```
+/// use messenger_webhook::matrix_out::MAX_ENCRYPTED_DEVICE_ID_BYTES;
+///
+/// assert_eq!(MAX_ENCRYPTED_DEVICE_ID_BYTES, 255);
+/// ```
+pub const MAX_ENCRYPTED_DEVICE_ID_BYTES: usize = 255;
+
+/// Largest base64 `sender_key` the client accepts, in bytes.
+///
+/// A Curve25519 public key is 32 bytes and so 44 base64 characters in practice;
+/// 255 is the general 255-byte id rule applied as a local guard.
+///
+/// ```
+/// use messenger_webhook::matrix_out::MAX_ENCRYPTED_SENDER_KEY_BYTES;
+///
+/// assert_eq!(MAX_ENCRYPTED_SENDER_KEY_BYTES, 255);
+/// ```
+pub const MAX_ENCRYPTED_SENDER_KEY_BYTES: usize = 255;
 
 /// The idempotency key of one send.
 ///
@@ -527,6 +600,327 @@ pub struct MediaSendOutcome {
     pub send: SendOutcome,
 }
 
+/// The content of a Megolm `m.room.encrypted` room event, typed.
+///
+/// This is the **metadata-only** surface: the client carries the fields a
+/// consumer needs to address the event — the algorithm, the opaque ciphertext
+/// and the Megolm session identity — and never derives a key or decrypts. The
+/// fields and their meaning are the Matrix specification's *End-to-End
+/// Encryption → `m.room.encrypted`* section (v1.19): a Megolm room event's
+/// content is `{"algorithm", "ciphertext", "device_id", "sender_key",
+/// "session_id"}`. The `algorithm` is fixed to [`MEGOLM_V1_AES_SHA2`], the one
+/// algorithm this constructor models, so it is an accessor rather than a stored
+/// field.
+///
+/// The type is a validated newtype: the base64 `ciphertext`, `sender_key` and
+/// the ids are checked before the value can reach a request, so a malformed
+/// payload is a local [`OutboundError::InvalidRequest`] instead of a homeserver
+/// `M_BAD_JSON` after the write.
+///
+/// ```
+/// use messenger_webhook::matrix_out::MegolmEncryptedContent;
+///
+/// let content = MegolmEncryptedContent::new(
+///     "AwgAEnB1cnBvc2U",          // ciphertext, base64 (unpadded is fine)
+///     "3C5BFWi2Y8MaVvjM8M22DBmh24PmgR0n", // sender_key, base64
+///     "JLAFKJWSCS",                // device_id
+///     "lEuiRJBit0IG6nUf5pUzWTUEsRVVe/HJToXO1DfK7Jg", // session_id
+/// )?;
+/// assert_eq!(content.algorithm(), "m.megolm.v1.aes-sha2");
+/// assert_eq!(content.device_id(), "JLAFKJWSCS");
+/// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MegolmEncryptedContent {
+    ciphertext: String,
+    sender_key: String,
+    device_id: String,
+    session_id: String,
+}
+
+impl MegolmEncryptedContent {
+    /// Validates and wraps the four caller-supplied Megolm fields.
+    ///
+    /// `algorithm` is not a parameter: this type is the Megolm content, whose
+    /// algorithm is [`MEGOLM_V1_AES_SHA2`] by definition. Model a different
+    /// algorithm with [`EncryptedEventContent::Other`].
+    ///
+    /// # Errors
+    ///
+    /// [`OutboundError::InvalidRequest`] when `ciphertext` or `sender_key` is
+    /// not valid base64, when any field is empty, or when a field is longer than
+    /// its ceiling ([`MAX_ENCRYPTED_CIPHERTEXT_BYTES`],
+    /// [`MAX_ENCRYPTED_SESSION_ID_BYTES`], [`MAX_ENCRYPTED_DEVICE_ID_BYTES`],
+    /// [`MAX_ENCRYPTED_SENDER_KEY_BYTES`]).
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::MegolmEncryptedContent;
+    ///
+    /// assert!(MegolmEncryptedContent::new("AAAA", "AAAA", "DEV", "SESS").is_ok());
+    /// // The ciphertext and the sender key are base64, so `!` is not one.
+    /// assert!(MegolmEncryptedContent::new("!!!!", "AAAA", "DEV", "SESS").is_err());
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    pub fn new(
+        ciphertext: impl AsRef<str> + Into<String>,
+        sender_key: impl AsRef<str> + Into<String>,
+        device_id: impl AsRef<str> + Into<String>,
+        session_id: impl AsRef<str> + Into<String>,
+    ) -> Result<Self, OutboundError> {
+        validate_base64_field(
+            "ciphertext",
+            ciphertext.as_ref(),
+            MAX_ENCRYPTED_CIPHERTEXT_BYTES,
+        )?;
+        validate_base64_field(
+            "sender_key",
+            sender_key.as_ref(),
+            MAX_ENCRYPTED_SENDER_KEY_BYTES,
+        )?;
+        validate_opaque_field(
+            "device_id",
+            device_id.as_ref(),
+            MAX_ENCRYPTED_DEVICE_ID_BYTES,
+        )?;
+        validate_opaque_field(
+            "session_id",
+            session_id.as_ref(),
+            MAX_ENCRYPTED_SESSION_ID_BYTES,
+        )?;
+        Ok(Self {
+            ciphertext: ciphertext.into(),
+            sender_key: sender_key.into(),
+            device_id: device_id.into(),
+            session_id: session_id.into(),
+        })
+    }
+
+    /// The algorithm that always accompanies this content.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::{MegolmEncryptedContent, MEGOLM_V1_AES_SHA2};
+    ///
+    /// let content = MegolmEncryptedContent::new("AAAA", "AAAA", "DEV", "SESS")?;
+    /// assert_eq!(content.algorithm(), MEGOLM_V1_AES_SHA2);
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub const fn algorithm(&self) -> &'static str {
+        MEGOLM_V1_AES_SHA2
+    }
+
+    /// The base64 ciphertext, verbatim.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::MegolmEncryptedContent;
+    ///
+    /// let content = MegolmEncryptedContent::new("AwgA", "AAAA", "DEV", "SESS")?;
+    /// assert_eq!(content.ciphertext(), "AwgA");
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub fn ciphertext(&self) -> &str {
+        &self.ciphertext
+    }
+
+    /// The base64 Curve25519 sender key, verbatim.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::MegolmEncryptedContent;
+    ///
+    /// let content = MegolmEncryptedContent::new("AAAA", "3C5B", "DEV", "SESS")?;
+    /// assert_eq!(content.sender_key(), "3C5B");
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub fn sender_key(&self) -> &str {
+        &self.sender_key
+    }
+
+    /// The device id that produced the message.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::MegolmEncryptedContent;
+    ///
+    /// let content = MegolmEncryptedContent::new("AAAA", "AAAA", "JLAFKJWSCS", "SESS")?;
+    /// assert_eq!(content.device_id(), "JLAFKJWSCS");
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    /// The Megolm session id the sender used.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::MegolmEncryptedContent;
+    ///
+    /// let content = MegolmEncryptedContent::new("AAAA", "AAAA", "DEV", "lEuiRJBit0IG")?;
+    /// assert_eq!(content.session_id(), "lEuiRJBit0IG");
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// The JSON content of an `m.room.encrypted` event carrying these fields.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::MegolmEncryptedContent;
+    ///
+    /// let content = MegolmEncryptedContent::new("AAAA", "AAAA", "DEV", "SESS")?;
+    /// assert_eq!(content.to_value()["algorithm"], "m.megolm.v1.aes-sha2");
+    /// assert_eq!(content.to_value()["session_id"], "SESS");
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub fn to_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "algorithm": MEGOLM_V1_AES_SHA2,
+            "ciphertext": self.ciphertext,
+            "sender_key": self.sender_key,
+            "device_id": self.device_id,
+            "session_id": self.session_id,
+        })
+    }
+}
+
+/// The `content` of an `m.room.encrypted` room event this client can send.
+///
+/// The Matrix specification's *End-to-End Encryption* section says an
+/// `m.room.encrypted` event carries an `algorithm` that names how the payload
+/// was encrypted and its algorithm-specific `content`. This crate models the
+/// one Megolm shape as typed data ([`MegolmEncryptedContent`]) and keeps the
+/// door open for any other algorithm as [`EncryptedEventContent::Other`], so an
+/// event this crate does not model is still carried, tagged with its algorithm,
+/// instead of being dropped. No variant decrypts; the client carries the
+/// provider metadata a consumer needs.
+///
+/// ```
+/// use messenger_webhook::matrix_out::{EncryptedEventContent, MegolmEncryptedContent};
+///
+/// let content =
+///     EncryptedEventContent::Megolm(MegolmEncryptedContent::new("AAAA", "AAAA", "DEV", "SESS")?);
+/// assert_eq!(content.to_value()?["algorithm"], "m.megolm.v1.aes-sha2");
+/// assert_eq!(content.to_value()?["session_id"], "SESS");
+///
+/// let custom = EncryptedEventContent::Other {
+///     algorithm: "org.example.cipher".to_owned(),
+///     fields: serde_json::json!({ "blob": "…" }),
+/// };
+/// assert_eq!(custom.to_value()?["algorithm"], "org.example.cipher");
+/// assert_eq!(custom.to_value()?["blob"], "…");
+/// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum EncryptedEventContent {
+    /// A Megolm (`m.megolm.v1.aes-sha2`) room event.
+    Megolm(MegolmEncryptedContent),
+    /// Any other algorithm: the algorithm name plus the algorithm-specific
+    /// fields, carried verbatim. The event `content` is flat — the spec puts
+    /// `algorithm` beside the algorithm's own keys, not around them — so
+    /// `fields` must be a JSON object and is merged next to `algorithm`.
+    /// `algorithm` must be a non-empty, control-free name no longer than
+    /// [`MAX_EVENT_TYPE_BYTES`]; both are validated by
+    /// [`to_value`](Self::to_value) before the wire.
+    Other {
+        /// The `algorithm` field, e.g. `org.example.cipher`.
+        algorithm: String,
+        /// The algorithm-specific content fields, merged beside `algorithm`.
+        fields: serde_json::Value,
+    },
+}
+
+impl From<MegolmEncryptedContent> for EncryptedEventContent {
+    /// Wraps Megolm content as the [`EncryptedEventContent::Megolm`] arm, so a
+    /// Megolm send reads `send_encrypted(room, content.into())`.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::{EncryptedEventContent, MegolmEncryptedContent};
+    ///
+    /// let content = MegolmEncryptedContent::new("AAAA", "AAAA", "DEV", "SESS")?;
+    /// let event: EncryptedEventContent = content.into();
+    /// assert_eq!(event.to_value()?["session_id"], "SESS");
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    fn from(content: MegolmEncryptedContent) -> Self {
+        Self::Megolm(content)
+    }
+}
+
+impl EncryptedEventContent {
+    /// The outbound `content` object for an `m.room.encrypted` event.
+    ///
+    /// # Errors
+    ///
+    /// [`OutboundError::InvalidRequest`] when an [`EncryptedEventContent::Other`]
+    /// carries an empty or over-long algorithm name, or a `content` that is not
+    /// a JSON object. [`EncryptedEventContent::Megolm`] was already validated
+    /// when it was built.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::EncryptedEventContent;
+    ///
+    /// let content = EncryptedEventContent::Other {
+    ///     algorithm: "org.example.cipher".to_owned(),
+    ///     fields: serde_json::json!({ "blob": "x" }),
+    /// };
+    /// assert_eq!(content.to_value()?["algorithm"], "org.example.cipher");
+    /// assert_eq!(content.to_value()?["blob"], "x");
+    ///
+    /// let not_an_object = EncryptedEventContent::Other {
+    ///     algorithm: "org.example.cipher".to_owned(),
+    ///     fields: serde_json::json!("just a string"),
+    /// };
+    /// assert!(not_an_object.to_value().is_err());
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    pub fn to_value(&self) -> Result<serde_json::Value, OutboundError> {
+        match self {
+            Self::Megolm(content) => Ok(content.to_value()),
+            Self::Other { algorithm, fields } => {
+                if algorithm.is_empty() {
+                    return Err(OutboundError::InvalidRequest {
+                        reason: "the m.room.encrypted algorithm is empty".to_owned(),
+                    });
+                }
+                if algorithm.len() > MAX_EVENT_TYPE_BYTES {
+                    return Err(OutboundError::InvalidRequest {
+                        reason: format!(
+                            "the m.room.encrypted algorithm is {} bytes, the ceiling is {MAX_EVENT_TYPE_BYTES}",
+                            algorithm.len()
+                        ),
+                    });
+                }
+                if algorithm.chars().any(char::is_control) {
+                    return Err(OutboundError::InvalidRequest {
+                        reason: "the m.room.encrypted algorithm contains a control character"
+                            .to_owned(),
+                    });
+                }
+                let Some(object) = fields.as_object() else {
+                    return Err(OutboundError::InvalidRequest {
+                        reason: "the m.room.encrypted content fields are not a JSON object"
+                            .to_owned(),
+                    });
+                };
+                // Flat per the spec: `algorithm` sits beside the algorithm's
+                // own keys, and the caller's `algorithm` key (if any) cannot
+                // override the validated one.
+                let mut merged = object.clone();
+                merged.insert(
+                    "algorithm".to_owned(),
+                    serde_json::Value::String(algorithm.clone()),
+                );
+                Ok(serde_json::Value::Object(merged))
+            }
+        }
+    }
+}
+
 /// The sigil that introduces each Matrix id this client addresses.
 ///
 /// Matrix gives every identifier a leading sigil so a room, user and event id
@@ -640,6 +1034,56 @@ pub(crate) fn validate_event_type(event_type: &str) -> Result<(), OutboundError>
         return Err(OutboundError::InvalidRequest {
             reason: "the event type contains a control character".to_owned(),
         });
+    }
+    Ok(())
+}
+
+/// Validates one base64 field of a Megolm `m.room.encrypted` content.
+///
+/// The Matrix specification's *End-to-End Encryption → `m.room.encrypted`*
+/// section: the `ciphertext` is "base64-encoded", and so is the Curve25519
+/// `sender_key`. This accepts the canonical padded form and the unpadded form
+/// the spec also shows in its (unpadded) `sender_key` example, and rejects
+/// anything else before the value reaches a request.
+fn validate_base64_field(name: &str, value: &str, ceiling: usize) -> Result<(), OutboundError> {
+    let invalid = |reason: String| OutboundError::InvalidRequest {
+        reason: format!("the m.room.encrypted {name} {reason}"),
+    };
+    if value.is_empty() {
+        return Err(invalid("is empty".to_owned()));
+    }
+    if value.len() > ceiling {
+        return Err(invalid(format!(
+            "is {} bytes, the ceiling is {ceiling}",
+            value.len()
+        )));
+    }
+    // The canonical and the unpadded alphabet are the same ASCII set; padding
+    // mode is what differs, and `STANDARD_PAD_INDIFFERENT` accepts both.
+    let engine = &base64::engine::general_purpose::STANDARD_PAD_INDIFFERENT;
+    if engine.decode(value.as_bytes()).is_err() {
+        return Err(invalid("is not base64".to_owned()));
+    }
+    Ok(())
+}
+
+/// Validates one opaque, non-base64 id field of a Megolm `m.room.encrypted`
+/// content (`device_id`, `session_id`).
+fn validate_opaque_field(name: &str, value: &str, ceiling: usize) -> Result<(), OutboundError> {
+    let invalid = |reason: String| OutboundError::InvalidRequest {
+        reason: format!("the m.room.encrypted {name} {reason}"),
+    };
+    if value.is_empty() {
+        return Err(invalid("is empty".to_owned()));
+    }
+    if value.len() > ceiling {
+        return Err(invalid(format!(
+            "is {} bytes, the ceiling is {ceiling}",
+            value.len()
+        )));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(invalid("contains a control character".to_owned()));
     }
     Ok(())
 }
@@ -1034,5 +1478,61 @@ mod tests {
         assert_eq!(MediaKind::Video.msgtype(), "m.video");
         assert_eq!(MediaKind::Audio.msgtype(), "m.audio");
         assert_eq!(MediaKind::File.msgtype(), "m.file");
+    }
+
+    #[test]
+    fn megolm_content_exposes_every_field_and_marshals_the_spec_shape() {
+        let content =
+            MegolmEncryptedContent::new("AwgA", "3C5B", "DEV", "SESS").expect("valid content");
+        assert_eq!(content.algorithm(), MEGOLM_V1_AES_SHA2);
+        assert_eq!(content.ciphertext(), "AwgA");
+        assert_eq!(content.sender_key(), "3C5B");
+        assert_eq!(content.device_id(), "DEV");
+        assert_eq!(content.session_id(), "SESS");
+
+        let value = content.to_value();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "algorithm": "m.megolm.v1.aes-sha2",
+                "ciphertext": "AwgA",
+                "sender_key": "3C5B",
+                "device_id": "DEV",
+                "session_id": "SESS",
+            })
+        );
+
+        let event: EncryptedEventContent = content.into();
+        assert_eq!(event.to_value().expect("object"), value);
+    }
+
+    #[test]
+    fn megolm_content_accepts_padded_and_unpadded_base64() {
+        // The spec's own `ciphertext` and `sender_key` examples are unpadded,
+        // but the canonical alphabet is padded; both must pass.
+        assert!(MegolmEncryptedContent::new("AwgQ", "AAAA", "DEV", "SESS").is_ok());
+        assert!(MegolmEncryptedContent::new("Awg=", "AAAA", "DEV", "SESS").is_ok());
+        assert!(MegolmEncryptedContent::new("Awg", "AAAA", "DEV", "SESS").is_ok());
+    }
+
+    #[test]
+    fn opaque_encrypted_fields_reject_control_characters() {
+        assert!(MegolmEncryptedContent::new("AAAA", "AAAA", "DE\u{0}V", "SESS").is_err());
+        assert!(MegolmEncryptedContent::new("AAAA", "AAAA", "DEV", "SE\nSS").is_err());
+    }
+
+    #[test]
+    fn other_encrypted_algorithm_requires_an_object_and_bounds_the_name() {
+        let too_long = EncryptedEventContent::Other {
+            algorithm: "a".repeat(MAX_EVENT_TYPE_BYTES + 1),
+            fields: serde_json::json!({}),
+        };
+        assert!(too_long.to_value().is_err());
+
+        let exact = EncryptedEventContent::Other {
+            algorithm: "a".repeat(MAX_EVENT_TYPE_BYTES),
+            fields: serde_json::json!({}),
+        };
+        assert!(exact.to_value().is_ok());
     }
 }

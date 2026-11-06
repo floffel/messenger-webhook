@@ -17,8 +17,8 @@
 //!
 //! One feature is different: `matrix-out` (default **off**) adds the
 //! `matrix_out` module, a typed Matrix Client-Server *outbound client* — sends,
-//! reactions, redactions, typing, receipts and media upload — on a transport
-//! seam so the crate can be tested without a homeserver. It is the only module
+//! encrypted sends, reactions, redactions, typing, receipts and media upload —
+//! on a transport seam so the crate can be tested without a homeserver. It is the only module
 //! that performs I/O: with `matrix-out` enabled, it is the only I/O path in the
 //! crate, and the caller still supplies the transport it wants.
 //!
@@ -74,9 +74,9 @@
 //! ## Deliberate exclusions
 //!
 //! Documented rather than silently missing — see the README for the full list:
-//! no network in the default build, no media download, no Matrix end-to-end
-//! encryption (`m.room.encrypted` events are
-//! carried verbatim), and Meta's deprecated `X-Hub-Signature` (SHA-1) header is
+//! no network in the default build, no media download, no Megolm
+//! *implementation* (`m.room.encrypted` events are typed and carried, never
+//! decrypted), and Meta's deprecated `X-Hub-Signature` (SHA-1) header is
 //! rejected in favour of `X-Hub-Signature-256`.
 
 #![forbid(unsafe_code)]

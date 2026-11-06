@@ -153,6 +153,7 @@ so your tests can do the same.
 |-----|----------|-------------|
 | `send_text` / `send_event` | `PUT /rooms/{id}/send/{type}/{txn}` | transaction id |
 | `send_reaction` | `m.reaction` with `m.annotation` | transaction id |
+| `send_encrypted` | `m.room.encrypted` (Megolm metadata, not decrypted) | transaction id |
 | `redact` | `PUT /rooms/{id}/redact/{event}/{txn}` | transaction id |
 | `send_typing` / `stop_typing` | `PUT /rooms/{id}/typing/{user}` | state-setting |
 | `send_read_receipt` | `POST /rooms/{id}/receipt/m.read/{event}` | state-setting |
@@ -494,9 +495,18 @@ Each of these is a decision, not an omission:
 - **No network in the default build.** Without `matrix-out` the crate produces
   payloads and reads webhook bodies; with it, the only I/O is the Matrix
   Client-Server legs listed above. No media download, no token refresh, no sync
-  or long polling, no E2EE, no room administration (create/join/invite/state).
-- **No Matrix E2EE.** `m.room.encrypted` events are carried verbatim
-  (`provider_type`, `raw`), never decrypted.
+  or long polling, no room administration (create/join/invite/state).
+- **Matrix encrypted events are typed, never decrypted.** Inbound
+  `m.room.encrypted` events are carried with their `provider_type` and full
+  `raw` payload, and the outbound client models the event with
+  `EncryptedEventContent`/`MegolmEncryptedContent` and sends it through
+  `send_encrypted`: the algorithm, ciphertext and Megolm session identity are
+  validated before the wire (Matrix Client-Server API v1.19, *End-to-End
+  Encryption → `m.room.encrypted`*). What this crate provides is the
+  metadata-only surface, not a Megolm implementation — it does not derive keys,
+  exchange device keys or decrypt, because that is a larger security scope than
+  a webhook normaliser should own. A consumer that owns the keys supplies the
+  content; one that only forwards events gets a typed carrier.
 - **Outbound edits and reactions are provider-shaped, not universal.**
   `encode` sends a Telegram text edit as `editMessageText` and a reaction as
   `setMessageReaction`, a `WhatsApp` reaction as a Cloud API `reaction` message,

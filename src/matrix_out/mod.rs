@@ -24,6 +24,7 @@
 //! | [`MatrixClient::send_text`] | `PUT /_matrix/client/v3/rooms/{roomId}/send/m.room.message/{txnId}` | transaction id |
 //! | [`MatrixClient::send_event`] | same, any event type | transaction id |
 //! | [`MatrixClient::send_reaction`] | `m.reaction` (`m.annotation`) | transaction id |
+//! | [`MatrixClient::send_encrypted`] | `m.room.encrypted` (Megolm metadata, not decrypted) | transaction id |
 //! | [`MatrixClient::redact`] | `PUT /rooms/{roomId}/redact/{eventId}/{txnId}` | transaction id |
 //! | [`MatrixClient::send_typing`] | `PUT /rooms/{roomId}/typing/{userId}` | state-setting |
 //! | [`MatrixClient::send_read_receipt`] | `POST /rooms/{roomId}/receipt/m.read/{eventId}` | state-setting |
@@ -35,11 +36,20 @@
 //!
 //! # What is deliberately not covered
 //!
-//! Room creation, joining, invites, state events, sync/long-polling, end-to-end
-//! encryption, threaded sends and edits. Each is a different consumer: a bot that
-//! only writes into rooms it already joined does not need them, and a client that
-//! claims them without the tests to match would be the stub this crate exists to
-//! avoid.
+//! Room creation, joining, invites, state events, sync/long-polling, threaded
+//! sends and edits. Each is a different consumer: a bot that only writes into
+//! rooms it already joined does not need them, and a client that claims them
+//! without the tests to match would be the stub this crate exists to avoid.
+//!
+//! End-to-end encryption is covered only as far as the *wire shape*:
+//! [`MatrixClient::send_encrypted`] validates and sends an
+//! [`EncryptedEventContent`] (Megolm or an unmodelled algorithm) and never
+//! derives a key or decrypts. A Megolm implementation — device keys, olm
+//! sessions and the ratchet — is a security scope this crate does not take on;
+//! a consumer that owns the keys supplies the content. Compare
+//! [`MatrixAdapter`](crate::matrix::MatrixAdapter), which carries inbound
+//! `m.room.encrypted` events verbatim. The fields follow the Matrix
+//! Client-Server API v1.19, *End-to-End Encryption → `m.room.encrypted`*.
 //!
 //! # Quick start
 //!
@@ -99,9 +109,11 @@ pub use retry::{
 pub use testing::{RecordedRequest, RecordingSleeper, StubCounters, StubTransport};
 pub use transport::Transport;
 pub use types::{
-    MediaKind, MediaSendOutcome, MediaUpload, MxcUri, SendOutcome, TxnId, DEFAULT_MAX_UPLOAD_BYTES,
-    DEFAULT_TYPING_TIMEOUT_MS, MAX_CONTENT_BYTES, MAX_EVENT_TYPE_BYTES, MAX_ID_BYTES,
-    MAX_MXC_URI_BYTES, MAX_TXN_ID_BYTES,
+    EncryptedEventContent, MediaKind, MediaSendOutcome, MediaUpload, MegolmEncryptedContent,
+    MxcUri, SendOutcome, TxnId, DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_TYPING_TIMEOUT_MS,
+    MAX_CONTENT_BYTES, MAX_ENCRYPTED_CIPHERTEXT_BYTES, MAX_ENCRYPTED_DEVICE_ID_BYTES,
+    MAX_ENCRYPTED_SENDER_KEY_BYTES, MAX_ENCRYPTED_SESSION_ID_BYTES, MAX_EVENT_TYPE_BYTES,
+    MAX_ID_BYTES, MAX_MXC_URI_BYTES, MAX_TXN_ID_BYTES, MEGOLM_V1_AES_SHA2,
 };
 // `MAX_TXN_ID_BYTES` and friends are declared in `types` and re-exported above.
 
@@ -930,6 +942,126 @@ impl MatrixClient {
             kind: CallKind::Event {
                 room_id,
                 event_type: "m.reaction",
+                txn: &txn_id,
+                content,
+            },
+        };
+        let attempted = self
+            .execute(call, Operation::Idempotent, Some(&txn_id), decode_event_id)
+            .await?;
+        Ok(send_outcome(attempted, txn_id))
+    }
+
+    /// Sends a typed `m.room.encrypted` event, carrying the metadata verbatim.
+    ///
+    /// This is the **no-crypto** surface: the client validates the caller's
+    /// content and puts it on the wire, but never derives a Megolm session or
+    /// decrypts anything. A consumer that does own the keys supplies the
+    /// [`EncryptedEventContent`] and gets an ordinary transaction-keyed
+    /// [`SendOutcome`]; a consumer that only forwards events gets the algorithm,
+    /// ciphertext and session identity typed. The `content` shape is the Matrix
+    /// specification's *End-to-End Encryption → `m.room.encrypted`* section
+    /// (v1.19).
+    ///
+    /// # Errors
+    ///
+    /// [`OutboundError::InvalidRequest`] for an unusable room id, for a room id
+    /// the encrypted event cannot address, or for an
+    /// [`EncryptedEventContent::Other`] whose algorithm or fields do not
+    /// validate, [`OutboundError::MessageTooLong`] above [`MAX_CONTENT_BYTES`],
+    /// plus every delivery error.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use messenger_webhook::matrix_out::{
+    ///     ClientConfig, MatrixClient, MegolmEncryptedContent, StubTransport,
+    /// };
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let transport = Arc::new(StubTransport::new());
+    /// transport.push_json(200, r#"{"event_id":"$encrypted"}"#);
+    /// let client = MatrixClient::new(
+    ///     transport.clone(),
+    ///     ClientConfig::new("https://m.example")?,
+    ///     "syt_token_123456",
+    /// )?;
+    ///
+    /// let content = MegolmEncryptedContent::new(
+    ///     "AwgAEnB1cnBvc2U",
+    ///     "3C5BFWi2Y8MaVvjM8M22DBmh24PmgR0n",
+    ///     "JLAFKJWSCS",
+    ///     "lEuiRJBit0IG6nUf5pUzWTUEsRVVe/HJToXO1DfK7Jg",
+    /// )?;
+    /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// let outcome = runtime.block_on(client.send_encrypted("!r:m.example", content.into()))?;
+    /// assert_eq!(outcome.event_id, "$encrypted");
+    /// let body = transport.last_request().expect("sent").json()?;
+    /// assert_eq!(body["algorithm"], "m.megolm.v1.aes-sha2");
+    /// assert_eq!(body["device_id"], "JLAFKJWSCS");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_encrypted(
+        &self,
+        room_id: &str,
+        content: EncryptedEventContent,
+    ) -> OutboundResult<SendOutcome> {
+        self.send_encrypted_with_txn(TxnId::generate(), room_id, content)
+            .await
+    }
+
+    /// Sends a typed `m.room.encrypted` event under a caller-chosen transaction
+    /// id.
+    ///
+    /// Use this to repeat an encrypted send whose outcome was unclear: Matrix
+    /// de-duplicates on the transaction id exactly as for a plain event, so the
+    /// room never receives two copies.
+    ///
+    /// # Errors
+    ///
+    /// As [`send_encrypted`](Self::send_encrypted).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use messenger_webhook::matrix_out::{
+    ///     ClientConfig, MatrixClient, MegolmEncryptedContent, StubTransport, TxnId,
+    /// };
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let transport = Arc::new(StubTransport::new());
+    /// transport.push_json(200, r#"{"event_id":"$encrypted"}"#);
+    /// let client = MatrixClient::new(
+    ///     transport.clone(),
+    ///     ClientConfig::new("https://m.example")?,
+    ///     "syt_token_123456",
+    /// )?;
+    ///
+    /// let content = MegolmEncryptedContent::new("AAAA", "AAAA", "DEV", "SESS")?;
+    /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// let outcome = runtime.block_on(client.send_encrypted_with_txn(
+    ///     TxnId::new("enc-7")?,
+    ///     "!r:m.example",
+    ///     content.into(),
+    /// ))?;
+    /// assert_eq!(outcome.txn_id.as_str(), "enc-7");
+    /// assert!(transport.last_request().expect("sent").url.contains("/send/m.room.encrypted/"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_encrypted_with_txn(
+        &self,
+        txn_id: TxnId,
+        room_id: &str,
+        content: EncryptedEventContent,
+    ) -> OutboundResult<SendOutcome> {
+        types::validate_room_id(room_id)?;
+        let event_type = "m.room.encrypted";
+        types::validate_event_type(event_type)?;
+        let content = check_content(&content.to_value()?)?;
+        let call = Call {
+            kind: CallKind::Event {
+                room_id,
+                event_type,
                 txn: &txn_id,
                 content,
             },
