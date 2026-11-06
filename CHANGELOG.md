@@ -33,6 +33,17 @@ carry a `!` in the conventional-commit subject.
   surface is tracked in #12 (WhatsApp interactive replies), #13 (Matrix
   `formatted_body`) and #14 (outbound Telegram entities).
 
+### Fixed
+
+- **Header lookup no longer allocates on mixed-case queries.** `Headers::get`
+  copied the query into a fresh lower-cased `String` whenever it contained an
+  ASCII upper-case byte, then scanned the entries comparing owned strings; that
+  copy sat on the verification hot path every webhook request runs before
+  authentication. The lookup now compares in place with
+  `str::eq_ignore_ascii_case`, so the per-request allocation is gone and the
+  matching semantics are unchanged: ASCII case folds, non-ASCII bytes still
+  compare exactly. Closes #28.
+
 ### Breaking
 
 - `NormalizedMessage` gained the public field `spans`, so a struct literal that

@@ -114,10 +114,6 @@ impl Headers {
     /// ```
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&str> {
-        if name.bytes().any(|b| b.is_ascii_uppercase()) {
-            let lower = name.to_ascii_lowercase();
-            return self.lookup(&lower);
-        }
         self.lookup(name)
     }
 
@@ -146,10 +142,10 @@ impl Headers {
         self.entries.is_empty()
     }
 
-    fn lookup(&self, lower: &str) -> Option<&str> {
+    fn lookup(&self, name: &str) -> Option<&str> {
         self.entries
             .iter()
-            .find(|(name, _)| name == lower)
+            .find(|(stored, _)| stored.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
     }
 }

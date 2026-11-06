@@ -108,6 +108,37 @@ proptest! {
         }
     }
 
+    /// Header lookup answers with the stored value for every ASCII casing of
+    /// the stored name, and never matches a name that differs in more than
+    /// case. This is the in-place `eq_ignore_ascii_case` contract that replaced
+    /// the allocating lower-case copy on the verification hot path.
+    #[test]
+    fn header_lookup_is_case_insensitive(
+        name in "[a-zA-Z][a-zA-Z0-9-]{0,24}",
+        value in ".*",
+        casing in prop::collection::vec(any::<bool>(), 0..25),
+    ) {
+        let mut headers = Headers::new();
+        headers.insert(name.as_str(), value.as_str());
+
+        // Flip each character according to the generated casing pattern; the
+        // queried spelling is the same header name, only re-cased.
+        let mut cased = String::with_capacity(name.len());
+        for (index, ch) in name.chars().enumerate() {
+            let uppercase = casing.get(index).copied().unwrap_or(false);
+            if uppercase {
+                cased.push(ch.to_ascii_uppercase());
+            } else {
+                cased.push(ch.to_ascii_lowercase());
+            }
+        }
+        prop_assert_eq!(headers.get(&cased), Some(value.as_str()));
+
+        // A single appended byte makes it a different header name, not a match.
+        let longer = format!("{name}x");
+        prop_assert_eq!(headers.get(&longer), None);
+    }
+
     /// Unknown fields in a provider object survive in `raw`, so nothing the
     /// provider sent is silently lost.
     #[test]
