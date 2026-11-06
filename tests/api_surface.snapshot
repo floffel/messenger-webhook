@@ -36,7 +36,7 @@ src/lib.rs:use error::{Error,LimitUnit,Result}
 src/lib.rs:use headers::Headers
 src/lib.rs:use matrix::MatrixAdapter
 src/lib.rs:use model::SYNTHETIC_ID_PREFIX
-src/lib.rs:use model::{Attachment,AttachmentKind,Channel,ChannelName,DeliveryStatus,IdempotencyKey,InteractiveReply,NormalizedMessage,OutboundMessage,ProviderMethod,ProviderPayload,Reaction,RetryPolicy,MAX_CHANNEL_NAME_BYTES,MAX_IDEMPOTENCY_KEY_BYTES,MAX_INTERACTIVE_ID_BYTES,MAX_INTERACTIVE_TITLE_CHARS,}
+src/lib.rs:use model::{Attachment,AttachmentKind,Channel,ChannelName,DeliveryStatus,IdempotencyKey,InteractiveReply,NormalizedMessage,OutboundMessage,ProviderMethod,ProviderOperation,ProviderPayload,Reaction,RetryPolicy,MAX_CHANNEL_NAME_BYTES,MAX_IDEMPOTENCY_KEY_BYTES,MAX_INTERACTIVE_ID_BYTES,MAX_INTERACTIVE_TITLE_CHARS,}
 src/lib.rs:use registry::Registry
 src/lib.rs:use rich::{SpanError,TextFormat,TextSpan}
 src/lib.rs:use secret::Secret
@@ -198,6 +198,7 @@ src/model.rs:enum AttachmentKind
 src/model.rs:enum Channel
 src/model.rs:enum DeliveryStatus
 src/model.rs:enum ProviderMethod
+src/model.rs:enum ProviderOperation
 src/model.rs:enum RetryPolicy
 src/model.rs:impl Attachment:fn new
 src/model.rs:impl AttachmentKind:fn as_str
@@ -231,14 +232,17 @@ src/model.rs:impl OutboundMessage:fn text
 src/model.rs:impl OutboundMessage:fn with_spans
 src/model.rs:impl OutboundMessage:fn with_text_and_spans
 src/model.rs:impl ProviderMethod:fn as_str
+src/model.rs:impl ProviderOperation:fn as_str
 src/model.rs:impl ProviderPayload:fn body
 src/model.rs:impl ProviderPayload:fn channel
 src/model.rs:impl ProviderPayload:fn content_type
+src/model.rs:impl ProviderPayload:fn event_type
 src/model.rs:impl ProviderPayload:fn idempotency_key
 src/model.rs:impl ProviderPayload:fn into_body
 src/model.rs:impl ProviderPayload:fn json
 src/model.rs:impl ProviderPayload:fn method
 src/model.rs:impl ProviderPayload:fn new
+src/model.rs:impl ProviderPayload:fn operation
 src/model.rs:impl ProviderPayload:fn retry
 src/model.rs:impl ProviderPayload:fn with_retry
 src/model.rs:impl Reaction:fn add

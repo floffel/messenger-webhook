@@ -13,6 +13,7 @@ carry a `!` in the conventional-commit subject.
 ### Added
 
 - **Rich text and entities are normalized on both adapters.** Telegram message entities and `WhatsApp` interactive replies now normalize into typed inbound surfaces (`TextSpan`/`TextFormat` and `InteractiveReply`), and outbound Telegram spans are encoded back into `entities`/`caption_entities` with the 100-entity ceiling validated before the wire. Closes #6.
+- **Outbound edits and reactions are encoded per adapter.** `Adapter::encode` now turns `OutboundMessage::edit_of` and `OutboundMessage::reaction` into the provider's edit or reaction request instead of rejecting them: Telegram text edits become `editMessageText` and reactions `setMessageReaction`, a `WhatsApp` reaction becomes a Cloud API `reaction` message, and a Matrix reaction becomes an `m.reaction`/`m.annotation` event on top of the existing `m.replace` edit. `ProviderPayload::operation` reports `Message`, `Edit` or `Reaction`, and `ProviderPayload::event_type` carries the Matrix event type. A request a provider does not document stays an `Error::InvalidMessage` (the Cloud API has no edit endpoint, Telegram media edits need a provider file id, and a Matrix reaction removal is a redaction). Closes #8.
 
 ### Fixed
 

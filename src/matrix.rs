@@ -5,7 +5,11 @@
 //! application service authenticates with its `hs_token` as a bearer token.
 //! This module is pure: it never talks to a homeserver, it only normalises the
 //! events a homeserver pushes and builds the `content` a caller `PUT`s to
-//! `/rooms/{roomId}/send/m.room.message/{txnId}`.
+//! `/rooms/{roomId}/send/{eventType}/{txnId}`. Edits are `m.room.message`
+//! events that carry an `m.replace` relation and reactions are `m.reaction`
+//! events that carry an `m.annotation`; the returned
+//! [`ProviderPayload::event_type`](crate::ProviderPayload::event_type) reports
+//! which path the send belongs to.
 //!
 //! ```
 //! use messenger_webhook::{Adapter, Channel, MatrixAdapter, OutboundMessage};
@@ -32,7 +36,7 @@ use crate::id;
 use crate::json;
 use crate::model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, IdempotencyKey, NormalizedMessage,
-    OutboundMessage, ProviderMethod, ProviderPayload, Reaction, RetryPolicy,
+    OutboundMessage, ProviderMethod, ProviderOperation, ProviderPayload, Reaction, RetryPolicy,
 };
 use crate::rich::{TextFormat, TextSpan};
 use crate::secret::Secret;
@@ -209,6 +213,10 @@ impl Adapter for MatrixAdapter {
             });
         }
 
+        if let Some(reaction) = &message.reaction {
+            return encode_reaction(message, reaction);
+        }
+
         let text = message.text.as_deref().unwrap_or_default();
         let mut content = if let Some(attachment) = message.first_attachment() {
             media_content(attachment, text)?
@@ -226,6 +234,11 @@ impl Adapter for MatrixAdapter {
         };
 
         apply_relations(&mut content, message)?;
+        let operation = if message.edit_of.is_some() {
+            ProviderOperation::Edit
+        } else {
+            ProviderOperation::Message
+        };
         payload(
             Channel::Matrix,
             ProviderMethod::Put,
@@ -233,7 +246,72 @@ impl Adapter for MatrixAdapter {
             RetryPolicy::Safe,
             Some(matrix_transaction_key()),
         )
+        .map(|payload| payload.with_operation(operation, Some("m.room.message")))
     }
+}
+
+/// Builds the `m.reaction` content Matrix carries an annotation in.
+///
+/// A reaction is a normal room event whose type is `m.reaction`, so the send
+/// still goes to `PUT /rooms/{room}/send/m.reaction/{txn}`; only the
+/// `m.relates_to` relation marks it as an annotation. Removing a reaction is a
+/// redaction, not an empty annotation, so a removal is rejected here and
+/// belongs to `MatrixClient::redact`. See *Reactions* in the Client-Server API
+/// (<https://spec.matrix.org/v1.11/client-server-api/#events-1>).
+fn encode_reaction(message: &OutboundMessage, reaction: &Reaction) -> Result<ProviderPayload> {
+    if reaction.removed() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Matrix,
+            reason: "a Matrix reaction removal is a redaction; use MatrixClient::redact".to_owned(),
+        });
+    }
+    if message.first_attachment().is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Matrix,
+            reason: "a reaction cannot carry an attachment".to_owned(),
+        });
+    }
+    if message.edit_of.is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Matrix,
+            reason: "a reaction cannot also be an edit".to_owned(),
+        });
+    }
+    if message.interactive_reply.is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Matrix,
+            reason: "a reaction cannot carry an interactive reply".to_owned(),
+        });
+    }
+    if message.text.as_deref().is_some_and(|text| !text.is_empty()) {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Matrix,
+            reason: "a reaction cannot carry message text".to_owned(),
+        });
+    }
+    let target = reaction.message_id().trim();
+    if target.is_empty() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Matrix,
+            reason: "a reaction needs the event id it annotates".to_owned(),
+        });
+    }
+
+    let content = serde_json::json!({
+        "m.relates_to": {
+            "rel_type": "m.annotation",
+            "event_id": target,
+            "key": reaction.emoji(),
+        }
+    });
+    payload(
+        Channel::Matrix,
+        ProviderMethod::Put,
+        &content,
+        RetryPolicy::Safe,
+        Some(matrix_transaction_key()),
+    )
+    .map(|payload| payload.with_operation(ProviderOperation::Reaction, Some("m.reaction")))
 }
 
 /// Builds the transaction key Matrix needs to de-duplicate a send.

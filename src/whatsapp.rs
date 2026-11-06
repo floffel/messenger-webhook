@@ -6,7 +6,11 @@
 //! [`NormalizedMessage::status`] set and no text.
 //!
 //! Outbound, the same adapter turns a normalised message into the Cloud API
-//! request body and refuses to produce one the provider would reject:
+//! request body and refuses to produce one the provider would reject. A text,
+//! media or interactive send and a [`Reaction`] all use the same
+//! `POST /{phone-number-id}/messages` endpoint with a different `type`; the
+//! returned [`ProviderPayload::operation`](crate::ProviderPayload::operation)
+//! reports which:
 //!
 //! ```
 //! use messenger_webhook::{Adapter, Channel, OutboundMessage, WhatsAppAdapter};
@@ -25,7 +29,7 @@ use crate::id;
 use crate::json;
 use crate::model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, InteractiveReply, NormalizedMessage,
-    OutboundMessage, ProviderMethod, ProviderPayload, Reaction,
+    OutboundMessage, ProviderMethod, ProviderOperation, ProviderPayload, Reaction,
 };
 use crate::secret::Secret;
 use crate::signature::{self, META_SIGNATURE_HEADER};
@@ -224,6 +228,9 @@ impl Adapter for WhatsAppAdapter {
         let to = recipient(Channel::WhatsApp, message)?;
 
         let text = message.text.as_deref().unwrap_or_default();
+        if let Some(reaction) = &message.reaction {
+            return encode_reaction(to, message, reaction);
+        }
         let mut body = serde_json::Map::new();
         body.insert(
             "messaging_product".to_owned(),
@@ -291,10 +298,10 @@ impl Adapter for WhatsAppAdapter {
                     reason: "message has neither text nor an attachment".to_owned(),
                 });
             }
-            if message.edit_of.is_some() || message.reaction.is_some() {
+            if message.edit_of.is_some() {
                 return Err(Error::InvalidMessage {
                     channel: Channel::WhatsApp,
-                    reason: "edits and reactions need the Cloud API message id, not a send"
+                    reason: "the Cloud API documents no edit endpoint; send a new message instead"
                         .to_owned(),
                 });
             }
@@ -318,7 +325,83 @@ impl Adapter for WhatsAppAdapter {
             ProviderMethod::Post,
             &Value::Object(body),
         )
+        .map(|payload| payload.with_operation(ProviderOperation::Message, None))
     }
+}
+
+/// Builds the Cloud API `reaction` message Meta documents.
+///
+/// The body is the same `POST /{phone-number-id}/messages` envelope as a text
+/// send, with `type: "reaction"`; the target carries the `wamid.` id Meta
+/// assigned when it delivered the message, and an empty `emoji` removes the
+/// reaction. See *Reaction messages* in the Cloud API messages reference
+/// (<https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages#reaction-messages>).
+fn encode_reaction(
+    to: &str,
+    message: &OutboundMessage,
+    reaction: &Reaction,
+) -> Result<ProviderPayload> {
+    if message.first_attachment().is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::WhatsApp,
+            reason: "a reaction cannot carry an attachment".to_owned(),
+        });
+    }
+    if message.edit_of.is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::WhatsApp,
+            reason: "a reaction cannot also be an edit".to_owned(),
+        });
+    }
+    if message.interactive_reply.is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::WhatsApp,
+            reason: "a reaction cannot carry an interactive reply".to_owned(),
+        });
+    }
+    if message.text.as_deref().is_some_and(|text| !text.is_empty()) {
+        return Err(Error::InvalidMessage {
+            channel: Channel::WhatsApp,
+            reason: "a reaction cannot carry message text".to_owned(),
+        });
+    }
+    let target = reaction.message_id().trim();
+    if target.is_empty() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::WhatsApp,
+            reason: "a reaction needs the Cloud API message id it reacts to".to_owned(),
+        });
+    }
+
+    let mut reaction_body = serde_json::Map::new();
+    reaction_body.insert(
+        "message_id".to_owned(),
+        Value::String(reaction.message_id().to_owned()),
+    );
+    reaction_body.insert(
+        "emoji".to_owned(),
+        Value::String(reaction.emoji().to_owned()),
+    );
+
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "messaging_product".to_owned(),
+        Value::String("whatsapp".to_owned()),
+    );
+    body.insert(
+        "recipient_type".to_owned(),
+        Value::String("individual".to_owned()),
+    );
+    body.insert("to".to_owned(), Value::String(to.to_owned()));
+    body.insert("type".to_owned(), Value::String("reaction".to_owned()));
+    body.insert("reaction".to_owned(), Value::Object(reaction_body));
+
+    json_payload(
+        Channel::WhatsApp,
+        ProviderMethod::Post,
+        &Value::Object(body),
+    )
+    .map(|payload| payload.with_operation(ProviderOperation::Reaction, None))
 }
 
 /// Builds the `interactive` object for a reply button, validating the request
@@ -334,10 +417,11 @@ fn encode_reply_button(
             reason: "an interactive reply cannot carry an attachment".to_owned(),
         });
     }
-    if message.edit_of.is_some() || message.reaction.is_some() {
+    if message.edit_of.is_some() {
         return Err(Error::InvalidMessage {
             channel: Channel::WhatsApp,
-            reason: "edits and reactions need the Cloud API message id, not a send".to_owned(),
+            reason: "the Cloud API documents no edit endpoint; send a new message instead"
+                .to_owned(),
         });
     }
     if text.is_empty() {

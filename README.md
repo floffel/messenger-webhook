@@ -16,9 +16,9 @@ a homeserver client are different jobs and only one of them needs an HTTP stack.
 
 | provider | inbound | verification | outbound |
 |----------|---------|--------------|----------|
-| `whatsapp` | `entry[].changes[].value.messages` / `statuses` | HMAC-SHA256 `X-Hub-Signature-256` | text, media link |
-| `telegram` | `message`, edits, channel posts, `message_reaction` | `X-Telegram-Bot-Api-Secret-Token` | `sendMessage` / send-media |
-| `matrix` | `m.room.message`, `m.reaction`, `m.receipt`, unknown types | `Authorization: Bearer <hs_token>` | `m.room.message` content |
+| `whatsapp` | `entry[].changes[].value.messages` / `statuses` | HMAC-SHA256 `X-Hub-Signature-256` | text, media link, reaction |
+| `telegram` | `message`, edits, channel posts, `message_reaction` | `X-Telegram-Bot-Api-Secret-Token` | `sendMessage` / send-media, `editMessageText`, `setMessageReaction` |
+| `matrix` | `m.room.message`, `m.reaction`, `m.receipt`, unknown types | `Authorization: Bearer <hs_token>` | `m.room.message` content, `m.reaction` annotation |
 
 All three provider features are on by default; each module is independently
 gated.
@@ -90,9 +90,13 @@ assert_eq!(payload.retry(), messenger_webhook::RetryPolicy::UnsafeUnlessKeyPrese
 let body = payload.json()?;              // {"chat_id":"-1001","text":"Hallo"}
 ```
 
-Media, replies, threads and edits are encoded too (`attachments`, `reply_to`,
-`thread_id`, `edit_of`). Provider limits are enforced before a payload is
-produced:
+Media, replies, threads, edits and reactions are encoded too (`attachments`,
+`reply_to`, `thread_id`, `edit_of`, `reaction`). A send, an edit and a reaction
+can share one HTTP method, so the payload also reports *which* request it is:
+`ProviderPayload::operation()` is `Message`, `Edit` or `Reaction`, and
+`ProviderPayload::event_type()` carries the Matrix event type
+(`m.room.message` or `m.reaction`) that belongs in the request path. Provider
+limits are enforced before a payload is produced:
 
 | limit | value | error |
 |-------|-------|-------|
@@ -108,8 +112,9 @@ the trimmed value must be printable and within `MAX_RECIPIENT_BYTES`, and each
 channel adds its own shape rule (`WhatsApp` E.164 digits, Telegram a signed
 integer chat id, Matrix a `!`-prefixed room id). Messages the provider cannot
 express (no text and no media, unsupported media kind, non-`mxc://` Matrix
-urls, edits) fail with `Error::InvalidMessage` instead of being sent as
-something the provider would reject.
+urls, a non-integer Telegram id, an edit the provider has no endpoint for) fail
+with `Error::InvalidMessage` instead of being sent as something the provider
+would reject.
 
 The payload also carries the retry contract. `ProviderPayload::retry()` is
 `UnsafeUnlessKeyPresent` for the WhatsApp and Telegram POST endpoints: a caller
@@ -470,10 +475,15 @@ Each of these is a decision, not an omission:
   or long polling, no E2EE, no room administration (create/join/invite/state).
 - **No Matrix E2EE.** `m.room.encrypted` events are carried verbatim
   (`provider_type`, `raw`), never decrypted.
-- **No edits/reactions outbound.** Telegram edits require `editMessageText` on
-  the original message id and `WhatsApp` reactions the Cloud API message id;
-  those are separate endpoints, so `encode` returns `Error::InvalidMessage`
-  rather than silently sending a duplicate message.
+- **Outbound edits and reactions are provider-shaped, not universal.**
+  `encode` sends a Telegram text edit as `editMessageText` and a reaction as
+  `setMessageReaction`, a `WhatsApp` reaction as a Cloud API `reaction` message,
+  and a Matrix reaction as an `m.reaction`/`m.annotation` event. What a provider
+  does not document stays an `Error::InvalidMessage` instead of a duplicate
+  message: the Cloud API has no edit endpoint, Telegram media edits
+  (`editMessageMedia`/`editMessageCaption`) need a provider file id this crate
+  does not model, and a Matrix reaction removal is a redaction
+  (`MatrixClient::redact`), not an empty annotation.
 - **No SHA-1 signatures.** Meta's deprecated `X-Hub-Signature` header is
   rejected; only `X-Hub-Signature-256` is accepted.
 - **No event is dropped for want of an id.** A provider that omits its own id
