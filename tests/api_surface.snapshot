@@ -231,6 +231,7 @@ src/registry.rs:impl Registry:fn is_empty
 src/registry.rs:impl Registry:fn len
 src/registry.rs:impl Registry:fn new
 src/registry.rs:impl Registry:fn register
+src/registry.rs:impl Registry:fn register_shared
 src/registry.rs:impl Registry:fn try_register
 src/registry.rs:impl Registry:fn verify
 src/registry.rs:struct Registry

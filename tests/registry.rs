@@ -4,6 +4,7 @@ use messenger_webhook::{
     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderPayload,
     Registry, MAX_BODY_BYTES,
 };
+use std::sync::Arc;
 
 #[test]
 fn unknown_channel_is_a_typed_error() {
@@ -124,6 +125,47 @@ fn try_register_reports_a_duplicate_instead_of_replacing() {
             Err(Error::BadSignature { .. })
         ));
     }
+}
+
+#[test]
+#[cfg(feature = "telegram")]
+fn get_returns_a_shared_adapter_that_outlives_registry_changes() {
+    use messenger_webhook::TelegramAdapter;
+
+    let mut registry = Registry::new();
+    registry.register(TelegramAdapter::new("first"));
+    let first = registry.get(&Channel::Telegram).unwrap();
+
+    registry.register(TelegramAdapter::new("second"));
+
+    let first_headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "first")]);
+    assert!(first.verify(&first_headers, b"{}").is_ok());
+
+    let second_headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "second")]);
+    assert!(registry
+        .verify(&Channel::Telegram, &second_headers, b"{}")
+        .is_ok());
+    assert!(matches!(
+        registry.verify(&Channel::Telegram, &first_headers, b"{}"),
+        Err(Error::BadSignature { .. })
+    ));
+}
+
+#[test]
+#[cfg(feature = "telegram")]
+fn register_shared_keeps_the_callers_arc() {
+    use messenger_webhook::TelegramAdapter;
+
+    let shared: Arc<dyn Adapter> = Arc::new(TelegramAdapter::new("secret"));
+    let mut registry = Registry::new();
+    registry.register_shared(Arc::clone(&shared));
+
+    let fetched = registry.get(&Channel::Telegram).unwrap();
+    assert!(Arc::ptr_eq(&shared, &fetched));
+
+    drop(registry);
+    let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "secret")]);
+    assert!(shared.verify(&headers, b"{}").is_ok());
 }
 
 #[test]
@@ -337,6 +379,7 @@ fn registry_is_send_sync_and_debug_is_redacted() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Registry>();
     assert_send_sync::<Box<dyn messenger_webhook::Adapter>>();
+    assert_send_sync::<Arc<dyn messenger_webhook::Adapter>>();
 
     #[cfg(feature = "whatsapp")]
     {
