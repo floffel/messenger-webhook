@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use messenger_webhook::matrix_out::testing::RecordedRequest;
-use messenger_webhook::matrix_out::transport::{Method, TransportError, TransportErrorKind};
+use messenger_webhook::matrix_out::transport::{
+    Method, Response, TransportError, TransportErrorKind,
+};
 use messenger_webhook::matrix_out::{
     ClientConfig, MatrixClient, MediaKind, MediaUpload, OutboundError, RecordingSleeper,
     RetryPolicy, StubTransport, TxnId,
@@ -240,6 +242,26 @@ fn an_upload_is_never_retried_after_a_5xx() {
         harness.transport.call_count(),
         1,
         "a non-idempotent upload must not be repeated after a 5xx"
+    );
+    assert_eq!(harness.sleeper.delays(), [] as [std::time::Duration; 0]);
+}
+
+#[test]
+fn an_upload_is_not_retried_after_a_proxy_429() {
+    let harness = harness(|config| config);
+    harness
+        .transport
+        .push(Response::new(429, Vec::new()).with_header("retry-after", "2"));
+
+    let media = MediaUpload::new(b"\x89PNG", "image/png");
+    let error = block_on(harness.client.upload_media(&media)).expect_err("proxy 429");
+
+    assert!(error.is_ambiguous(), "{error:?}");
+    assert!(!error.is_retryable(), "{error:?}");
+    assert_eq!(
+        harness.transport.call_count(),
+        1,
+        "a non-idempotent upload must not be repeated after a proxy 429"
     );
     assert_eq!(harness.sleeper.delays(), [] as [std::time::Duration; 0]);
 }
