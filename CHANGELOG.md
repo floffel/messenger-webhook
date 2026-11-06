@@ -34,6 +34,14 @@ carry a `!` in the conventional-commit subject.
 
 ### Changed
 
+- **Breaking:** `Operation` now separates transaction-keyed sends from keyless
+  state-setting writes. `Operation::Idempotent` means a send that carries a
+  `TxnId`; typing notifications and read receipts use
+  `Operation::StateSetting`. `RetryPolicy::classify` and
+  `RetryPolicy::classify_transport` take the optional transaction id and fail
+  closed to `Verdict::Ambiguous` when an `Operation::Idempotent` request has no
+  key, so a `5xx` or timeout cannot duplicate a send merely because a caller
+  asserted the enum. Closes #74.
 - **Matrix identifiers and drifted event content are validated against their real shapes.** The Matrix adapter now rejects bare `"!"` room ids and bare `"mxc://"` media URIs, requires reactions to carry an `m.annotation` relation, and normalizes inbound edits from `m.new_content` instead of the replacement fallback body; the typed `ruma` parser remains unavailable because `ruma-common` pulls in `as_variant` under `MPL-2.0`, which `deny.toml` rejects. Closes #43.
 - **Webhook parsing now has a type-enforced verify-first path.** `Adapter`
   gains `verify_request`, returning a `VerifiedBody` proof, plus

@@ -3,25 +3,28 @@
 //! Whether an attempt may be repeated is not a property of the status code
 //! alone. A `503` on `GET /account/whoami` is a retry; a `503` on a media upload
 //! is an unknown outcome, because the bytes may already be stored. The pair
-//! (status, [`Operation`]) decides, and this module is the single place that
-//! decides it — so the client, the tests and the documentation cannot drift
-//! apart.
+//! (status, [`Operation`], transaction id) decides, and this module is the
+//! single place that decides it — so the client, the tests and the
+//! documentation cannot drift apart.
 //!
-//! | outcome | [`Operation::Read`] | [`Operation::Idempotent`] | [`Operation::NonIdempotent`] |
-//! |---------|------------------|--------------------------|------------------------------|
-//! | `2xx` | success | success | success |
-//! | `429` with a Matrix `M_LIMIT_EXCEEDED` body | retry after the server's `retry_after_ms` | same | same — a homeserver rate limit is answered before the request is processed |
-//! | `429` without a Matrix body | retry from the header or backoff | same | **ambiguous** — a reverse proxy may answer after receiving the body |
-//! | `5xx` | retry | retry | **ambiguous** — the write may have landed |
-//! | `4xx` (other) | rejected | rejected | rejected |
-//! | connect failure | retry | retry | retry — nothing was written |
-//! | timeout / reset | retry | retry | **ambiguous** |
-//! | invalid request before write | rejected | rejected | rejected — fix the request |
+//! | outcome | [`Operation::Read`] | [`Operation::StateSetting`] | [`Operation::Idempotent`] with a [`TxnId`] | [`Operation::Idempotent`] without one | [`Operation::NonIdempotent`] |
+//! |---------|------------------|-----------------------------|--------------------------------|-------------------------------|------------------------------|
+//! | `2xx` | success | success | success | success | success |
+//! | `429` with a Matrix `M_LIMIT_EXCEEDED` body | retry after the server's `retry_after_ms` | same | same | same | same — a homeserver rate limit is answered before the request is processed |
+//! | `429` without a Matrix body | retry from the header or backoff | same | same | **ambiguous** | **ambiguous** — a reverse proxy may answer after receiving the body |
+//! | `5xx` | retry | retry | retry | **ambiguous** | **ambiguous** — the write may have landed |
+//! | `4xx` (other) | rejected | rejected | rejected | rejected | rejected |
+//! | connect failure | retry | retry | retry | retry | retry — nothing was written |
+//! | timeout / reset | retry | retry | retry | **ambiguous** | **ambiguous** |
+//! | invalid request before write | rejected | rejected | rejected | rejected | rejected — fix the request |
 //!
-//! A send keyed by a [`TxnId`](crate::matrix_out::TxnId) counts as
+//! A send keyed by a [`TxnId`] counts as
 //! [`Operation::Idempotent`]: repeating it with the same transaction id returns
 //! the original event instead of creating a second one. That is the only reason
-//! a `5xx` on a send may be retried at all.
+//! a `5xx` on a send may be retried at all, so [`RetryPolicy::classify`] and
+//! [`RetryPolicy::classify_transport`] take the transaction id alongside the
+//! operation. An [`Operation::Idempotent`] without a transaction id fails closed
+//! to [`Verdict::Ambiguous`] on any failure that may have written.
 
 use std::time::Duration;
 
@@ -30,6 +33,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::matrix_out::transport::{Response, TransportError, TransportErrorKind};
+use crate::matrix_out::types::TxnId;
 
 /// Default number of attempts per operation, including the first one.
 ///
@@ -83,6 +87,8 @@ const MAX_RETRY_AFTER_BODY_BYTES: usize = 8 * 1024;
 /// use messenger_webhook::matrix_out::Operation;
 ///
 /// assert!(Operation::Read.is_repeatable());
+/// assert!(Operation::StateSetting.is_repeatable());
+/// assert!(Operation::Idempotent.is_repeatable());
 /// assert!(!Operation::NonIdempotent.is_repeatable());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,8 +96,12 @@ const MAX_RETRY_AFTER_BODY_BYTES: usize = 8 * 1024;
 pub enum Operation {
     /// Changes nothing: `GET /account/whoami`. Always safe to repeat.
     Read,
-    /// Changes state, but repeating it converges: a transaction-keyed send, a
-    /// typing notification, a read receipt.
+    /// Changes state, but repeating it converges without needing a caller
+    /// supplied reconciliation key: typing notifications and read receipts.
+    StateSetting,
+    /// Changes state under a transaction id: a send or a redaction. Repeating
+    /// this operation is safe only when the same [`TxnId`]
+    /// travels with it, so classification also takes the id.
     Idempotent,
     /// Creates something new on every attempt: a media upload. Repeating it
     /// leaves an orphaned upload and gives the caller no way to know whether the
@@ -102,9 +112,15 @@ pub enum Operation {
 impl Operation {
     /// Whether an uncertain outcome may be retried at all.
     ///
+    /// This is the operation class only. For a transaction-keyed send, use
+    /// [`Operation::is_repeatable_with`] with the request's transaction id:
+    /// [`Operation::Idempotent`] is repeatable as a class but fails closed when
+    /// no key is present.
+    ///
     /// ```
     /// use messenger_webhook::matrix_out::Operation;
     ///
+    /// assert!(Operation::StateSetting.is_repeatable());
     /// assert!(Operation::Idempotent.is_repeatable());
     /// assert!(!Operation::NonIdempotent.is_repeatable());
     /// ```
@@ -113,17 +129,43 @@ impl Operation {
         !matches!(self, Self::NonIdempotent)
     }
 
+    /// Whether an uncertain outcome may be retried with the given transaction
+    /// id. A transaction-keyed send is repeatable only when its `TxnId` is
+    /// present; without one it must be treated as ambiguous.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::{Operation, TxnId};
+    ///
+    /// let txn = TxnId::new("send-1")?;
+    /// assert!(Operation::Read.is_repeatable_with(None));
+    /// assert!(Operation::StateSetting.is_repeatable_with(None));
+    /// assert!(Operation::Idempotent.is_repeatable());
+    /// assert!(!Operation::Idempotent.is_repeatable_with(None));
+    /// assert!(Operation::Idempotent.is_repeatable_with(Some(&txn)));
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub const fn is_repeatable_with(self, txn: Option<&TxnId>) -> bool {
+        match self {
+            Self::Read | Self::StateSetting => true,
+            Self::Idempotent => txn.is_some(),
+            Self::NonIdempotent => false,
+        }
+    }
+
     /// Stable lower-case name, used in log lines.
     ///
     /// ```
     /// use messenger_webhook::matrix_out::Operation;
     ///
+    /// assert_eq!(Operation::StateSetting.as_str(), "state-setting");
     /// assert_eq!(Operation::NonIdempotent.as_str(), "non-idempotent");
     /// ```
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
+            Self::StateSetting => "state-setting",
             Self::Idempotent => "idempotent",
             Self::NonIdempotent => "non-idempotent",
         }
@@ -534,28 +576,45 @@ impl RetryPolicy {
     ///
     /// ```
     /// use messenger_webhook::matrix_out::transport::Response;
-    /// use messenger_webhook::matrix_out::{Operation, RetryPolicy, Verdict};
+    /// use messenger_webhook::matrix_out::{Operation, RetryPolicy, TxnId, Verdict};
     ///
     /// let policy = RetryPolicy::default();
     /// assert_eq!(
-    ///     policy.classify(1, &Response::json(200, "{}"), Operation::Read),
+    ///     policy.classify(1, &Response::json(200, "{}"), Operation::Read, None),
     ///     Verdict::Success,
     /// );
     /// assert_eq!(
-    ///     policy.classify(1, &Response::json(503, "{}"), Operation::NonIdempotent),
+    ///     policy.classify(1, &Response::json(503, "{}"), Operation::NonIdempotent, None),
     ///     Verdict::Ambiguous,
     /// );
+    /// let txn = TxnId::new("send-1")?;
+    /// assert_eq!(
+    ///     policy.classify(1, &Response::json(503, "{}"), Operation::Idempotent, None),
+    ///     Verdict::Ambiguous,
+    /// );
+    /// assert!(matches!(
+    ///     policy.classify(1, &Response::json(503, "{}"), Operation::Idempotent, Some(&txn)),
+    ///     Verdict::Retry { .. },
+    /// ));
     /// let proxy = Response::new(429, Vec::new()).with_header("retry-after", "2");
     /// assert_eq!(
-    ///     policy.classify(1, &proxy, Operation::NonIdempotent),
+    ///     policy.classify(1, &proxy, Operation::NonIdempotent, None),
     ///     Verdict::Ambiguous,
     /// );
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
     /// ```
     #[must_use]
-    pub fn classify(&self, attempt: u32, response: &Response, operation: Operation) -> Verdict {
+    pub fn classify(
+        &self,
+        attempt: u32,
+        response: &Response,
+        operation: Operation,
+        txn: Option<&TxnId>,
+    ) -> Verdict {
+        let repeatable = operation.is_repeatable_with(txn);
         match response.status {
             200..=299 => Verdict::Success,
-            429 if !operation.is_repeatable() && !matrix_rate_limit(response) => Verdict::Ambiguous,
+            429 if !repeatable && !matrix_rate_limit(response) => Verdict::Ambiguous,
             429 => {
                 let wait = retry_after_ms(response).unwrap_or_else(|| self.retry_delay(attempt));
                 // A rate limit still costs an attempt: the budget bounds every
@@ -566,7 +625,7 @@ impl RetryPolicy {
                     Verdict::Retry { delay: wait }
                 }
             }
-            500..=599 if !operation.is_repeatable() => Verdict::Ambiguous,
+            500..=599 if !repeatable => Verdict::Ambiguous,
             500..=599 => self.retry_or_exhausted(attempt),
             _ => Verdict::Rejected,
         }
@@ -576,27 +635,38 @@ impl RetryPolicy {
     ///
     /// ```
     /// use messenger_webhook::matrix_out::transport::{TransportError, TransportErrorKind};
-    /// use messenger_webhook::matrix_out::{Operation, RetryPolicy, Verdict};
+    /// use messenger_webhook::matrix_out::{Operation, RetryPolicy, TxnId, Verdict};
     ///
     /// let policy = RetryPolicy::default();
     /// // Nothing was written, so even an upload may be repeated.
     /// assert!(matches!(
-    ///     policy.classify_transport(1, &TransportError::connect("dns"), Operation::NonIdempotent),
+    ///     policy.classify_transport(1, &TransportError::connect("dns"), Operation::NonIdempotent, None),
     ///     Verdict::Retry { .. },
     /// ));
     /// // A timeout may have been applied.
     /// assert_eq!(
-    ///     policy.classify_transport(1, &TransportError::timeout("30s"), Operation::NonIdempotent),
+    ///     policy.classify_transport(1, &TransportError::timeout("30s"), Operation::NonIdempotent, None),
     ///     Verdict::Ambiguous,
     /// );
+    /// let txn = TxnId::new("send-1")?;
+    /// assert_eq!(
+    ///     policy.classify_transport(1, &TransportError::timeout("30s"), Operation::Idempotent, None),
+    ///     Verdict::Ambiguous,
+    /// );
+    /// assert!(matches!(
+    ///     policy.classify_transport(1, &TransportError::timeout("30s"), Operation::Idempotent, Some(&txn)),
+    ///     Verdict::Retry { .. },
+    /// ));
     /// assert_eq!(
     ///     policy.classify_transport(
     ///         1,
     ///         &TransportError::new(TransportErrorKind::InvalidRequest, "bad header"),
     ///         Operation::NonIdempotent,
+    ///         None,
     ///     ),
     ///     Verdict::Rejected,
     /// );
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
     /// ```
     #[must_use]
     pub fn classify_transport(
@@ -604,12 +674,12 @@ impl RetryPolicy {
         attempt: u32,
         error: &TransportError,
         operation: Operation,
+        txn: Option<&TxnId>,
     ) -> Verdict {
+        let repeatable = operation.is_repeatable_with(txn);
         match error.kind {
             TransportErrorKind::Connect => self.retry_or_exhausted(attempt),
-            TransportErrorKind::Timeout | TransportErrorKind::Other
-                if operation.is_repeatable() =>
-            {
+            TransportErrorKind::Timeout | TransportErrorKind::Other if repeatable => {
                 self.retry_or_exhausted(attempt)
             }
             TransportErrorKind::Timeout | TransportErrorKind::Other => Verdict::Ambiguous,
@@ -797,16 +867,16 @@ mod tests {
             let response = response(status);
             assert_retry_window(
                 &policy,
-                policy.classify(1, &response, Operation::Read),
+                policy.classify(1, &response, Operation::Read, None),
                 read,
             );
             assert_retry_window(
                 &policy,
-                policy.classify(1, &response, Operation::Idempotent),
+                policy.classify(1, &response, Operation::StateSetting, None),
                 idempotent,
             );
             assert_eq!(
-                policy.classify(1, &response, Operation::NonIdempotent),
+                policy.classify(1, &response, Operation::NonIdempotent, None),
                 non_idempotent,
                 "{status}"
             );
@@ -817,17 +887,17 @@ mod tests {
     fn the_attempt_budget_ends_in_exhausted_not_ambiguous() {
         let policy = RetryPolicy::default().with_max_attempts(2).expect("valid");
         assert!(matches!(
-            policy.classify(1, &response(503), Operation::Read),
+            policy.classify(1, &response(503), Operation::Read, None),
             Verdict::Retry { .. }
         ));
         assert_eq!(
-            policy.classify(2, &response(503), Operation::Read),
+            policy.classify(2, &response(503), Operation::Read, None),
             Verdict::Exhausted
         );
         // A single-attempt policy never retries.
         let single = RetryPolicy::default().with_max_attempts(1).expect("valid");
         assert_eq!(
-            single.classify(1, &response(503), Operation::Idempotent),
+            single.classify(1, &response(503), Operation::StateSetting, None),
             Verdict::Exhausted
         );
     }
@@ -837,16 +907,16 @@ mod tests {
         let single = RetryPolicy::default().with_max_attempts(1).expect("valid");
         let response = Response::json(429, r#"{"retry_after_ms":10}"#);
         assert_eq!(
-            single.classify(1, &response, Operation::Idempotent),
+            single.classify(1, &response, Operation::StateSetting, None),
             Verdict::Exhausted
         );
         let two = RetryPolicy::default().with_max_attempts(2).expect("valid");
         assert!(matches!(
-            two.classify(1, &response, Operation::Idempotent),
+            two.classify(1, &response, Operation::StateSetting, None),
             Verdict::Retry { .. }
         ));
         assert_eq!(
-            two.classify(2, &response, Operation::Idempotent),
+            two.classify(2, &response, Operation::StateSetting, None),
             Verdict::Exhausted
         );
     }
@@ -859,7 +929,7 @@ mod tests {
             r#"{"errcode":"M_LIMIT_EXCEEDED","error":"Too many requests","retry_after_ms":2000}"#,
         );
         assert_eq!(
-            policy.classify(1, &response, Operation::NonIdempotent),
+            policy.classify(1, &response, Operation::NonIdempotent, None),
             Verdict::Retry {
                 delay: Duration::from_secs(2)
             }
@@ -873,21 +943,21 @@ mod tests {
         let policy = RetryPolicy::default();
         let proxy = Response::new(429, Vec::new()).with_header("retry-after", "2");
         assert_eq!(
-            policy.classify(1, &proxy, Operation::NonIdempotent),
+            policy.classify(1, &proxy, Operation::NonIdempotent, None),
             Verdict::Ambiguous
         );
         assert!(matches!(
-            policy.classify(1, &proxy, Operation::Read),
+            policy.classify(1, &proxy, Operation::Read, None),
             Verdict::Retry { .. }
         ));
 
         let non_matrix = Response::json(429, r#"{"retry_after_ms":2000}"#);
         assert_eq!(
-            policy.classify(1, &non_matrix, Operation::NonIdempotent),
+            policy.classify(1, &non_matrix, Operation::NonIdempotent, None),
             Verdict::Ambiguous
         );
         assert!(matches!(
-            policy.classify(1, &non_matrix, Operation::Read),
+            policy.classify(1, &non_matrix, Operation::Read, None),
             Verdict::Retry { .. }
         ));
     }
@@ -900,7 +970,7 @@ mod tests {
             r#"{"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":2000}"#,
         );
         assert_eq!(
-            policy.classify(1, &response, Operation::NonIdempotent),
+            policy.classify(1, &response, Operation::NonIdempotent, None),
             Verdict::Retry {
                 delay: Duration::from_secs(2)
             }
@@ -911,7 +981,7 @@ mod tests {
             br#"{"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":1}"#.to_vec(),
         );
         assert_eq!(
-            policy.classify(1, &boundary, Operation::NonIdempotent),
+            policy.classify(1, &boundary, Operation::NonIdempotent, None),
             Verdict::Retry {
                 delay: Duration::from_millis(1)
             }
@@ -926,7 +996,12 @@ mod tests {
         at_limit.extend_from_slice(prefix);
         at_limit.resize(MAX_RETRY_AFTER_BODY_BYTES, b' ');
         assert_eq!(
-            policy.classify(1, &Response::new(429, at_limit), Operation::NonIdempotent),
+            policy.classify(
+                1,
+                &Response::new(429, at_limit),
+                Operation::NonIdempotent,
+                None
+            ),
             Verdict::Retry {
                 delay: Duration::from_millis(250)
             }
@@ -936,7 +1011,12 @@ mod tests {
         over_limit.extend_from_slice(prefix);
         over_limit.resize(MAX_RETRY_AFTER_BODY_BYTES + 1, b' ');
         assert_eq!(
-            policy.classify(1, &Response::new(429, over_limit), Operation::NonIdempotent),
+            policy.classify(
+                1,
+                &Response::new(429, over_limit),
+                Operation::NonIdempotent,
+                None
+            ),
             Verdict::Ambiguous
         );
     }
@@ -947,7 +1027,7 @@ mod tests {
         let bare = Response::json(429, r#"{"errcode":"M_LIMIT_EXCEEDED"}"#);
         assert_retry_window(
             &policy,
-            policy.classify(2, &bare, Operation::Read),
+            policy.classify(2, &bare, Operation::Read, None),
             Verdict::Retry {
                 delay: policy.backoff(2),
             },
@@ -955,14 +1035,14 @@ mod tests {
         let garbage = Response::json(429, "not json at all");
         assert_retry_window(
             &policy,
-            policy.classify(1, &garbage, Operation::Read),
+            policy.classify(1, &garbage, Operation::Read, None),
             Verdict::Retry {
                 delay: policy.backoff(1),
             },
         );
         let empty = Response::new(429, Vec::new());
         assert!(matches!(
-            policy.classify(1, &empty, Operation::Read),
+            policy.classify(1, &empty, Operation::Read, None),
             Verdict::Retry { .. }
         ));
     }
@@ -972,7 +1052,7 @@ mod tests {
         let policy = RetryPolicy::default();
         let response = Response::new(429, Vec::new()).with_header("Retry-After", "3");
         assert_eq!(
-            policy.classify(1, &response, Operation::Read),
+            policy.classify(1, &response, Operation::Read, None),
             Verdict::Retry {
                 delay: Duration::from_secs(3)
             }
@@ -980,7 +1060,7 @@ mod tests {
         let nonsense = Response::new(429, Vec::new()).with_header("retry-after", "soon");
         assert_retry_window(
             &policy,
-            policy.classify(1, &nonsense, Operation::Read),
+            policy.classify(1, &nonsense, Operation::Read, None),
             Verdict::Retry {
                 delay: policy.backoff(1),
             },
@@ -994,12 +1074,12 @@ mod tests {
             .expect("valid");
         let response = Response::json(429, r#"{"retry_after_ms":1001}"#);
         assert_eq!(
-            policy.classify(1, &response, Operation::Read),
+            policy.classify(1, &response, Operation::Read, None),
             Verdict::Exhausted
         );
         let exactly = Response::json(429, r#"{"retry_after_ms":1000}"#);
         assert!(matches!(
-            policy.classify(1, &exactly, Operation::Read),
+            policy.classify(1, &exactly, Operation::Read, None),
             Verdict::Retry { .. }
         ));
     }
@@ -1055,7 +1135,12 @@ mod tests {
     fn transport_failures_are_classified_by_the_write_boundary() {
         let policy = RetryPolicy::default();
         assert!(matches!(
-            policy.classify_transport(1, &TransportError::connect("dns"), Operation::NonIdempotent),
+            policy.classify_transport(
+                1,
+                &TransportError::connect("dns"),
+                Operation::NonIdempotent,
+                None
+            ),
             Verdict::Retry { .. }
         ));
         for error in [
@@ -1063,11 +1148,11 @@ mod tests {
             TransportError::other("connection reset"),
         ] {
             assert_eq!(
-                policy.classify_transport(1, &error, Operation::NonIdempotent),
+                policy.classify_transport(1, &error, Operation::NonIdempotent, None),
                 Verdict::Ambiguous
             );
             assert!(matches!(
-                policy.classify_transport(1, &error, Operation::Read),
+                policy.classify_transport(1, &error, Operation::Read, None),
                 Verdict::Retry { .. }
             ));
         }
@@ -1076,6 +1161,7 @@ mod tests {
                 1,
                 &TransportError::new(TransportErrorKind::InvalidRequest, "bad header"),
                 Operation::NonIdempotent,
+                None,
             ),
             Verdict::Rejected
         );
@@ -1085,7 +1171,7 @@ mod tests {
     fn an_exhausted_transport_budget_is_exhausted_for_every_operation() {
         let policy = RetryPolicy::default().with_max_attempts(1).expect("valid");
         assert_eq!(
-            policy.classify_transport(1, &TransportError::connect("dns"), Operation::Read),
+            policy.classify_transport(1, &TransportError::connect("dns"), Operation::Read, None),
             Verdict::Exhausted
         );
     }
@@ -1113,11 +1199,57 @@ mod tests {
     #[test]
     fn operation_names_and_repeatability() {
         assert_eq!(Operation::Read.as_str(), "read");
+        assert_eq!(Operation::StateSetting.as_str(), "state-setting");
         assert_eq!(Operation::Idempotent.as_str(), "idempotent");
         assert_eq!(Operation::NonIdempotent.as_str(), "non-idempotent");
         assert!(Operation::Read.is_repeatable());
+        assert!(Operation::StateSetting.is_repeatable());
         assert!(Operation::Idempotent.is_repeatable());
+        assert!(
+            Operation::Idempotent.is_repeatable_with(Some(&TxnId::new("send-1").expect("valid")))
+        );
+        assert!(!Operation::Idempotent.is_repeatable_with(None));
         assert!(!Operation::NonIdempotent.is_repeatable());
+    }
+
+    #[test]
+    fn a_keyless_idempotent_operation_fails_closed_to_ambiguous() {
+        let policy = RetryPolicy::default();
+        let txn = TxnId::new("send-1").expect("valid");
+        for response in [response(503), Response::json(503, "{}")] {
+            assert_eq!(
+                policy.classify(1, &response, Operation::Idempotent, None),
+                Verdict::Ambiguous
+            );
+            assert!(matches!(
+                policy.classify(1, &response, Operation::Idempotent, Some(&txn)),
+                Verdict::Retry { .. } | Verdict::Exhausted
+            ));
+        }
+        for error in [
+            TransportError::timeout("30s"),
+            TransportError::other("connection reset"),
+        ] {
+            assert_eq!(
+                policy.classify_transport(1, &error, Operation::Idempotent, None),
+                Verdict::Ambiguous
+            );
+            assert!(matches!(
+                policy.classify_transport(1, &error, Operation::Idempotent, Some(&txn)),
+                Verdict::Retry { .. } | Verdict::Exhausted
+            ));
+        }
+        // A connect failure is known to be before the write and remains
+        // retryable even without a transaction id.
+        assert!(matches!(
+            policy.classify_transport(
+                1,
+                &TransportError::connect("dns"),
+                Operation::Idempotent,
+                None
+            ),
+            Verdict::Retry { .. }
+        ));
     }
 
     #[test]

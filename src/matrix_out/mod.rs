@@ -1047,7 +1047,7 @@ impl MatrixClient {
                 timeout_ms,
             },
         };
-        self.execute(call, Operation::Idempotent, None, decode_unit)
+        self.execute(call, Operation::StateSetting, None, decode_unit)
             .await
             .map(|_| ())
     }
@@ -1086,7 +1086,7 @@ impl MatrixClient {
         let call = Call {
             kind: CallKind::Receipt { room_id, event_id },
         };
-        self.execute(call, Operation::Idempotent, None, decode_unit)
+        self.execute(call, Operation::StateSetting, None, decode_unit)
             .await
             .map(|_| ())
     }
@@ -1268,7 +1268,10 @@ impl MatrixClient {
             };
             match response {
                 Ok(response) => {
-                    let verdict = self.config.retry.classify(attempt, &response, operation);
+                    let verdict = self
+                        .config
+                        .retry
+                        .classify(attempt, &response, operation, txn);
                     match verdict {
                         Verdict::Success => {
                             return match decode(&response) {
@@ -1289,7 +1292,7 @@ impl MatrixClient {
                     match self
                         .config
                         .retry
-                        .classify_transport(attempt, &error, operation)
+                        .classify_transport(attempt, &error, operation, txn)
                     {
                         Verdict::Retry { delay } => self.config.sleeper.sleep(delay).await,
                         _ => return Err(transport_failure(&error, operation, txn, attempt)),
@@ -1402,7 +1405,7 @@ impl MatrixClient {
         operation: Operation,
         txn: Option<&TxnId>,
     ) -> OutboundError {
-        if operation.is_repeatable() && txn.is_none() {
+        if matches!(operation, Operation::Read | Operation::StateSetting) {
             return error;
         }
         match error {
@@ -1554,7 +1557,20 @@ fn http_failure(
 ) -> OutboundError {
     let (errcode, message) = matrix_error(response);
     match verdict {
-        Verdict::Ambiguous => OutboundError::Ambiguous {
+        Verdict::Exhausted if response.status == 429 => OutboundError::RateLimited {
+            retry_after: retry::retry_after_ms(response),
+            errcode,
+            message,
+        },
+        Verdict::Exhausted if operation.is_repeatable_with(txn) => OutboundError::Server {
+            operation,
+            txn_id: txn.cloned(),
+            status: response.status,
+            errcode,
+            message,
+            attempts,
+        },
+        Verdict::Ambiguous | Verdict::Exhausted => OutboundError::Ambiguous {
             txn_id: txn.cloned(),
             attempts,
             reason: format!(
@@ -1562,19 +1578,6 @@ fn http_failure(
                 response.status,
                 detail = detail_text(&errcode, &message),
             ),
-        },
-        Verdict::Exhausted if response.status == 429 => OutboundError::RateLimited {
-            retry_after: retry::retry_after_ms(response),
-            errcode,
-            message,
-        },
-        Verdict::Exhausted => OutboundError::Server {
-            operation,
-            txn_id: txn.cloned(),
-            status: response.status,
-            errcode,
-            message,
-            attempts,
         },
         Verdict::Success | Verdict::Retry { .. } | Verdict::Rejected => rejection(response),
     }
@@ -1598,7 +1601,9 @@ fn transport_failure(
             reason: error.message.clone(),
         };
     }
-    if error.kind.is_before_write() || (operation.is_repeatable() && txn.is_none()) {
+    if error.kind.is_before_write()
+        || matches!(operation, Operation::Read | Operation::StateSetting)
+    {
         return OutboundError::Transport { attempts, reason };
     }
     OutboundError::Ambiguous {
@@ -1823,14 +1828,15 @@ mod tests {
         for (response, label) in cases {
             for operation in [
                 Operation::Read,
+                Operation::StateSetting,
                 Operation::Idempotent,
                 Operation::NonIdempotent,
             ] {
                 let txn = match operation {
-                    Operation::Read => None,
+                    Operation::Read | Operation::StateSetting => None,
                     Operation::Idempotent | Operation::NonIdempotent => Some(&txn),
                 };
-                let verdict = policy.classify(1, &response, operation);
+                let verdict = policy.classify(1, &response, operation, txn);
                 let error = http_failure(verdict, &response, operation, txn, 1);
 
                 match verdict {

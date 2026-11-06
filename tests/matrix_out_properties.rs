@@ -66,6 +66,7 @@ proptest! {
         attempt in 1u32..=5,
         operation in prop_oneof![
             Just(Operation::Read),
+            Just(Operation::StateSetting),
             Just(Operation::Idempotent),
             Just(Operation::NonIdempotent),
         ],
@@ -75,8 +76,13 @@ proptest! {
             Some(ms) => format!(r#"{{"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":{ms}}}"#),
             None => String::from(r#"{"errcode":"M_LIMIT_EXCEEDED"}"#),
         };
+        let txn = TxnId::new("send-1")?;
+        let transaction = match operation {
+            Operation::Idempotent => Some(&txn),
+            _ => None,
+        };
         let response = Response::json(status, &body);
-        let verdict = policy().classify(attempt, &response, operation);
+        let verdict = policy().classify(attempt, &response, operation, transaction);
 
         match status {
             200..=299 => prop_assert_eq!(verdict, Verdict::Success),
@@ -100,7 +106,7 @@ proptest! {
                     }
                 }
             }
-            500..=599 if !operation.is_repeatable() => {
+            500..=599 if !operation.is_repeatable_with(transaction) => {
                 prop_assert_eq!(verdict, Verdict::Ambiguous, "a 5xx on an upload must not retry");
             }
             500..=599 => prop_assert!(
@@ -119,7 +125,12 @@ proptest! {
         attempt in 1u32..=5,
     ) {
         prop_assert_eq!(
-            policy().classify(attempt, &Response::json(status, "{}"), Operation::NonIdempotent),
+            policy().classify(
+                attempt,
+                &Response::json(status, "{}"),
+                Operation::NonIdempotent,
+                None,
+            ),
             Verdict::Ambiguous
         );
     }
@@ -143,8 +154,10 @@ proptest! {
         } else {
             Operation::NonIdempotent
         };
+        let txn = TxnId::new("send-1")?;
+        let transaction = repeatable.then_some(&txn);
         let error = TransportError::new(kind, "x");
-        let verdict = policy().classify_transport(attempt, &error, operation);
+        let verdict = policy().classify_transport(attempt, &error, operation, transaction);
         match (kind, kind.is_before_write(), repeatable) {
             (
                 TransportErrorKind::InvalidRequest

@@ -269,6 +269,17 @@ impl OutboundError {
     /// };
     /// assert!(!uncertain_upload.is_retryable());
     /// assert!(uncertain_upload.is_ambiguous());
+    ///
+    /// let keyless_send = OutboundError::Server {
+    ///     operation: Operation::Idempotent,
+    ///     txn_id: None,
+    ///     status: 503,
+    ///     errcode: "M_UNKNOWN".into(),
+    ///     message: "down".into(),
+    ///     attempts: 3,
+    /// };
+    /// assert!(!keyless_send.is_retryable());
+    /// assert!(keyless_send.is_ambiguous());
     /// ```
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
@@ -279,7 +290,7 @@ impl OutboundError {
             | Self::GateTimeout { .. } => true,
             Self::Server {
                 operation, txn_id, ..
-            } => txn_id.is_none() && operation.is_repeatable(),
+            } => txn_id.is_none() && operation.is_repeatable_with(txn_id.as_ref()),
             _ => false,
         }
     }
@@ -317,7 +328,7 @@ impl OutboundError {
             Self::Ambiguous { .. } | Self::DecodeAfterWrite { .. } => true,
             Self::Server {
                 operation, txn_id, ..
-            } => txn_id.is_some() || !operation.is_repeatable(),
+            } => txn_id.is_some() || !operation.is_repeatable_with(txn_id.as_ref()),
             _ => false,
         }
     }
@@ -714,8 +725,8 @@ mod tests {
             message: "down".into(),
             attempts: 3,
         };
-        assert!(base.is_retryable());
-        assert!(!base.is_ambiguous());
+        assert!(!base.is_retryable());
+        assert!(base.is_ambiguous());
 
         let txn_keyed = OutboundError::Server {
             operation: Operation::Idempotent,
@@ -728,6 +739,17 @@ mod tests {
         assert!(!txn_keyed.is_retryable());
         assert!(txn_keyed.is_ambiguous());
         assert_eq!(txn_keyed.txn_id(), Some(&txn));
+
+        let state_setting = OutboundError::Server {
+            operation: Operation::StateSetting,
+            txn_id: None,
+            status: 503,
+            errcode: "M_UNKNOWN".into(),
+            message: "down".into(),
+            attempts: 3,
+        };
+        assert!(state_setting.is_retryable());
+        assert!(!state_setting.is_ambiguous());
 
         let non_idempotent = OutboundError::Server {
             operation: Operation::NonIdempotent,
@@ -788,10 +810,12 @@ mod tests {
             },
             OutboundError::Server {
                 operation, txn_id, ..
-            } if txn_id.is_none() && operation.is_repeatable() => ExpectedClassification {
-                classification: Retryable,
-                client_error: false,
-            },
+            } if txn_id.is_none() && operation.is_repeatable_with(txn_id.as_ref()) => {
+                ExpectedClassification {
+                    classification: Retryable,
+                    client_error: false,
+                }
+            }
             OutboundError::Server { .. }
             | OutboundError::Ambiguous { .. }
             | OutboundError::DecodeAfterWrite { .. } => ExpectedClassification {

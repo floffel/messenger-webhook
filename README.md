@@ -178,6 +178,12 @@ safe; `is_ambiguous()` is true when the event *may* be in the room. An ambiguous
 write carries the transaction id, and repeating that send with it
 (`send_text_with_txn`) is the documented recovery: one event, not two.
 
+The retry classifier takes that transaction id alongside the operation:
+`Operation::Idempotent` alone is not proof of idempotency, so a keyless
+transaction-keyed send fails closed as ambiguous rather than retrying blindly.
+Typing notifications and receipts use `Operation::StateSetting` because they
+converge without a reconciliation key.
+
 Sends into one room are serialised (one request in flight, any number across
 rooms) so a bot's two-part reply cannot arrive out of order; turn it off with
 `ClientConfig::with_per_room_ordering(false)`. `GATE_CAPACITY` bounds the
