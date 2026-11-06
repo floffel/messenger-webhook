@@ -36,6 +36,15 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
+fn assert_in_first_backoff_window(delay: Duration) {
+    let policy = RetryPolicy::default();
+    let base = policy.backoff(1);
+    assert!(
+        delay >= base.mul_f64(0.7) && delay <= base.mul_f64(1.3),
+        "{delay:?} outside the first jittered backoff window"
+    );
+}
+
 #[test]
 fn transaction_ids_at_and_past_the_ceiling() {
     let exact = "t".repeat(MAX_TXN_ID_BYTES);
@@ -213,18 +222,26 @@ fn every_media_kind_maps_to_its_msgtype_in_a_sent_message() {
 fn a_429_without_a_hint_with_garbage_and_with_a_zero_hint() {
     let (client, transport, sleeper) = client_with(|config| config);
 
-    // (body, expected delay)
+    // A missing or unusable hint falls back to the jittered backoff; a valid
+    // hint is honoured exactly.
+    for body in [
+        r#"{"errcode":"M_LIMIT_EXCEEDED"}"#,
+        "total garbage",
+        "",
+        r#"{"retry_after_ms":-5}"#,
+        r#"{"retry_after_ms":null}"#,
+    ] {
+        transport
+            .push_json(429, body)
+            .push_json(200, r#"{"event_id":"$1"}"#);
+        block_on(client.send_text("!r:m.example", "x")).expect("second attempt lands");
+        let waited = *sleeper.delays().last().expect("a wait");
+        assert_in_first_backoff_window(waited);
+    }
+
     for (body, expected) in [
-        (
-            r#"{"errcode":"M_LIMIT_EXCEEDED"}"#,
-            Duration::from_millis(500),
-        ),
-        ("total garbage", Duration::from_millis(500)),
-        ("", Duration::from_millis(500)),
         (r#"{"retry_after_ms":0}"#, Duration::ZERO),
         (r#"{"retry_after_ms":"7"}"#, Duration::from_millis(7)),
-        (r#"{"retry_after_ms":-5}"#, Duration::from_millis(500)),
-        (r#"{"retry_after_ms":null}"#, Duration::from_millis(500)),
     ] {
         transport
             .push_json(429, body)

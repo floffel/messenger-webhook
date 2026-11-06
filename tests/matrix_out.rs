@@ -53,6 +53,14 @@ fn requests(harness: &Harness) -> Vec<RecordedRequest> {
     harness.transport.requests()
 }
 
+fn assert_in_jitter_window(policy: RetryPolicy, delay: Duration) {
+    let base = policy.backoff(1);
+    assert!(
+        delay >= base.mul_f64(0.7) && delay <= base.mul_f64(1.3),
+        "{delay:?} outside the first jittered backoff window"
+    );
+}
+
 #[test]
 fn a_text_send_is_one_put_with_a_bearer_token_and_a_json_body() {
     let harness = harness(|config| config);
@@ -110,7 +118,9 @@ fn a_429_without_a_retry_after_falls_back_to_the_backoff() {
         .push_json(200, r#"{"event_id":"$abc"}"#);
 
     block_on(harness.client.send_text("!r:example.org", "Hallo")).expect("sent");
-    assert_eq!(harness.sleeper.delays(), vec![Duration::from_millis(500)]);
+    let delays = harness.sleeper.delays();
+    assert_eq!(delays.len(), 1);
+    assert_in_jitter_window(RetryPolicy::default(), delays[0]);
 }
 
 #[test]
@@ -159,7 +169,9 @@ fn a_5xx_on_a_txn_keyed_send_is_retried_with_the_same_transaction_id() {
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].url, calls[1].url, "a retry must reuse the txn id");
     assert_eq!(calls[0].body, calls[1].body);
-    assert_eq!(harness.sleeper.delays(), vec![Duration::from_millis(500)]);
+    let delays = harness.sleeper.delays();
+    assert_eq!(delays.len(), 1);
+    assert_in_jitter_window(RetryPolicy::default(), delays[0]);
 }
 
 #[test]
@@ -246,7 +258,9 @@ fn an_upload_timeout_is_ambiguous_but_a_connect_failure_is_retried() {
         .push_json(200, r#"{"content_uri":"mxc://m.example/x"}"#);
     let uri = block_on(harness.client.upload_media(&media)).expect("uploaded");
     assert_eq!(uri.as_str(), "mxc://m.example/x");
-    assert_eq!(harness.sleeper.delays(), vec![Duration::from_millis(500)]);
+    let delays = harness.sleeper.delays();
+    assert_eq!(delays.len(), 1);
+    assert_in_jitter_window(RetryPolicy::default(), delays[0]);
 }
 
 #[test]
@@ -293,7 +307,9 @@ fn a_read_timeout_on_a_send_is_retried_and_then_ambiguous() {
         2,
         "a txn-keyed send may be retried"
     );
-    assert_eq!(harness.sleeper.delays(), vec![Duration::from_millis(500)]);
+    let delays = harness.sleeper.delays();
+    assert_eq!(delays.len(), 1);
+    assert_in_jitter_window(RetryPolicy::default(), delays[0]);
 }
 
 #[test]
