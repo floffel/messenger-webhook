@@ -96,6 +96,13 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- **Matrix receipts keep their event identity and fan out completely.** A
+  Matrix `m.receipt` event used to overwrite `external_id` with the referenced
+  message id, so a read marker could be stored as the message it referred to,
+  and it kept only the first entry in `content`. Receipts now keep the receipt
+  event's own `external_id`, carry the referenced message id in the new
+  `NormalizedMessage::status_for` field, and return one status event per
+  referenced event and reader in deterministic event-id order. Closes #42.
 - **Location and contact cards keep their coordinates and phone number.**
   Inbound Telegram and `WhatsApp` location and contact messages now carry
   latitude, longitude and contact name/phone fields on `Attachment`, so the

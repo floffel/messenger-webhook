@@ -155,11 +155,13 @@ impl Adapter for MatrixAdapter {
             }
             None => vec![&root],
         };
-        events
-            .into_iter()
-            .filter(|entry| is_event(entry))
-            .map(normalize_event)
-            .collect()
+        events.into_iter().filter(|entry| is_event(entry)).try_fold(
+            Vec::new(),
+            |mut messages, event| {
+                messages.extend(normalize_event(event)?);
+                Ok(messages)
+            },
+        )
     }
 
     fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
@@ -327,7 +329,7 @@ fn is_media_replacement_without_url(replacement: &serde_json::Map<String, Value>
 }
 
 /// Maps one Matrix event of any type.
-fn normalize_event(event: &Value) -> Result<NormalizedMessage> {
+fn normalize_event(event: &Value) -> Result<Vec<NormalizedMessage>> {
     let event_type = json::string(event, "type").unwrap_or("unknown");
     let external_id = id::identify(event, "event_id", &Channel::Matrix, "event")?;
     let conversation_id = json::id(event, "room_id").unwrap_or_default();
@@ -358,13 +360,13 @@ fn normalize_event(event: &Value) -> Result<NormalizedMessage> {
                 normalized.status = Some(DeliveryStatus::Deleted);
             }
         }
-        "m.receipt" => apply_receipts(&mut normalized, &content),
+        "m.receipt" => return Ok(apply_receipts(&normalized, &content)),
         // Encrypted events, typing notifications, membership and every future
         // event type are carried with their provider name and full payload.
         _ => {}
     }
 
-    Ok(normalized)
+    Ok(vec![normalized])
 }
 
 /// Maps the `content` of an `m.room.message` (or `m.sticker`) event.
@@ -434,39 +436,87 @@ fn apply_content(normalized: &mut NormalizedMessage, event_type: &str, content: 
     }
 }
 
-/// Maps a receipt event: one read marker per referenced event id.
-fn apply_receipts(normalized: &mut NormalizedMessage, content: &Value) {
+/// Maps a receipt event: one read marker per referenced event id and reader.
+fn apply_receipts(base: &NormalizedMessage, content: &Value) -> Vec<NormalizedMessage> {
     let Some(receipts) = content.as_object() else {
-        return;
+        return vec![base.clone()];
     };
-    let Some((event_id, receipt)) = receipts.iter().next() else {
-        return;
-    };
-    {
-        let (status, reader) = match receipt.as_object() {
-            Some(kinds) => {
-                let status = if kinds.contains_key("m.read") {
-                    DeliveryStatus::Read
-                } else if let Some(kind) = kinds.keys().next() {
-                    DeliveryStatus::Unknown(kind.clone())
-                } else {
-                    DeliveryStatus::Unknown("unknown".to_owned())
-                };
-                let reader = kinds
-                    .values()
-                    .find_map(|users| users.as_object().and_then(|users| users.keys().next()))
-                    .cloned()
-                    .unwrap_or_default();
-                (status, reader)
-            }
-            None => (DeliveryStatus::Unknown("unknown".to_owned()), String::new()),
-        };
-        normalized.external_id.clone_from(event_id);
-        normalized.status = Some(status);
-        if !reader.is_empty() {
-            normalized.sender_id = reader;
+    let mut messages = Vec::new();
+    let mut receipt_entries = receipts.iter().collect::<Vec<_>>();
+    receipt_entries.sort_unstable_by_key(|(event_id, _)| *event_id);
+    for (event_id, receipt) in receipt_entries {
+        for message in apply_receipt(base, event_id, receipt) {
+            messages.push(message);
         }
     }
+    if messages.is_empty() {
+        messages.push(base.clone());
+    }
+    messages
+}
+
+/// Maps one `content[event_id]` receipt value into one status event per reader.
+fn apply_receipt(
+    base: &NormalizedMessage,
+    event_id: &str,
+    receipt: &Value,
+) -> Vec<NormalizedMessage> {
+    let Some(kinds) = receipt.as_object() else {
+        return vec![receipt_status(
+            base,
+            event_id,
+            DeliveryStatus::Unknown("unknown".to_owned()),
+            None,
+        )];
+    };
+    if kinds.is_empty() {
+        return vec![receipt_status(
+            base,
+            event_id,
+            DeliveryStatus::Unknown("unknown".to_owned()),
+            None,
+        )];
+    }
+
+    let mut messages = Vec::new();
+    for (kind, users) in kinds {
+        let status = if kind == "m.read" {
+            DeliveryStatus::Read
+        } else {
+            DeliveryStatus::Unknown(kind.clone())
+        };
+        let users = users.as_object();
+        let mut readers = users
+            .into_iter()
+            .flat_map(|users| users.keys())
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        readers.sort_unstable();
+        if readers.is_empty() {
+            messages.push(receipt_status(base, event_id, status, None));
+        } else {
+            for reader in readers {
+                messages.push(receipt_status(base, event_id, status.clone(), Some(reader)));
+            }
+        }
+    }
+    messages
+}
+
+/// Builds one receipt status event.
+fn receipt_status(
+    base: &NormalizedMessage,
+    event_id: &str,
+    status: DeliveryStatus,
+    reader: Option<&str>,
+) -> NormalizedMessage {
+    let mut message = base.clone();
+    message.status = Some(status);
+    message.status_for = Some(event_id.to_owned());
+    if let Some(reader) = reader.filter(|reader| !reader.is_empty()) {
+        reader.clone_into(&mut message.sender_id);
+    }
+    message
 }
 
 /// Whether `entry` carries a field a Matrix room event has.
