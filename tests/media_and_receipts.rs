@@ -126,15 +126,20 @@ mod whatsapp {
             r#"{"messages":[{"id":"w1","from":"49","type":"reaction","reaction":{"message_id":"wamid.1","emoji":"👍"}}]}"#,
         );
         let reaction = events[0].reaction.as_ref().unwrap();
-        assert_eq!(reaction.message_id, "wamid.1");
-        assert_eq!(reaction.emoji, "👍");
-        assert!(!reaction.removed);
+        assert_eq!(reaction.message_id(), "wamid.1");
+        assert_eq!(reaction.emoji(), "👍");
+        assert!(!reaction.removed());
+        assert_eq!(reaction.added_reactions(), ["👍"]);
 
         // Removing a reaction: empty emoji.
         let events = inbound(
             r#"{"messages":[{"id":"w2","from":"49","type":"reaction","reaction":{"message_id":"wamid.1","emoji":""}}]}"#,
         );
-        assert!(events[0].reaction.as_ref().unwrap().removed);
+        let reaction = events[0].reaction.as_ref().unwrap();
+        assert!(reaction.removed());
+        assert_eq!(reaction.emoji(), "");
+        assert_eq!(reaction.added_reactions(), [] as [String; 0]);
+        assert_eq!(reaction.removed_reactions(), [] as [String; 0]);
 
         // No target: the event is still carried, just without a reaction.
         let events = inbound(
@@ -377,9 +382,10 @@ mod matrix {
           "content":{"m.relates_to":{"rel_type":"m.annotation","event_id":"$1","key":"\ud83d\udc4d"}}}"#;
         let events = adapter().adapt(payload).unwrap();
         let reaction = events[0].reaction.as_ref().unwrap();
-        assert_eq!(reaction.message_id, "$1");
-        assert_eq!(reaction.emoji, "👍");
-        assert!(!reaction.removed);
+        assert_eq!(reaction.message_id(), "$1");
+        assert_eq!(reaction.emoji(), "👍");
+        assert!(!reaction.removed());
+        assert_eq!(reaction.added_reactions(), ["👍"]);
     }
 
     #[test]

@@ -12,6 +12,7 @@ use std::str::FromStr;
 
 use crate::rich::TextSpan;
 use strum::{AsRefStr, Display, EnumString};
+use unicode_general_category::{get_general_category, GeneralCategory};
 
 /// A validated custom channel name.
 ///
@@ -362,34 +363,198 @@ impl Default for AttachmentKind {
 
 /// A reaction to another message.
 ///
+/// The reaction state is one value, not two independent fields: an added
+/// reaction always has a non-empty key, and a removal always has no current
+/// key. Use [`Reaction::add`] or [`Reaction::remove`] to construct one.
+///
 /// ```
 /// use messenger_webhook::Reaction;
 ///
-/// let reaction = Reaction {
-///     message_id: "wamid.1".into(),
-///     emoji: "👍".into(),
-///     removed: false,
-///     added_reactions: vec!["👍".into()],
-///     removed_reactions: Vec::new(),
-/// };
-/// assert!(!reaction.removed);
-/// assert_eq!(reaction.added_reactions, ["👍"]);
+/// let reaction = Reaction::add("wamid.1", "👍")?;
+/// assert_eq!(reaction.message_id(), "wamid.1");
+/// assert_eq!(reaction.emoji(), "👍");
+/// assert!(!reaction.removed());
+/// # Ok::<(), messenger_webhook::Error>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reaction {
+    message_id: String,
+    emoji: String,
+    removed: bool,
+    added_reactions: Vec<String>,
+    removed_reactions: Vec<String>,
+}
+
+impl Reaction {
+    /// Builds an added reaction with a non-empty reaction key.
+    ///
+    /// The key is the provider's emoji or custom-emoji id. Empty, whitespace
+    /// and non-graphic-only keys are rejected because they cannot identify a
+    /// reaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidReactionKey`] when `emoji` does not carry
+    /// at least one graphic character.
+    ///
+    /// ```
+    /// use messenger_webhook::Reaction;
+    ///
+    /// let reaction = Reaction::add("wamid.1", "👍")?;
+    /// assert_eq!(reaction.emoji(), "👍");
+    /// assert_eq!(reaction.added_reactions(), ["👍"]);
+    /// assert!(Reaction::add("wamid.1", "").is_err());
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    pub fn add(message_id: impl Into<String>, emoji: impl Into<String>) -> crate::Result<Self> {
+        let emoji = emoji.into();
+        if !has_graphic(&emoji) {
+            return Err(crate::Error::InvalidReactionKey {
+                reason: "an added reaction key must contain a visible character".to_owned(),
+            });
+        }
+        let added_reactions = vec![emoji.clone()];
+        Self::from_parts(message_id, emoji, false, added_reactions, Vec::new())
+    }
+
+    /// Builds a reaction removal.
+    ///
+    /// ```
+    /// use messenger_webhook::Reaction;
+    ///
+    /// let reaction = Reaction::remove("wamid.1");
+    /// assert_eq!(reaction.message_id(), "wamid.1");
+    /// assert_eq!(reaction.emoji(), "");
+    /// assert!(reaction.removed());
+    /// ```
+    #[must_use]
+    pub fn remove(message_id: impl Into<String>) -> Self {
+        Self {
+            message_id: message_id.into(),
+            emoji: String::new(),
+            removed: true,
+            added_reactions: Vec::new(),
+            removed_reactions: Vec::new(),
+        }
+    }
+
+    /// Builds a reaction change from adapter-provided before/after state.
+    pub(crate) fn from_parts(
+        message_id: impl Into<String>,
+        emoji: impl Into<String>,
+        removed: bool,
+        added_reactions: Vec<String>,
+        removed_reactions: Vec<String>,
+    ) -> crate::Result<Self> {
+        let emoji = emoji.into();
+        if removed {
+            if !emoji.is_empty() {
+                return Err(crate::Error::InvalidReactionKey {
+                    reason: "a removed reaction cannot carry a current key".to_owned(),
+                });
+            }
+        } else if !emoji.is_empty() && !has_graphic(&emoji) {
+            return Err(crate::Error::InvalidReactionKey {
+                reason: "an added reaction key must contain a visible character".to_owned(),
+            });
+        }
+        Ok(Self {
+            message_id: message_id.into(),
+            emoji,
+            removed,
+            added_reactions,
+            removed_reactions,
+        })
+    }
+
     /// External id of the message being reacted to.
-    pub message_id: String,
-    /// The first current reaction key (emoji or custom emoji id), empty when
-    /// none remains or none could be parsed.
-    pub emoji: String,
+    ///
+    /// ```
+    /// use messenger_webhook::Reaction;
+    ///
+    /// assert_eq!(Reaction::remove("wamid.1").message_id(), "wamid.1");
+    /// ```
+    #[must_use]
+    pub fn message_id(&self) -> &str {
+        &self.message_id
+    }
+
+    /// The first current reaction key, empty when none remains.
+    ///
+    /// ```
+    /// use messenger_webhook::Reaction;
+    ///
+    /// assert_eq!(Reaction::add("wamid.1", "👍")?.emoji(), "👍");
+    /// assert_eq!(Reaction::remove("wamid.1").emoji(), "");
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub fn emoji(&self) -> &str {
+        &self.emoji
+    }
+
     /// Whether this event leaves no reaction on the message.
-    pub removed: bool,
-    /// Reaction keys (emoji or custom emoji id) present in the update but not
-    /// in the prior state.
-    pub added_reactions: Vec<String>,
-    /// Reaction keys (emoji or custom emoji id) present in the prior state but
-    /// not in the update.
-    pub removed_reactions: Vec<String>,
+    ///
+    /// ```
+    /// use messenger_webhook::Reaction;
+    ///
+    /// assert!(!Reaction::add("wamid.1", "👍")?.removed());
+    /// assert!(Reaction::remove("wamid.1").removed());
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub fn removed(&self) -> bool {
+        self.removed
+    }
+
+    /// Reaction keys present in the update but not in the prior state.
+    ///
+    /// ```
+    /// use messenger_webhook::Reaction;
+    ///
+    /// assert_eq!(Reaction::add("wamid.1", "👍")?.added_reactions(), ["👍"]);
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub fn added_reactions(&self) -> &[String] {
+        &self.added_reactions
+    }
+
+    /// Reaction keys present in the prior state but not in the update.
+    ///
+    /// ```
+    /// use messenger_webhook::Reaction;
+    ///
+    /// assert!(Reaction::remove("wamid.1").removed_reactions().is_empty());
+    /// ```
+    #[must_use]
+    pub fn removed_reactions(&self) -> &[String] {
+        &self.removed_reactions
+    }
+}
+
+/// Whether `text` holds at least one character a reader would see.
+///
+/// A provider id of `" "` or `"\u{200b}"` names nothing, so treating it as a
+/// real id collapses every such event onto one key and the ledger drops all but
+/// the first. Whitespace is not enough to decide this - a zero-width space is a
+/// `Cf` format character, not whitespace - so the general category is used:
+/// a control, format, surrogate, private-use, unassigned or separator code
+/// point is padding, anything else is a real id.
+pub(crate) fn has_graphic(text: &str) -> bool {
+    text.chars().any(|c| {
+        !matches!(
+            get_general_category(c),
+            GeneralCategory::Control
+                | GeneralCategory::Format
+                | GeneralCategory::Surrogate
+                | GeneralCategory::PrivateUse
+                | GeneralCategory::Unassigned
+                | GeneralCategory::LineSeparator
+                | GeneralCategory::ParagraphSeparator
+                | GeneralCategory::SpaceSeparator
+        )
+    })
 }
 
 /// Delivery state of an outbound message, as reported back by the provider.

@@ -350,13 +350,7 @@ fn normalize_event(event: &Value) -> Result<NormalizedMessage> {
             let target = relates.and_then(|relates| json::id(relates, "event_id"));
             let emoji = relates.and_then(|relates| json::string(relates, "key"));
             if let (Some(message_id), Some(emoji)) = (target, emoji.filter(|key| !key.is_empty())) {
-                normalized.reaction = Some(Reaction {
-                    message_id,
-                    removed: false,
-                    emoji: emoji.to_owned(),
-                    added_reactions: vec![emoji.to_owned()],
-                    removed_reactions: Vec::new(),
-                });
+                normalized.reaction = Some(Reaction::add(message_id, emoji)?);
             }
         }
         "m.room.redaction" => {

@@ -232,10 +232,9 @@ timestamp plus:
   filename, caption
 - `reply_to` / `thread_id` — reply and thread references
 - `edit_of` — set when the event replaces an earlier message
-- `reaction` — `Reaction { message_id, emoji, removed, added_reactions,
-  removed_reactions }`; the added/removed lists carry the complete change from
-  providers that report a before/after state, such as Telegram's
-  `message_reaction` update
+- `reaction` — `Reaction::add` / `Reaction::remove`; the added/removed accessors
+  carry the complete change from providers that report a before/after state,
+  such as Telegram's `message_reaction` update
 - `status` — `DeliveryStatus` (sent, delivered, read, failed, deleted, unknown)
 - `spans` — the provider's formatting as `TextSpan`s over `text` (see below)
 - `provider_type` — the provider's own event name, verbatim
@@ -407,10 +406,11 @@ without its entry.
   a default body
 - a new optional field on a type that is `#[non_exhaustive]`
 
-**Breaking today, because these types are exhaustive on purpose:** adding a
-field to `Attachment` or `Reaction`. Both structs are built with field literals
-by callers, so a new field is source-breaking; it is announced as breaking and
-lands in a minor bump. `NormalizedMessage` and `OutboundMessage` are
+**Breaking today, because this type is exhaustive on purpose:** adding a field
+to `Attachment`. It is built with field literals by callers, so a new field is
+source-breaking; it is announced as breaking and lands in a minor bump.
+`Reaction`, `NormalizedMessage` and `OutboundMessage` are non-exhaustive in
+practice: `Reaction` is built through checked constructors and the other two are
 `#[non_exhaustive]`, so they can take new optional fields as additions.
 `Channel::other` exists so an unmodelled messenger never forces a variant.
 
