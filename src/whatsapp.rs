@@ -25,7 +25,7 @@ use crate::id;
 use crate::json;
 use crate::model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, OutboundMessage,
-    ProviderPayload, Reaction,
+    ProviderMethod, ProviderPayload, Reaction,
 };
 use crate::secret::Secret;
 use crate::signature::{self, META_SIGNATURE_HEADER};
@@ -240,7 +240,11 @@ impl Adapter for WhatsAppAdapter {
             body.insert("text".to_owned(), Value::Object(text_body));
         }
 
-        json_payload(Channel::WhatsApp, "POST", &Value::Object(body))
+        json_payload(
+            Channel::WhatsApp,
+            ProviderMethod::Post,
+            &Value::Object(body),
+        )
     }
 }
 

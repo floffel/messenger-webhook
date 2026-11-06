@@ -27,7 +27,7 @@ src/lib.rs:use error::{Error,Result}
 src/lib.rs:use headers::Headers
 src/lib.rs:use matrix::MatrixAdapter
 src/lib.rs:use model::SYNTHETIC_ID_PREFIX
-src/lib.rs:use model::{Attachment,AttachmentKind,Channel,DeliveryStatus,IdempotencyKey,NormalizedMessage,OutboundMessage,ProviderPayload,Reaction,RetryPolicy,MAX_IDEMPOTENCY_KEY_BYTES,}
+src/lib.rs:use model::{Attachment,AttachmentKind,Channel,DeliveryStatus,IdempotencyKey,NormalizedMessage,OutboundMessage,ProviderMethod,ProviderPayload,Reaction,RetryPolicy,MAX_IDEMPOTENCY_KEY_BYTES,}
 src/lib.rs:use registry::Registry
 src/lib.rs:use rich::{SpanError,TextFormat,TextSpan}
 src/lib.rs:use secret::Secret
@@ -169,6 +169,7 @@ src/model.rs:const SYNTHETIC_ID_PREFIX
 src/model.rs:enum AttachmentKind
 src/model.rs:enum Channel
 src/model.rs:enum DeliveryStatus
+src/model.rs:enum ProviderMethod
 src/model.rs:enum RetryPolicy
 src/model.rs:impl Attachment:fn new
 src/model.rs:impl AttachmentKind:fn as_str
@@ -184,6 +185,7 @@ src/model.rs:impl NormalizedMessage:fn is_formatted
 src/model.rs:impl NormalizedMessage:fn is_status_update
 src/model.rs:impl OutboundMessage:fn first_attachment
 src/model.rs:impl OutboundMessage:fn text
+src/model.rs:impl ProviderMethod:fn as_str
 src/model.rs:impl ProviderPayload:fn body
 src/model.rs:impl ProviderPayload:fn channel
 src/model.rs:impl ProviderPayload:fn content_type

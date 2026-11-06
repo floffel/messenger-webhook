@@ -117,7 +117,8 @@ pub use headers::Headers;
 pub use model::SYNTHETIC_ID_PREFIX;
 pub use model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, IdempotencyKey, NormalizedMessage,
-    OutboundMessage, ProviderPayload, Reaction, RetryPolicy, MAX_IDEMPOTENCY_KEY_BYTES,
+    OutboundMessage, ProviderMethod, ProviderPayload, Reaction, RetryPolicy,
+    MAX_IDEMPOTENCY_KEY_BYTES,
 };
 pub use registry::Registry;
 pub use rich::{SpanError, TextFormat, TextSpan};
@@ -237,8 +238,8 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 ///
 /// ```
 /// use messenger_webhook::{
-///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderPayload,
-///     Result,
+///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderMethod,
+///     ProviderPayload, Result,
 /// };
 ///
 /// /// An adapter for a provider this crate does not ship.
@@ -270,10 +271,12 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 ///     fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
 ///         Ok(ProviderPayload::new(
 ///             Channel::Other("echo".into()),
-///             "POST",
-///             "text/plain",
-///             message.text.clone().unwrap_or_default().into_bytes(),
-///         ))
+///             ProviderMethod::Post,
+///             "application/json",
+///             serde_json::json!({ "text": message.text.clone().unwrap_or_default() })
+///                 .to_string()
+///                 .into_bytes(),
+///         )?)
 ///     }
 /// }
 ///
@@ -285,7 +288,7 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 ///     "self",
 ///     "ping",
 /// ))?;
-/// assert_eq!(payload.body(), b"ping");
+/// assert_eq!(payload.json()?["text"], "ping");
 /// # Ok::<(), messenger_webhook::Error>(())
 /// ```
 pub trait Adapter: Send + Sync + std::fmt::Debug {
@@ -353,8 +356,8 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     ///
     /// ```
     /// use messenger_webhook::{
-    ///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderPayload,
-    ///     Result,
+    ///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderMethod,
+    ///     ProviderPayload, Result,
     /// };
     ///
     /// #[derive(Debug)]
@@ -366,12 +369,17 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     ///     fn adapt(&self, _: &[u8]) -> Result<Vec<NormalizedMessage>> { Ok(Vec::new()) }
     ///     fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
     ///         let text = message.text.clone().unwrap_or_default().to_uppercase();
-    ///         Ok(ProviderPayload::new(self.channel(), "POST", "text/plain", text.into_bytes()))
+    ///         ProviderPayload::new(
+    ///             self.channel(),
+    ///             ProviderMethod::Post,
+    ///             "application/json",
+    ///             serde_json::json!({ "text": text }).to_string().into_bytes(),
+    ///         )
     ///     }
     /// }
     ///
     /// let message = OutboundMessage::text(Channel::Other("upper".into()), "1", "hi");
-    /// assert_eq!(Upper.encode(&message)?.body(), b"HI");
+    /// assert_eq!(Upper.encode(&message)?.json()?["text"], "HI");
     /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload>;
@@ -387,7 +395,7 @@ pub(crate) fn utf16_len(text: &str) -> usize {
 #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
 pub(crate) fn json_payload(
     channel: Channel,
-    method: &'static str,
+    method: ProviderMethod,
     body: &serde_json::Value,
 ) -> Result<ProviderPayload> {
     payload(
@@ -403,20 +411,20 @@ pub(crate) fn json_payload(
 #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
 pub(crate) fn payload(
     channel: Channel,
-    method: &'static str,
+    method: ProviderMethod,
     body: &serde_json::Value,
     retry: RetryPolicy,
     idempotency_key: Option<IdempotencyKey>,
 ) -> Result<ProviderPayload> {
     let encoded = serde_json::to_vec(body).map_err(|error| Error::Payload(error.to_string()))?;
-    Ok(ProviderPayload::with_retry(
+    ProviderPayload::with_retry(
         channel,
         method,
         "application/json",
         encoded,
         retry,
         idempotency_key,
-    ))
+    )
 }
 
 /// The recipient a message is addressed to, validated per channel.

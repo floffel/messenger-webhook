@@ -26,10 +26,10 @@ use crate::error::{Error, Result};
 use crate::headers::Headers;
 use crate::id;
 use crate::json;
-use crate::model::ProviderPayload;
 use crate::model::{
     Attachment, AttachmentKind, Channel, NormalizedMessage, OutboundMessage, Reaction,
 };
+use crate::model::{ProviderMethod, ProviderPayload};
 use crate::rich::{utf16_to_byte_ranges, TextFormat, TextSpan};
 use crate::secret::Secret;
 use crate::{check_body, json_payload, recipient, utf16_len, Adapter};
@@ -240,7 +240,11 @@ impl Adapter for TelegramAdapter {
             body.insert("reply_parameters".to_owned(), Value::Object(parameters));
         }
 
-        json_payload(Channel::Telegram, "POST", &Value::Object(body))
+        json_payload(
+            Channel::Telegram,
+            ProviderMethod::Post,
+            &Value::Object(body),
+        )
     }
 }
 
