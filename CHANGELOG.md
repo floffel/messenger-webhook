@@ -10,6 +10,10 @@ carry a `!` in the conventional-commit subject.
 
 ## [Unreleased]
 
+### Fixed
+
+- `OutboundError::DecodeAfterWrite` now marks a `2xx` whose write response body cannot be decoded as ambiguous and carries the transaction id when there is one; unreadable read responses remain terminal `DecodeRead`. Closes #48.
+
 ### Changed
 
 - The `cargo-deny` gate now resolves all features, so default-off dependencies

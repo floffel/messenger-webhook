@@ -365,6 +365,14 @@ fn a_2xx_with_an_unreadable_body_is_ambiguous_for_a_write() {
 
     let error = block_on(harness.client.send_text("!r:example.org", "Hallo")).expect_err("garbage");
     assert!(error.is_ambiguous(), "{error:?}");
+    match &error {
+        OutboundError::DecodeAfterWrite {
+            what: "event send",
+            txn_id: Some(txn),
+            ..
+        } => assert_eq!(Some(txn), error.txn_id()),
+        other => panic!("expected a write-context decode error, got {other:?}"),
+    }
     assert!(!error.is_retryable());
     assert_eq!(harness.transport.call_count(), 1);
 }
@@ -376,6 +384,7 @@ fn a_2xx_without_an_event_id_is_ambiguous_for_a_write() {
 
     let error = block_on(harness.client.send_text("!r:example.org", "Hallo")).expect_err("no id");
     assert!(error.is_ambiguous(), "{error:?}");
+    assert!(error.txn_id().is_some());
     assert!(error.to_string().contains("event_id"));
 }
 
@@ -387,9 +396,10 @@ fn an_unreadable_probe_answer_is_a_decode_error_not_an_ambiguous_write() {
     let error = block_on(harness.client.whoami()).expect_err("no user_id");
     assert!(matches!(
         error,
-        OutboundError::Decode { what: "whoami", .. }
+        OutboundError::DecodeRead { what: "whoami", .. }
     ));
     assert!(!error.is_ambiguous());
+    assert_eq!(error.txn_id(), None);
 }
 
 #[test]
