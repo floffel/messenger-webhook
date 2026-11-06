@@ -302,7 +302,15 @@ fn span_constructor_and_accessors_hold_their_contract() {
     for (start, end, expected) in [
         (2, 2, SpanError::Empty { start: 2, end: 2 }),
         (3, 2, SpanError::Empty { start: 3, end: 2 }),
-        (0, 99, SpanError::OutOfBounds { end: 99, len: 10 }),
+        (
+            2,
+            99,
+            SpanError::OutOfBounds {
+                start: 2,
+                end: 99,
+                len: 10,
+            },
+        ),
     ] {
         assert_eq!(
             TextSpan::new(text, start, end, TextFormat::Code).unwrap_err(),
@@ -320,8 +328,13 @@ fn span_constructor_and_accessors_hold_their_contract() {
         "span 2..2 is empty or inverted"
     );
     assert_eq!(
-        SpanError::OutOfBounds { end: 9, len: 3 }.to_string(),
-        "span 0..9 does not fit in 3 bytes of text"
+        SpanError::OutOfBounds {
+            start: 2,
+            end: 9,
+            len: 3,
+        }
+        .to_string(),
+        "span 2..9 does not fit in 3 bytes of text"
     );
     assert_eq!(
         SpanError::NotCharBoundary { offset: 1 }.to_string(),

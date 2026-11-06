@@ -56,8 +56,10 @@ pub enum SpanError {
     },
 
     /// The span ends past the end of the text.
-    #[error("span 0..{end} does not fit in {len} bytes of text")]
+    #[error("span {start}..{end} does not fit in {len} bytes of text")]
     OutOfBounds {
+        /// Offending start offset.
+        start: usize,
         /// Offending end offset.
         end: usize,
         /// Length of the text in bytes.
@@ -231,6 +233,7 @@ impl TextSpan {
         }
         if end > text.len() {
             return Err(SpanError::OutOfBounds {
+                start,
                 end,
                 len: text.len(),
             });
@@ -382,8 +385,13 @@ mod tests {
             "span 2..2 is empty or inverted"
         );
         assert_eq!(
-            SpanError::OutOfBounds { end: 9, len: 3 }.to_string(),
-            "span 0..9 does not fit in 3 bytes of text"
+            SpanError::OutOfBounds {
+                start: 2,
+                end: 9,
+                len: 3
+            }
+            .to_string(),
+            "span 2..9 does not fit in 3 bytes of text"
         );
         assert_eq!(
             SpanError::NotCharBoundary { offset: 1 }.to_string(),
