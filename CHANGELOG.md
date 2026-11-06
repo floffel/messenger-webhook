@@ -51,6 +51,12 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- **`Registry::encode` rejects cross-channel messages.** The registry used the
+  caller's `channel` argument for dispatch but never compared it with
+  `NormalizedMessage::channel`, so a message tagged for one provider could be
+  encoded by another provider's adapter under the wrong recipient and length
+  rules. A mismatch now returns the existing typed `InvalidMessage` error before
+  the adapter is called. Closes #96.
 - **Header lookup no longer allocates on mixed-case queries.** `Headers::get`
   copied the query into a fresh lower-cased `String` whenever it contained an
   ASCII upper-case byte, then scanned the entries comparing owned strings; that
