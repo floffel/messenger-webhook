@@ -7,8 +7,9 @@
 #![allow(dead_code, unused_imports, unused_mut, unused_variables)]
 
 use messenger_webhook::{
-    signature, Attachment, AttachmentKind, Channel, DeliveryStatus, Error, Headers,
-    NormalizedMessage, ProviderPayload, Reaction, Registry, Secret,
+    signature, Attachment, AttachmentKind, Channel, DeliveryStatus, Error, Headers, IdempotencyKey,
+    NormalizedMessage, ProviderPayload, Reaction, Registry, RetryPolicy, Secret,
+    MAX_IDEMPOTENCY_KEY_BYTES,
 };
 
 #[test]
@@ -114,6 +115,44 @@ fn provider_payload_accessors() {
     assert!(payload.body().starts_with(b"{"));
     assert_eq!(payload.json().unwrap()["body"], "hi");
     assert_eq!(payload.clone().into_body(), payload.body());
+}
+
+#[test]
+fn provider_payload_retry_contract_accessors() {
+    let unsafe_payload =
+        ProviderPayload::new(Channel::WhatsApp, "POST", "application/json", vec![]);
+    assert_eq!(unsafe_payload.retry(), RetryPolicy::UnsafeUnlessKeyPresent);
+    assert!(unsafe_payload.retry().is_unsafe_without_key());
+    assert!(unsafe_payload.idempotency_key().is_none());
+
+    let key = IdempotencyKey::new("txn-1").unwrap();
+    let safe_payload = ProviderPayload::with_retry(
+        Channel::Matrix,
+        "PUT",
+        "application/json",
+        vec![],
+        RetryPolicy::Safe,
+        Some(key.clone()),
+    );
+    assert_eq!(safe_payload.retry().as_str(), "safe");
+    assert!(!safe_payload.retry().is_unsafe_without_key());
+    assert_eq!(safe_payload.idempotency_key(), Some(&key));
+}
+
+#[test]
+fn idempotency_key_boundaries() {
+    assert!(matches!(
+        IdempotencyKey::new(""),
+        Err(Error::InvalidIdempotencyKey { .. })
+    ));
+
+    let at_limit = IdempotencyKey::new("a".repeat(MAX_IDEMPOTENCY_KEY_BYTES)).unwrap();
+    assert_eq!(at_limit.as_str().len(), MAX_IDEMPOTENCY_KEY_BYTES);
+
+    assert!(matches!(
+        IdempotencyKey::new("a".repeat(MAX_IDEMPOTENCY_KEY_BYTES + 1)),
+        Err(Error::InvalidIdempotencyKey { .. })
+    ));
 }
 
 #[test]
@@ -245,6 +284,9 @@ fn every_error_variant_renders_without_panicking() {
             limit: 4096,
             actual: 5000,
             unit: "UTF-16 units",
+        },
+        Error::InvalidIdempotencyKey {
+            reason: "empty".to_owned(),
         },
         Error::UnknownChannel(Channel::Other("signal".to_owned())),
     ];

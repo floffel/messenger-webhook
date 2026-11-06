@@ -19,6 +19,15 @@ carry a `!` in the conventional-commit subject.
 
 ### Added
 
+- **Outbound retry metadata.** `ProviderPayload` now carries
+  `retry(): RetryPolicy` and `idempotency_key(): Option<&IdempotencyKey>`, so a
+  caller that owns HTTP retries can tell whether repeating an outbound request
+  is safe. The Matrix adapter emits a transaction id and marks retries as
+  `Safe`; WhatsApp and Telegram mark their POST sends as
+  `UnsafeUnlessKeyPresent`, because repeating them can duplicate the message.
+  `ProviderPayload::new` keeps its existing signature and defaults to the
+  conservative unsafe policy, while `ProviderPayload::with_retry` is available
+  for adapters that know the provider contract. Closes #39.
 - **Rich text: `NormalizedMessage::spans`.** Providers flatten formatting into
   markup that this crate threw away, so a Telegram `**bold**` run reached the
   application as nothing but text. `NormalizedMessage` now carries

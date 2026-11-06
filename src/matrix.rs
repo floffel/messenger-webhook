@@ -19,17 +19,21 @@
 //! ```
 
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{Error, Result};
 use crate::headers::Headers;
 use crate::id;
 use crate::json;
-use crate::model::ProviderPayload;
 use crate::model::{
-    Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, Reaction,
+    Attachment, AttachmentKind, Channel, DeliveryStatus, IdempotencyKey, NormalizedMessage,
+    ProviderPayload, Reaction, RetryPolicy,
 };
 use crate::secret::Secret;
-use crate::{check_body, json_payload, recipient, Adapter, MAX_BODY_BYTES};
+use crate::{check_body, payload, recipient, Adapter, MAX_BODY_BYTES};
+
+/// Process-wide sequence for Matrix adapter transaction ids.
+static MATRIX_TXN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Header carrying the application service token.
 pub const AUTHORIZATION_HEADER: &str = "authorization";
@@ -162,8 +166,20 @@ impl Adapter for MatrixAdapter {
         };
 
         apply_relations(&mut content, message);
-        json_payload(Channel::Matrix, "PUT", &Value::Object(content))
+        payload(
+            Channel::Matrix,
+            "PUT",
+            &Value::Object(content),
+            RetryPolicy::Safe,
+            Some(matrix_transaction_key()),
+        )
     }
+}
+
+/// Builds the transaction key Matrix needs to de-duplicate a send.
+fn matrix_transaction_key() -> IdempotencyKey {
+    let sequence = MATRIX_TXN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    IdempotencyKey::from_validated(format!("mw-{sequence:016x}"))
 }
 
 /// Builds the `content` of an `m.image`/`m.video`/`m.audio`/`m.file`/

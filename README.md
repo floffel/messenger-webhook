@@ -78,6 +78,7 @@ let message = NormalizedMessage::text(Channel::Telegram, "-1001", "Hallo");
 let payload = adapter.encode(&message)?;
 
 assert_eq!(payload.method(), "POST");
+assert_eq!(payload.retry(), messenger_webhook::RetryPolicy::UnsafeUnlessKeyPresent);
 let body = payload.json()?;              // {"chat_id":"-1001","text":"Hallo"}
 ```
 
@@ -97,6 +98,14 @@ Messages the provider cannot express (empty recipient, no text and no media,
 unsupported media kind, non-numeric Telegram ids, non-`mxc://` Matrix urls,
 edits) fail with `Error::InvalidMessage` instead of being sent as something the
 provider would reject.
+
+The payload also carries the retry contract. `ProviderPayload::retry()` is
+`UnsafeUnlessKeyPresent` for the WhatsApp and Telegram POST endpoints: a caller
+that owns retries must not repeat those blindly after a `5xx` or timeout, or the
+send can duplicate. Matrix payloads are `Safe` because their method is `PUT`
+and `ProviderPayload::idempotency_key()` carries the transaction id the request
+path must include; repeating with that key returns the original event instead of
+creating another one.
 
 ## Matrix outbound client (`matrix-out`)
 

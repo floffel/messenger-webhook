@@ -111,8 +111,8 @@ pub use error::{Error, Result};
 pub use headers::Headers;
 pub use model::SYNTHETIC_ID_PREFIX;
 pub use model::{
-    Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, ProviderPayload,
-    Reaction,
+    Attachment, AttachmentKind, Channel, DeliveryStatus, IdempotencyKey, NormalizedMessage,
+    ProviderPayload, Reaction, RetryPolicy, MAX_IDEMPOTENCY_KEY_BYTES,
 };
 pub use registry::Registry;
 pub use rich::{SpanError, TextFormat, TextSpan};
@@ -223,6 +223,13 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     /// UTF-16 units and Telegram captions at 1024 UTF-16 units. Matrix has no
     /// documented body limit.
     ///
+    /// The returned [`ProviderPayload`] also states whether the caller may
+    /// retry the request after a `5xx` or timeout. A payload marked
+    /// [`RetryPolicy::UnsafeUnlessKeyPresent`] must not be repeated blindly:
+    /// doing so can duplicate a message at the provider. When the provider
+    /// supports idempotency keys, [`ProviderPayload::idempotency_key`] carries
+    /// the key that makes a retry repeat rather than duplicate.
+    ///
     /// # Errors
     ///
     /// - [`Error::MessageTooLong`] when the text exceeds the provider limit.
@@ -268,12 +275,32 @@ pub(crate) fn json_payload(
     method: &'static str,
     body: &serde_json::Value,
 ) -> Result<ProviderPayload> {
+    payload(
+        channel,
+        method,
+        body,
+        RetryPolicy::UnsafeUnlessKeyPresent,
+        None,
+    )
+}
+
+/// Serialises `body` into a [`ProviderPayload`] with a retry contract.
+#[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+pub(crate) fn payload(
+    channel: Channel,
+    method: &'static str,
+    body: &serde_json::Value,
+    retry: RetryPolicy,
+    idempotency_key: Option<IdempotencyKey>,
+) -> Result<ProviderPayload> {
     let encoded = serde_json::to_vec(body).map_err(|error| Error::Payload(error.to_string()))?;
-    Ok(ProviderPayload::new(
+    Ok(ProviderPayload::with_retry(
         channel,
         method,
         "application/json",
         encoded,
+        retry,
+        idempotency_key,
     ))
 }
 

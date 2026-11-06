@@ -251,6 +251,149 @@ impl DeliveryStatus {
 /// ```
 pub const SYNTHETIC_ID_PREFIX: &str = "synthetic:";
 
+/// A caller-visible retry contract for one outbound payload.
+///
+/// This crate performs no I/O, so the application owns HTTP retries. This enum
+/// is how an adapter tells the caller whether a retry can duplicate an already
+/// accepted send. A caller should retry only when [`ProviderPayload::retry`]
+/// says it is safe, or when the caller supplies the same
+/// [`ProviderPayload::idempotency_key`] again.
+///
+/// ```
+/// use messenger_webhook::RetryPolicy;
+///
+/// assert_eq!(RetryPolicy::Safe.as_str(), "safe");
+/// assert!(RetryPolicy::UnsafeUnlessKeyPresent.is_unsafe_without_key());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RetryPolicy {
+    /// Repeating the exact request is safe: it is a read, state-setting write or
+    /// provider-idempotent write.
+    Safe,
+    /// Repeating the request can create a duplicate unless it carries the same
+    /// [`ProviderPayload::idempotency_key`] as the original attempt.
+    UnsafeUnlessKeyPresent,
+}
+
+impl RetryPolicy {
+    /// Stable lower-case name.
+    ///
+    /// ```
+    /// use messenger_webhook::RetryPolicy;
+    ///
+    /// assert_eq!(RetryPolicy::UnsafeUnlessKeyPresent.as_str(), "unsafe-unless-key-present");
+    /// ```
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Safe => "safe",
+            Self::UnsafeUnlessKeyPresent => "unsafe-unless-key-present",
+        }
+    }
+
+    /// Whether a retry is unsafe until the caller proves the same idempotency
+    /// key will be reused.
+    ///
+    /// ```
+    /// use messenger_webhook::RetryPolicy;
+    ///
+    /// assert!(!RetryPolicy::Safe.is_unsafe_without_key());
+    /// assert!(RetryPolicy::UnsafeUnlessKeyPresent.is_unsafe_without_key());
+    /// ```
+    #[must_use]
+    pub const fn is_unsafe_without_key(&self) -> bool {
+        matches!(self, Self::UnsafeUnlessKeyPresent)
+    }
+}
+
+/// The idempotency key that makes a retry repeat instead of duplicate.
+///
+/// This is separate from [`NormalizedMessage::external_id`]: inbound events use
+/// provider ids for deduplication, while outbound retries use the key a
+/// provider documents for the send endpoint. Matrix transaction ids are the
+/// canonical example.
+///
+/// ```
+/// use messenger_webhook::IdempotencyKey;
+///
+/// let key = IdempotencyKey::new("order-42")?;
+/// assert_eq!(key.as_str(), "order-42");
+///
+/// assert!(IdempotencyKey::new("").is_err());
+/// # Ok::<(), messenger_webhook::Error>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IdempotencyKey(String);
+
+impl IdempotencyKey {
+    /// Wraps an already validated key without re-running validation.
+    pub(crate) fn from_validated(raw: String) -> Self {
+        Self(raw)
+    }
+
+    /// Wraps a non-empty, bounded key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidIdempotencyKey`] when `raw` is empty or
+    /// longer than [`MAX_IDEMPOTENCY_KEY_BYTES`].
+    ///
+    /// ```
+    /// use messenger_webhook::IdempotencyKey;
+    ///
+    /// assert!(IdempotencyKey::new("txn-1").is_ok());
+    /// assert!(IdempotencyKey::new("").is_err());
+    /// ```
+    pub fn new(raw: impl Into<String>) -> crate::Result<Self> {
+        let raw = raw.into();
+        if raw.is_empty() {
+            return Err(crate::Error::InvalidIdempotencyKey {
+                reason: "idempotency key is empty".to_owned(),
+            });
+        }
+        if raw.len() > MAX_IDEMPOTENCY_KEY_BYTES {
+            return Err(crate::Error::InvalidIdempotencyKey {
+                reason: format!(
+                    "idempotency key is {} bytes, the ceiling is {MAX_IDEMPOTENCY_KEY_BYTES}",
+                    raw.len()
+                ),
+            });
+        }
+        Ok(Self::from_validated(raw))
+    }
+
+    /// The key as the provider expects it in the request.
+    ///
+    /// ```
+    /// use messenger_webhook::IdempotencyKey;
+    ///
+    /// assert_eq!(IdempotencyKey::new("txn-1")?.as_str(), "txn-1");
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for IdempotencyKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Longest idempotency key this crate will carry in a payload.
+///
+/// Provider limits differ; this is a local guard matching the Matrix
+/// transaction-id ceiling so a caller cannot paste an unbounded string into a
+/// request path.
+///
+/// ```
+/// assert_eq!(messenger_webhook::MAX_IDEMPOTENCY_KEY_BYTES, 255);
+/// ```
+pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 255;
+
 /// One inbound event, provider independent.
 ///
 /// A message, a reaction, an edit and a delivery receipt are all one of these:
@@ -447,6 +590,8 @@ pub struct ProviderPayload {
     method: &'static str,
     content_type: &'static str,
     body: Vec<u8>,
+    idempotency_key: Option<IdempotencyKey>,
+    retry: RetryPolicy,
 }
 
 impl ProviderPayload {
@@ -465,12 +610,91 @@ impl ProviderPayload {
         content_type: &'static str,
         body: Vec<u8>,
     ) -> Self {
+        Self::with_retry(
+            channel,
+            method,
+            content_type,
+            body,
+            RetryPolicy::UnsafeUnlessKeyPresent,
+            None,
+        )
+    }
+
+    /// Wraps a serialised body together with its retry contract.
+    ///
+    /// Adapters use this constructor when they know whether repeating the
+    /// request is safe. The plain [`ProviderPayload::new`] constructor keeps the
+    /// conservative default: a payload is unsafe to retry unless it carries an
+    /// idempotency key.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderPayload, RetryPolicy};
+    ///
+    /// let payload = ProviderPayload::with_retry(
+    ///     Channel::Other("echo".into()),
+    ///     "POST",
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    ///     RetryPolicy::Safe,
+    ///     None,
+    /// );
+    /// assert_eq!(payload.retry(), RetryPolicy::Safe);
+    /// ```
+    #[must_use]
+    pub fn with_retry(
+        channel: Channel,
+        method: &'static str,
+        content_type: &'static str,
+        body: Vec<u8>,
+        retry: RetryPolicy,
+        idempotency_key: Option<IdempotencyKey>,
+    ) -> Self {
         Self {
             channel,
             method,
             content_type,
             body,
+            idempotency_key,
+            retry,
         }
+    }
+
+    /// The retry contract for this payload.
+    ///
+    /// A caller must not repeat a payload blindly when this is
+    /// [`RetryPolicy::UnsafeUnlessKeyPresent`]. Matrix payloads use
+    /// [`RetryPolicy::Safe`] because their request path includes
+    /// [`ProviderPayload::idempotency_key`]. A caller that retries that send
+    /// must reuse the payload, or at least the same key, rather than calling
+    /// [`crate::Adapter::encode`] again.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderPayload, RetryPolicy};
+    ///
+    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", vec![]);
+    /// assert_eq!(payload.retry(), RetryPolicy::UnsafeUnlessKeyPresent);
+    /// ```
+    #[must_use]
+    pub const fn retry(&self) -> RetryPolicy {
+        self.retry
+    }
+
+    /// The provider idempotency key for this payload, if any.
+    ///
+    /// Matrix encodes this as the transaction id in `PUT /rooms/.../{txnId}`.
+    /// Providers with no such endpoint leave it `None`. A caller that retries a
+    /// Matrix send must reuse this key for every attempt.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderPayload, RetryPolicy};
+    ///
+    /// let payload = ProviderPayload::new(Channel::WhatsApp, "POST", "application/json", vec![]);
+    /// assert!(payload.idempotency_key().is_none());
+    /// assert!(payload.retry().is_unsafe_without_key());
+    /// ```
+    #[must_use]
+    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+        self.idempotency_key.as_ref()
     }
 
     /// Channel this payload is addressed to.
