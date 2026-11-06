@@ -177,6 +177,29 @@ fn header_name_token_set_is_enforced() {
 }
 
 #[test]
+fn header_name_folding_is_ascii_only() {
+    let headers = Headers::from_iter([("X-\u{dc}ber", "upper"), ("X-\u{fc}ber", "lower")]);
+
+    assert_eq!(headers.get("x-\u{dc}ber"), Some("upper"));
+    assert_eq!(headers.get("X-\u{dc}BER"), Some("upper"));
+    assert_eq!(headers.get("x-\u{fc}ber"), Some("lower"));
+    assert_eq!(headers.get("X-\u{fc}BER"), Some("lower"));
+    assert_eq!(
+        headers.get_all("x-\u{dc}ber").collect::<Vec<_>>(),
+        ["upper"]
+    );
+    assert_eq!(
+        headers.get_all("x-\u{fc}ber").collect::<Vec<_>>(),
+        ["lower"]
+    );
+
+    let mut appended = Headers::new();
+    appended.append("X-\u{dc}ber", "v");
+    assert_eq!(appended.get("x-\u{dc}ber"), Some("v"));
+    assert_eq!(appended.get("x-\u{fc}ber"), None, "ASCII folding only");
+}
+
+#[test]
 fn header_value_boundary_is_enforced() {
     let at_limit = "v".repeat(MAX_HEADER_VALUE_BYTES);
     let over_limit = "v".repeat(MAX_HEADER_VALUE_BYTES + 1);

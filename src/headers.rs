@@ -30,7 +30,13 @@ pub const MAX_HEADER_NAME_BYTES: usize = (1 << 16) - 1;
 /// ```
 pub const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
 
-/// A case-insensitive collection of request headers.
+/// An ASCII case-insensitive collection of request headers.
+///
+/// Header names are compared using ASCII case folding only, matching HTTP's
+/// token-name semantics: ASCII `A`..`Z` compare equal to `a`..`z`, and all
+/// other bytes compare exactly. [`Headers::insert`] rejects names outside the
+/// HTTP field name token set; [`Headers::append`] and the constructors preserve
+/// non-ASCII bytes without Unicode case folding.
 ///
 /// Header values are redacted in [`Debug`](fmt::Debug) output, so logging a
 /// header set cannot expose credentials. Repeated fields are preserved when
@@ -90,7 +96,7 @@ impl Headers {
         Self::default()
     }
 
-    /// Inserts a header, lower-casing its name and replacing existing entries.
+    /// Inserts a header, ASCII lower-casing its name and replacing existing entries.
     ///
     /// ```
     /// use messenger_webhook::Headers;
@@ -139,11 +145,13 @@ impl Headers {
         Ok(self)
     }
 
-    /// Appends a header, lower-casing its name and preserving repeated fields.
+    /// Appends a header, ASCII lower-casing its name and preserving repeated fields.
     ///
     /// Use this when mapping a framework's header container into [`Headers`]:
     /// HTTP allows a field to repeat, and the verification path has to see each
     /// occurrence to enforce headers such as `X-Hub-Signature-256` exactly.
+    /// This method does not validate names, and non-ASCII bytes are not
+    /// case-folded for later lookup.
     ///
     /// ```
     /// use messenger_webhook::Headers;
@@ -165,8 +173,9 @@ impl Headers {
 
     /// Builds a header set from pairs whose values may be owned or borrowed.
     ///
-    /// Repeated names are preserved. Use [`Headers::insert`] if you need
-    /// last-write-wins normalisation instead.
+    /// Repeated names are preserved. Names are handled like [`Headers::append`],
+    /// including ASCII-only case folding and no name validation. Use
+    /// [`Headers::insert`] if you need last-write-wins normalisation instead.
     ///
     /// ```
     /// use messenger_webhook::Headers;
@@ -195,19 +204,23 @@ impl Headers {
         headers
     }
 
-    /// Looks a header up by name, case-insensitively.
+    /// Looks a header up by name using ASCII case-insensitive comparison.
     ///
     /// ```
     /// use messenger_webhook::Headers;
     ///
     /// assert_eq!(Headers::new().get("authorization"), None);
+    ///
+    /// let headers = Headers::from_iter([("x-\u{dc}ber", "v")]);
+    /// assert_eq!(headers.get("X-\u{dc}BER"), Some("v"));
+    /// assert_eq!(headers.get("X-\u{fc}ber"), None);
     /// ```
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&str> {
         self.lookup(name)
     }
 
-    /// Looks up every value stored for `name`, case-insensitively.
+    /// Looks up every value stored for `name`, using ASCII case-insensitive comparison.
     ///
     /// Values are returned in insertion order. A name that was never inserted
     /// yields an empty iterator. This is the accessor verification uses when a
