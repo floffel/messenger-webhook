@@ -57,6 +57,7 @@ use crate::matrix_out::Sleeper;
 ///     url: "https://example.org/x".into(),
 ///     headers: vec![("authorization".into(), "Bearer secret".into())],
 ///     body: Vec::new(),
+///     attempt: 1,
 /// };
 /// assert!(!format!("{request:?}").contains("secret"));
 /// ```
@@ -70,6 +71,12 @@ pub struct RecordedRequest {
     pub headers: Vec<(String, String)>,
     /// The body bytes as they were handed to the transport.
     pub body: Vec<u8>,
+    /// The 1-based position of this call in the stub's record.
+    ///
+    /// A retried send records its second attempt as the next index, so "the
+    /// same URL and body twice" stays distinguishable from two separate sends
+    /// racing on one stub.
+    pub attempt: usize,
 }
 
 impl RecordedRequest {
@@ -83,6 +90,7 @@ impl RecordedRequest {
     ///     url: "u".into(),
     ///     headers: vec![("accept".into(), "application/json".into())],
     ///     body: Vec::new(),
+    ///     attempt: 1,
     /// };
     /// assert_eq!(request.header("Accept"), Some("application/json"));
     /// ```
@@ -108,6 +116,7 @@ impl RecordedRequest {
     ///     url: "u".into(),
     ///     headers: Vec::new(),
     ///     body: br#"{"msgtype":"m.text"}"#.to_vec(),
+    ///     attempt: 1,
     /// };
     /// assert_eq!(request.json()?["msgtype"], "m.text");
     /// # Ok::<(), serde_json::Error>(())
@@ -126,6 +135,7 @@ impl fmt::Debug for RecordedRequest {
             .field("url", &url)
             .field("headers", &headers)
             .field("body", &format_args!("{} bytes", self.body.len()))
+            .field("attempt", &self.attempt)
             .finish()
     }
 }
@@ -139,11 +149,39 @@ enum Outcome {
     Failure(TransportError),
 }
 
-/// The scripted queue and the recorded calls, guarded by one lock so a call and
-/// its scripted answer move atomically.
+/// Selects which requests a routed outcome answers.
+///
+/// A routed outcome is matched before the FIFO fallback, so a 429 scripted for
+/// one request is never handed to whichever task reaches the queue first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Matcher {
+    /// The HTTP method the request must use.
+    method: Method,
+    /// A substring the request URL must contain. Empty matches any URL.
+    url_fragment: String,
+}
+
+impl Matcher {
+    fn matches(&self, request: &Request<'_>) -> bool {
+        request.method() == self.method && request.url().contains(self.url_fragment.as_str())
+    }
+}
+
+/// A routed outcome: a matcher plus the answer to give when it matches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Routed {
+    matcher: Matcher,
+    outcome: Outcome,
+}
+
+/// The scripted queue, the routed answers and the recorded calls, guarded by
+/// one lock so a call and its scripted answer move atomically.
 #[derive(Debug, Default)]
 struct State {
+    /// The FIFO fallback, consumed when no routed outcome matches.
     script: VecDeque<Outcome>,
+    /// Routed outcomes, scanned before the FIFO fallback.
+    routed: Vec<Routed>,
     recorded: Vec<RecordedRequest>,
 }
 
@@ -269,6 +307,104 @@ impl StubTransport {
         self
     }
 
+    /// Routes a literal response to the requests it matches.
+    ///
+    /// A routed outcome is scanned before the FIFO fallback, so a `429`
+    /// scripted for one request is never handed to a different task that
+    /// happens to reach the queue first. `url_fragment` is a substring the
+    /// request URL must contain; an empty fragment matches every URL.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::StubTransport;
+    /// use messenger_webhook::matrix_out::transport::{Method, Response};
+    ///
+    /// let stub = StubTransport::new();
+    /// stub.push_for(Method::Put, "/rooms/!a:example.org/", Response::json(429, "{}"));
+    /// assert_eq!(stub.remaining(), 1);
+    /// ```
+    pub fn push_for(
+        &self,
+        method: Method,
+        url_fragment: impl Into<String>,
+        response: Response,
+    ) -> &Self {
+        self.push_routed(method, url_fragment, Outcome::Response(response))
+    }
+
+    /// Routes a JSON response to the requests it matches.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::transport::Method;
+    /// use messenger_webhook::matrix_out::StubTransport;
+    ///
+    /// let stub = StubTransport::new();
+    /// stub.push_json_for(Method::Put, "/rooms/!a:example.org/", 200, r#"{"event_id":"$1"}"#);
+    /// assert_eq!(stub.remaining(), 1);
+    /// ```
+    pub fn push_json_for(
+        &self,
+        method: Method,
+        url_fragment: impl Into<String>,
+        status: u16,
+        body: &str,
+    ) -> &Self {
+        self.push_for(method, url_fragment, Response::json(status, body))
+    }
+
+    /// Routes a status with an empty body to the requests it matches.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::transport::Method;
+    /// use messenger_webhook::matrix_out::StubTransport;
+    ///
+    /// let stub = StubTransport::new();
+    /// stub.push_status_for(Method::Put, "/typing/", 200);
+    /// assert_eq!(stub.remaining(), 1);
+    /// ```
+    pub fn push_status_for(
+        &self,
+        method: Method,
+        url_fragment: impl Into<String>,
+        status: u16,
+    ) -> &Self {
+        self.push_for(method, url_fragment, Response::new(status, Vec::new()))
+    }
+
+    /// Routes a transport-level failure to the requests it matches.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::transport::{Method, TransportError};
+    /// use messenger_webhook::matrix_out::StubTransport;
+    ///
+    /// let stub = StubTransport::new();
+    /// stub.push_failure_for(Method::Put, "/send/", TransportError::timeout("30s"));
+    /// assert_eq!(stub.remaining(), 1);
+    /// ```
+    pub fn push_failure_for(
+        &self,
+        method: Method,
+        url_fragment: impl Into<String>,
+        error: TransportError,
+    ) -> &Self {
+        self.push_routed(method, url_fragment, Outcome::Failure(error))
+    }
+
+    fn push_routed(
+        &self,
+        method: Method,
+        url_fragment: impl Into<String>,
+        outcome: Outcome,
+    ) -> &Self {
+        self.lock().routed.push(Routed {
+            matcher: Matcher {
+                method,
+                url_fragment: url_fragment.into(),
+            },
+            outcome,
+        });
+        self
+    }
+
     /// Every request the stub has answered, in call order.
     ///
     /// ```
@@ -305,7 +441,8 @@ impl StubTransport {
         self.lock().recorded.last().cloned()
     }
 
-    /// How many scripted outcomes are still queued.
+    /// How many scripted outcomes are still pending: the FIFO queue plus the
+    /// routed answers that no request has matched yet.
     ///
     /// ```
     /// use messenger_webhook::matrix_out::StubTransport;
@@ -316,7 +453,8 @@ impl StubTransport {
     /// ```
     #[must_use]
     pub fn remaining(&self) -> usize {
-        self.lock().script.len()
+        let state = self.lock();
+        state.script.len() + state.routed.len()
     }
 
     /// Both counters read under one lock, so a call and its scripted answer
@@ -335,7 +473,7 @@ impl StubTransport {
         let state = self.lock();
         StubCounters {
             calls: state.recorded.len(),
-            remaining: state.script.len(),
+            remaining: state.script.len() + state.routed.len(),
         }
     }
 
@@ -347,23 +485,34 @@ impl StubTransport {
 impl Transport for StubTransport {
     fn send<'a>(&'a self, request: Request<'a>) -> BoxFuture<'a, Result<Response, TransportError>> {
         Box::pin(async move {
-            let recorded = RecordedRequest {
-                method: request.method(),
-                url: request.url().to_owned(),
+            let method = request.method();
+            let url = request.url().to_owned();
+            // One guard over the shared state: the call is recorded and its
+            // scripted answer consumed in the same critical section, so no
+            // observer sees a recorded call whose answer is still queued.
+            let mut state = self.lock();
+            let attempt = state.recorded.len() + 1;
+            state.recorded.push(RecordedRequest {
+                method,
+                url: url.clone(),
                 headers: request.headers().to_vec(),
                 body: match request.body() {
                     Body::Empty => Vec::new(),
                     body => body.as_bytes().to_vec(),
                 },
-            };
-            let method = recorded.method;
-            let url = recorded.url.clone();
-            // One guard over the shared state: the call is recorded and its
-            // scripted answer consumed in the same critical section, so no
-            // observer sees a recorded call whose answer is still queued.
-            let mut state = self.lock();
-            state.recorded.push(recorded);
-            match state.script.pop_front() {
+                attempt,
+            });
+            // A routed outcome is scanned before the FIFO fallback, so the
+            // caller's "this send fails, that send succeeds" script is honoured
+            // no matter which task reaches the stub first.
+            let routed = state
+                .routed
+                .iter()
+                .position(|candidate| candidate.matcher.matches(&request));
+            let outcome = routed
+                .map(|index| state.routed.remove(index).outcome)
+                .or_else(|| state.script.pop_front());
+            match outcome {
                 Some(Outcome::Response(response)) => Ok(response),
                 Some(Outcome::Failure(error)) => Err(error),
                 None => Err(TransportError::new(
@@ -489,6 +638,14 @@ mod tests {
                     .with_body(Body::Json(b"{}".to_vec())),
             ),
         )
+    }
+
+    fn call_to(
+        stub: &StubTransport,
+        method: Method,
+        url: &str,
+    ) -> Result<Response, TransportError> {
+        runtime().block_on(stub.send(Request::new(method, url)))
     }
 
     #[test]
@@ -633,6 +790,80 @@ mod tests {
     }
 
     #[test]
+    fn a_routed_outcome_is_selected_by_the_request_not_the_call_order() {
+        let stub = StubTransport::new();
+        // Scripted for call B only: a request to room-b is answered 429, while
+        // room-a is satisfied by the success fallback. FIFO order would hand the
+        // 429 to whichever request arrives first.
+        stub.push_json_for(
+            Method::Put,
+            "/rooms/%21room-b",
+            429,
+            r#"{"errcode":"M_LIMIT_EXCEEDED"}"#,
+        );
+        stub.push_json(200, r#"{"event_id":"$ok"}"#);
+
+        let a = call_to(
+            &stub,
+            Method::Put,
+            "https://example.org/rooms/%21room-a/send",
+        )
+        .expect("a");
+        assert_eq!(a.status(), 200);
+        let b = call_to(
+            &stub,
+            Method::Put,
+            "https://example.org/rooms/%21room-b/send",
+        )
+        .expect("b");
+        assert_eq!(b.status(), 429);
+        assert_eq!(stub.remaining(), 0);
+    }
+
+    #[test]
+    fn a_routed_outcome_only_matches_its_method_and_url_fragment() {
+        let stub = StubTransport::new();
+        // Just inside: the exact method and a containing URL fragment match.
+        stub.push_status_for(Method::Put, "send", 204);
+        // Just outside: same fragment, wrong method, so it stays queued.
+        stub.push_status_for(Method::Get, "send", 500);
+        assert_eq!(stub.remaining(), 2);
+
+        let matched = call_to(&stub, Method::Put, "https://example.org/send").expect("matched");
+        assert_eq!(matched.status(), 204);
+        assert_eq!(stub.remaining(), 1, "the wrong-method route must not fire");
+        assert_eq!(stub.requests()[0].attempt, 1);
+    }
+
+    #[test]
+    fn a_routed_miss_falls_back_to_the_fifo_queue() {
+        let stub = StubTransport::new();
+        stub.push_status_for(Method::Get, "/whoami", 200);
+        stub.push_status(503);
+
+        let response = call_to(&stub, Method::Put, "https://example.org/send").expect("fallback");
+        assert_eq!(response.status(), 503);
+        assert_eq!(stub.remaining(), 1, "the unrouted route is still pending");
+    }
+
+    #[test]
+    fn the_attempt_index_numbers_every_call_in_order() {
+        let stub = StubTransport::new();
+        stub.push_status(200);
+        stub.push_status(200);
+        stub.push_status(200);
+        for _ in 0..3 {
+            call(&stub).expect("scripted");
+        }
+        let attempts: Vec<usize> = stub
+            .requests()
+            .into_iter()
+            .map(|request| request.attempt)
+            .collect();
+        assert_eq!(attempts, vec![1, 2, 3]);
+    }
+
+    #[test]
     fn requests_are_recorded_without_credentials() {
         let stub = StubTransport::new();
         stub.push_status(200);
@@ -677,6 +908,7 @@ mod tests {
             url: "u".into(),
             headers: Vec::new(),
             body: Vec::new(),
+            attempt: 1,
         };
         assert_eq!(request.header("accept"), None);
         assert!(request.json().is_err());

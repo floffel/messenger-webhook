@@ -497,3 +497,64 @@ async fn a_failing_room_does_not_starve_the_others() {
     assert_eq!(ok + refused, TASKS);
     assert_eq!(transport.call_count(), TASKS);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_routed_script_answers_the_intended_room_across_tasks() {
+    // The exact concurrency hazard the audit named: a 429 scripted for one send
+    // must not land on whichever task reaches the stub first. Room `b` is
+    // rate-limited once then succeeds; every other room succeeds immediately
+    // from the FIFO fallback. All of them race on one client and one stub.
+    let transport = Arc::new(StubTransport::new());
+    transport.push_json_for(
+        messenger_webhook::matrix_out::transport::Method::Put,
+        "room-b",
+        429,
+        r#"{"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":1}"#,
+    );
+    transport.push_json_for(
+        messenger_webhook::matrix_out::transport::Method::Put,
+        "room-b",
+        200,
+        r#"{"event_id":"$b"}"#,
+    );
+    for _ in 0..TASKS {
+        transport.push_json(200, r#"{"event_id":"$ok"}"#);
+    }
+    let client = Arc::new(client(transport.clone()));
+
+    let mut handles = Vec::with_capacity(TASKS);
+    // One task for the rate-limited room, then the rest for unrelated rooms.
+    for task in 0..=TASKS {
+        let client = Arc::clone(&client);
+        handles.push(tokio::spawn(async move {
+            let room = if task == TASKS {
+                "!room-b:m.example".to_owned()
+            } else {
+                format!("!room-{task}:m.example")
+            };
+            (task == TASKS, client.send_text(&room, "Hallo").await)
+        }));
+    }
+    let mut limited_attempts = None;
+    for handle in handles {
+        let (is_limited_room, result) = handle.await.expect("no task panicked");
+        let outcome = result.expect("sent");
+        if is_limited_room {
+            limited_attempts = Some(outcome.attempts);
+        } else {
+            assert_eq!(outcome.attempts, 1, "an unrelated room absorbed the 429");
+        }
+    }
+    assert_eq!(limited_attempts, Some(2), "room b must hit exactly one 429");
+
+    // The recorded attempt index makes the retried transaction assertable: the
+    // room-b URL appears twice, at two distinct positions in the record.
+    let attempts: Vec<usize> = transport
+        .requests()
+        .iter()
+        .filter(|request| request.url.contains("room-b"))
+        .map(|request| request.attempt)
+        .collect();
+    assert_eq!(attempts.len(), 2);
+    assert_ne!(attempts[0], attempts[1]);
+}
