@@ -51,6 +51,12 @@ pub const MAX_CAPTION_UTF16: usize = 1024;
 /// Header Telegram sends the registered `secret_token` in.
 pub const SECRET_TOKEN_HEADER: &str = "x-telegram-bot-api-secret-token";
 
+/// Largest dimension a normalised attachment can carry.
+///
+/// Photo renditions are picked by area, so dimensions outside this bound are
+/// ignored instead of letting a crafted update dominate the comparison.
+const MAX_PHOTO_DIMENSION: u64 = u32::MAX as u64;
+
 /// Adapter for Telegram Bot API updates.
 ///
 /// ```
@@ -294,9 +300,11 @@ fn attachments(message: &Value) -> Vec<Attachment> {
 
     // Telegram sends every rendition of a photo; keep the largest one.
     if let Some(photo) = json::child(message, "photo").and_then(Value::as_array) {
-        let largest = photo.iter().max_by_key(|size| {
-            json::unsigned(size, "width").unwrap_or(0) * json::unsigned(size, "height").unwrap_or(0)
-        });
+        let largest = photo
+            .iter()
+            .filter_map(|size| photo_area(size).map(|area| (size, area)))
+            .max_by_key(|(_, area)| *area)
+            .map(|(size, _)| size);
         if let Some(size) = largest {
             let mut attachment = Attachment::new(AttachmentKind::Image);
             attachment.id = json::id(size, "file_id");
@@ -382,6 +390,16 @@ fn attachments(message: &Value) -> Vec<Attachment> {
     }
 
     out
+}
+
+/// Area of a photo rendition, or `None` when its dimensions are unusable.
+fn photo_area(size: &Value) -> Option<u128> {
+    let width = json::unsigned(size, "width")?;
+    let height = json::unsigned(size, "height")?;
+    if width > MAX_PHOTO_DIMENSION || height > MAX_PHOTO_DIMENSION {
+        return None;
+    }
+    Some(u128::from(width) * u128::from(height))
 }
 
 /// Maps a `message_reaction` update; the reaction is keyed by the message it
