@@ -58,6 +58,13 @@ carry a `!` in the conventional-commit subject.
   accepts at most `GATE_WAITERS_PER_ROOM` queued callers, and a caller that
   waits longer than `GATE_WAIT_TIMEOUT` gets typed `OutboundError::GateTimeout`
   or `OutboundError::GateOverflow` before any request is attempted. Closes #67.
+- **A saturated per-room ordering map is now explicit and controllable.** The
+  gate map no longer evicts a room that still has an in-flight or queued send;
+  when all `GATE_CAPACITY` slots are active, `ClientConfig::with_ordering_saturation`
+  chooses backpressure (the default), a typed `OutboundError::OrderingLost`, or
+  an explicit unordered fallback. The client's `Debug` exposes latch-free
+  saturation-wait and unordered-send counters so degraded operation is
+  observable. Closes #66.
 - **The Meta subscription handshake now bounds the raw query and verify token
   before decoding or comparison.** `meta_subscription_challenge` rejects a raw
   query longer than `MAX_QUERY_BYTES` (4 KiB) before parsing and rejects a
