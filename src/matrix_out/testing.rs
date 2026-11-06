@@ -413,6 +413,8 @@ impl Sleeper for RecordingSleeper {
 mod tests {
     use super::*;
     use crate::matrix_out::transport::TransportErrorKind;
+    use std::collections::HashSet;
+    use std::sync::Arc;
 
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
@@ -445,6 +447,77 @@ mod tests {
         assert!(third.message.contains("PUT https://example.org/x"));
         assert_eq!(stub.remaining(), 0);
         assert_eq!(stub.call_count(), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn thirty_two_tasks_share_one_stub_without_losing_or_duplicating_outcomes() {
+        const TASKS: usize = 32;
+
+        let stub = Arc::new(StubTransport::new());
+        for _ in 0..TASKS {
+            stub.push_json(200, r#"{"event_id":"$ok"}"#);
+        }
+
+        let mut handles = Vec::with_capacity(TASKS);
+        for task in 0..TASKS {
+            let stub = Arc::clone(&stub);
+            handles.push(tokio::spawn(async move {
+                stub.send(Request::new(
+                    Method::Put,
+                    format!("https://example.org/{task}"),
+                ))
+                .await
+            }));
+        }
+
+        for handle in handles {
+            let response = handle.await.expect("task").expect("scripted success");
+            assert_eq!(response.status(), 200);
+        }
+
+        assert_eq!(stub.call_count(), TASKS);
+        assert_eq!(stub.remaining(), 0);
+        let urls: HashSet<String> = stub
+            .requests()
+            .into_iter()
+            .map(|request| request.url)
+            .collect();
+        assert_eq!(urls.len(), TASKS);
+    }
+
+    #[test]
+    fn the_queue_reports_empty_one_item_and_exact_exhaustion() {
+        let empty = StubTransport::new();
+        assert_eq!(empty.remaining(), 0);
+        let error = call(&empty).expect_err("an empty script has no response");
+        assert_eq!(error.kind, TransportErrorKind::TestHarness);
+        assert_eq!(empty.remaining(), 0);
+        assert_eq!(empty.call_count(), 1);
+
+        let one = StubTransport::new();
+        one.push_status(204);
+        assert_eq!(one.remaining(), 1);
+        assert_eq!(call(&one).expect("single response").status(), 204);
+        assert_eq!(one.remaining(), 0);
+        let error = call(&one).expect_err("the single response is gone");
+        assert_eq!(error.kind, TransportErrorKind::TestHarness);
+        assert_eq!(one.remaining(), 0);
+        assert_eq!(one.call_count(), 2);
+    }
+
+    #[test]
+    fn push_status_accepts_the_status_range_without_value_validation() {
+        let stub = StubTransport::new();
+        let statuses = [0, 100, 599, u16::MAX];
+        for status in statuses {
+            stub.push_status(status);
+        }
+        assert_eq!(stub.remaining(), statuses.len());
+
+        for status in statuses {
+            assert_eq!(call(&stub).expect("scripted status").status(), status);
+        }
+        assert_eq!(stub.remaining(), 0);
     }
 
     #[test]
