@@ -12,6 +12,8 @@ carry a `!` in the conventional-commit subject.
 
 ### Changed
 
+- The `cargo-deny` gate now resolves all features, so default-off dependencies
+  such as the `matrix-out` HTTP stack are covered by advisory checks. Closes #17.
 - `signature::decode_hex` and the synthetic-id suffix now use `const-hex` for
   the fixed-shape digest encode/decode path. The wire format is unchanged:
   signatures are still 64 lower-case hex digits after `sha256=`, and synthetic
