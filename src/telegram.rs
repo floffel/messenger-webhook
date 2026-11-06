@@ -30,7 +30,7 @@ use crate::model::{
     Attachment, AttachmentKind, Channel, NormalizedMessage, OutboundMessage, Reaction,
 };
 use crate::model::{ProviderMethod, ProviderPayload};
-use crate::rich::{utf16_to_byte_ranges, TextFormat, TextSpan};
+use crate::rich::{byte_to_utf16_ranges, utf16_to_byte_ranges, TextFormat, TextSpan};
 use crate::secret::Secret;
 use crate::{check_body, json_payload, recipient, utf16_len, Adapter};
 
@@ -187,6 +187,18 @@ impl Adapter for TelegramAdapter {
         let text = message.text.as_deref().unwrap_or_default();
         if let Some(attachment) = message.first_attachment() {
             telegram_attachment_fields(&mut body, attachment, text)?;
+            if !message.spans().is_empty() {
+                if text.is_empty() {
+                    return Err(Error::InvalidMessage {
+                        channel: Channel::Telegram,
+                        reason: "formatted runs need caption text".to_owned(),
+                    });
+                }
+                body.insert(
+                    "caption_entities".to_owned(),
+                    telegram_entities(text, message.spans())?,
+                );
+            }
         } else {
             if text.is_empty() {
                 return Err(Error::InvalidMessage {
@@ -204,6 +216,12 @@ impl Adapter for TelegramAdapter {
                 });
             }
             body.insert("text".to_owned(), Value::String(text.to_owned()));
+            if !message.spans().is_empty() {
+                body.insert(
+                    "entities".to_owned(),
+                    telegram_entities(text, message.spans())?,
+                );
+            }
         }
 
         if let Some(thread) = &message.thread_id {
@@ -312,6 +330,92 @@ fn telegram_attachment_fields(
         }
     }
     Ok(())
+}
+
+/// Encodes byte spans as Telegram `MessageEntity` objects.
+fn telegram_entities(text: &str, spans: &[TextSpan]) -> Result<Value> {
+    let ranges = byte_to_utf16_ranges(text, spans.iter().map(|span| Some((span.start, span.end))));
+    let mut entities = Vec::with_capacity(spans.len());
+    for (span, range) in spans.iter().zip(ranges) {
+        let Some((offset, length)) = range else {
+            return Err(Error::InvalidMessage {
+                channel: Channel::Telegram,
+                reason: format!(
+                    "span {}..{} does not slice message text",
+                    span.start, span.end
+                ),
+            });
+        };
+        entities.push(telegram_entity(&span.format, offset, length)?);
+    }
+    Ok(Value::Array(entities))
+}
+
+/// Maps one [`TextFormat`] onto the `MessageEntity` object Telegram accepts.
+fn telegram_entity(format: &TextFormat, offset: u64, length: u64) -> Result<Value> {
+    let mut entity = serde_json::Map::new();
+    entity.insert("offset".to_owned(), Value::from(offset));
+    entity.insert("length".to_owned(), Value::from(length));
+    match format {
+        TextFormat::Bold => insert_type(&mut entity, "bold"),
+        TextFormat::Italic => insert_type(&mut entity, "italic"),
+        TextFormat::Underline => insert_type(&mut entity, "underline"),
+        TextFormat::Strikethrough => insert_type(&mut entity, "strikethrough"),
+        TextFormat::Spoiler => insert_type(&mut entity, "spoiler"),
+        TextFormat::Code => insert_type(&mut entity, "code"),
+        TextFormat::Pre { language } => {
+            insert_type(&mut entity, "pre");
+            if let Some(language) = language.as_ref().filter(|language| !language.is_empty()) {
+                entity.insert("language".to_owned(), Value::String(language.clone()));
+            }
+        }
+        TextFormat::Link { url } => {
+            insert_type(&mut entity, "text_link");
+            entity.insert("url".to_owned(), Value::String(url.clone()));
+        }
+        TextFormat::Mention => insert_type(&mut entity, "mention"),
+        TextFormat::Hashtag => insert_type(&mut entity, "hashtag"),
+        TextFormat::Cashtag => insert_type(&mut entity, "cashtag"),
+        TextFormat::BotCommand => insert_type(&mut entity, "bot_command"),
+        TextFormat::Url => insert_type(&mut entity, "url"),
+        TextFormat::Email => insert_type(&mut entity, "email"),
+        TextFormat::PhoneNumber => insert_type(&mut entity, "phone_number"),
+        TextFormat::TextMention { user_id } => {
+            return Err(Error::InvalidMessage {
+                channel: Channel::Telegram,
+                reason: format!(
+                    "Telegram text_mention needs a full user object, got user_id {user_id:?}"
+                ),
+            });
+        }
+        TextFormat::CustomEmoji { id } => {
+            insert_type(&mut entity, "custom_emoji");
+            if id.is_empty() {
+                return Err(Error::InvalidMessage {
+                    channel: Channel::Telegram,
+                    reason: "custom_emoji id is empty".to_owned(),
+                });
+            }
+            entity.insert("custom_emoji_id".to_owned(), Value::String(id.clone()));
+        }
+        TextFormat::Blockquote => insert_type(&mut entity, "blockquote"),
+        TextFormat::ExpandableBlockquote => insert_type(&mut entity, "expandable_blockquote"),
+        TextFormat::Other(kind) => {
+            if kind.is_empty() {
+                return Err(Error::InvalidMessage {
+                    channel: Channel::Telegram,
+                    reason: "MessageEntity type is empty".to_owned(),
+                });
+            }
+            insert_type(&mut entity, kind);
+        }
+    }
+    Ok(Value::Object(entity))
+}
+
+/// Inserts the `type` field shared by every entity.
+fn insert_type(entity: &mut serde_json::Map<String, Value>, kind: &str) {
+    entity.insert("type".to_owned(), Value::String(kind.to_owned()));
 }
 
 /// Builds the `latitude` and `longitude` fields Telegram accepts for

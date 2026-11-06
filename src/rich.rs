@@ -375,9 +375,54 @@ where
         .collect()
 }
 
+/// Converts byte ranges into Telegram's UTF-16 code unit offsets.
+///
+/// Every successful range is a non-empty, char-boundary range of `text`, so the
+/// returned pair is safe to put into a `MessageEntity`. A range that does not
+/// slice `text` yields `None`; callers reject it instead of clamping it.
+#[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+pub(crate) fn byte_to_utf16_ranges<I>(text: &str, ranges: I) -> Vec<Option<(u64, u64)>>
+where
+    I: IntoIterator<Item = Option<(usize, usize)>>,
+{
+    let mut offsets = Vec::new();
+    let mut units = 0_u64;
+    for (byte, character) in text.char_indices() {
+        offsets.push((byte, units));
+        units = units.saturating_add(u64::try_from(character.len_utf16()).unwrap_or(u64::MAX));
+    }
+    offsets.push((text.len(), units));
+
+    ranges
+        .into_iter()
+        .map(|range| {
+            let (start, end) = range?;
+            if start >= end {
+                return None;
+            }
+            let start_unit = offsets
+                .binary_search_by_key(&start, |&(byte, _)| byte)
+                .ok()
+                .map(|index| offsets[index].1)?;
+            let end_unit = offsets
+                .binary_search_by_key(&end, |&(byte, _)| byte)
+                .ok()
+                .map(|index| offsets[index].1)?;
+            (end_unit > start_unit).then_some((start_unit, end_unit - start_unit))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{utf16_to_byte_ranges, SpanError, TextFormat, TextSpan};
+    use super::{byte_to_utf16_ranges, utf16_to_byte_ranges, SpanError, TextFormat, TextSpan};
+
+    fn byte_to_utf16_range(text: &str, start: usize, end: usize) -> Option<(u64, u64)> {
+        byte_to_utf16_ranges(text, [Some((start, end))])
+            .into_iter()
+            .next()
+            .flatten()
+    }
 
     fn utf16_to_byte_range(text: &str, offset: u64, length: u64) -> Option<(usize, usize)> {
         utf16_to_byte_ranges(text, [Some((offset, length))])
@@ -476,6 +521,32 @@ mod tests {
                 );
             }
         }
+
+        #[test]
+        fn every_char_boundary_pair_encodes_as_utf16(
+            text in proptest::prelude::any::<String>(),
+            a in proptest::prelude::any::<usize>(),
+            b in proptest::prelude::any::<usize>(),
+        ) {
+            let boundaries: Vec<usize> = text
+                .char_indices()
+                .map(|(byte, _)| byte)
+                .chain(std::iter::once(text.len()))
+                .collect();
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            let lo = lo % boundaries.len();
+            let hi = hi % boundaries.len();
+            let start = boundaries[lo.min(hi)];
+            let end = boundaries[lo.max(hi)];
+            proptest::prop_assume!(start < end);
+
+            let offset = utf16_units(&text[..start]);
+            let length = utf16_units(&text[start..end]);
+            proptest::prop_assert_eq!(
+                byte_to_utf16_range(&text, start, end),
+                Some((offset, length))
+            );
+        }
     }
 
     #[test]
@@ -548,6 +619,42 @@ mod tests {
         assert_eq!(
             utf16_to_byte_ranges("a😀b", [Some((1, 2)), Some((1, 1)), Some((2, 1))]),
             vec![Some((1, 5)), None, None]
+        );
+    }
+
+    #[test]
+    fn byte_ranges_encode_as_utf16_units() {
+        let text = "a😀b€";
+        assert_eq!(byte_to_utf16_range(text, 0, 1), Some((0, 1)));
+        assert_eq!(byte_to_utf16_range(text, 1, 5), Some((1, 2)));
+        assert_eq!(byte_to_utf16_range(text, 0, 6), Some((0, 4)));
+        assert_eq!(byte_to_utf16_range(text, 5, 6), Some((3, 1)));
+        assert_eq!(byte_to_utf16_range(text, 0, text.len()), Some((0, 5)));
+    }
+
+    #[test]
+    fn byte_ranges_reject_ranges_that_do_not_slice_text() {
+        let text = "a😀b";
+        assert_eq!(byte_to_utf16_range(text, 0, 0), None);
+        assert_eq!(byte_to_utf16_range(text, 3, 1), None);
+        assert_eq!(byte_to_utf16_range(text, 0, text.len() + 1), None);
+        assert_eq!(byte_to_utf16_range(text, 1, 3), None);
+        assert_eq!(byte_to_utf16_range(text, 3, 5), None);
+    }
+
+    #[test]
+    fn byte_to_utf16_ranges_preserve_provider_order_and_none_slots() {
+        let text = "a😀b€";
+        assert_eq!(
+            byte_to_utf16_ranges(
+                text,
+                [Some((0, 6)), Some((1, 5)), Some((5, 6)), Some((1, 3)), None,],
+            ),
+            vec![Some((0, 4)), Some((1, 2)), Some((3, 1)), None, None]
+        );
+        assert_eq!(
+            byte_to_utf16_ranges("abc", [None::<(usize, usize)>; 0]),
+            Vec::<Option<(u64, u64)>>::new()
         );
     }
 
