@@ -18,7 +18,7 @@ default = ["whatsapp", "telegram", "matrix"]
 # dependency belongs to this feature and to no other one.
 whatsapp = ["dep:form_urlencoded"]
 telegram = []
-matrix = []
+matrix = ["dep:html5ever"]
 # Default-off: a Matrix outbound client drags in an HTTP stack (reqwest) and a
 # runtime (tokio's sync + time primitives). A webhook-only consumer must not
 # inherit either, so the whole `matrix_out` module sits behind this feature.
@@ -81,6 +81,10 @@ unicode-general-category = "1.1.0"
 percent-encoding = { version = "2.3.2", default-features = false, features = [
     "alloc",
 ], optional = true }
+# WHATWG HTML5 tokenizer for Matrix `formatted_body`. The crate only uses
+# the tokenizer, not the tree builder, so the parser is bounded before any DOM
+# exists; MIT OR Apache-2.0, Servo html5ever, last updated 2026-09-14.
+html5ever = { version = "0.40.1", optional = true }
 
 [dev-dependencies]
 proptest = "1"

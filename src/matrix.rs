@@ -21,6 +21,11 @@
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use html5ever::tendril::StrTendril;
+use html5ever::tokenizer::{
+    BufferQueue, EndTag, StartTag, Tag, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
+};
+
 use crate::error::{Error, Result};
 use crate::headers::Headers;
 use crate::id;
@@ -29,6 +34,7 @@ use crate::model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, IdempotencyKey, NormalizedMessage,
     OutboundMessage, ProviderMethod, ProviderPayload, Reaction, RetryPolicy,
 };
+use crate::rich::{TextFormat, TextSpan};
 use crate::secret::Secret;
 use crate::{check_body, payload, recipient, Adapter};
 
@@ -37,6 +43,18 @@ static MATRIX_TXN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Header carrying the application service token.
 pub const AUTHORIZATION_HEADER: &str = "authorization";
+
+/// Maximum accepted `formatted_body` size before HTML tokenization.
+const MAX_MATRIX_FORMATTED_BODY_BYTES: usize = 64 * 1024;
+
+/// Maximum nesting depth accepted from Matrix `formatted_body`.
+const MAX_MATRIX_FORMATTED_BODY_DEPTH: usize = 100;
+
+/// Maximum number of events collected while parsing one body.
+const MAX_MATRIX_FORMATTED_BODY_EVENTS: usize = 8192;
+
+/// Maximum number of formatting elements tracked while parsing one body.
+const MAX_MATRIX_FORMATTED_BODY_ELEMENTS: usize = 1024;
 
 /// Adapter for Matrix room events.
 ///
@@ -394,6 +412,13 @@ fn apply_content(normalized: &mut NormalizedMessage, event_type: &str, content: 
         normalized.set_text(json::string(content, "body").map(str::to_owned));
     }
 
+    if json::string(content, "format") == Some("org.matrix.custom.html") {
+        let body = normalized.text().unwrap_or_default();
+        if let Some(formatted_body) = json::string(content, "formatted_body") {
+            normalized.set_spans(matrix_html_spans(body, formatted_body));
+        }
+    }
+
     let msgtype = json::string(content, "msgtype").unwrap_or("m.text");
     let kind = match (event_type, msgtype) {
         ("m.sticker", _) => Some(AttachmentKind::Sticker),
@@ -434,6 +459,293 @@ fn apply_content(normalized: &mut NormalizedMessage, event_type: &str, content: 
         normalized.set_text(None::<String>);
         normalized.attachments.push(attachment);
     }
+}
+
+/// Extracts formatting spans from Matrix's `org.matrix.custom.html` body.
+///
+/// The Matrix spec recommends HTML for rich text, but the neutral model keeps
+/// plain `body` as the source of offsets. This function tokenizes the bounded
+/// `formatted_body` with `html5ever` and only emits spans whose HTML text run
+/// can be found verbatim in that plain body. If the two drift apart, the body
+/// still normalizes and only the formatting is dropped.
+fn matrix_html_spans(body: &str, formatted_body: &str) -> Vec<TextSpan> {
+    if formatted_body.len() > MAX_MATRIX_FORMATTED_BODY_BYTES {
+        return Vec::new();
+    }
+
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from(formatted_body));
+    let tokenizer = Tokenizer::new(MatrixHtmlSink::new(), TokenizerOpts::default());
+    let _ = tokenizer.feed(&input);
+    tokenizer.end();
+    matrix_spans_from_events(body, tokenizer.sink.finish())
+}
+
+/// One start/end tag or text run collected from Matrix HTML.
+#[derive(Debug)]
+enum MatrixHtmlEvent {
+    /// A start tag that may contribute a formatting span.
+    Start {
+        /// Tag name, lower-cased by the HTML tokenizer.
+        tag: String,
+        /// Link target for `a[href]`, when present and allowed.
+        href: Option<String>,
+    },
+    /// Text emitted by the HTML tokenizer, with entities already decoded.
+    Text(String),
+    /// An end tag, matched against the open element stack by name.
+    End(String),
+}
+
+/// Token sink that records supported Matrix formatting tags.
+#[derive(Debug)]
+struct MatrixHtmlSink {
+    /// Events collected up to the configured event limit.
+    events: std::cell::RefCell<Vec<MatrixHtmlEvent>>,
+    /// Open element names, used to validate closing tags and depth limits.
+    open: std::cell::RefCell<Vec<String>>,
+    /// Number of formatting elements accepted so far.
+    elements: std::cell::Cell<usize>,
+    /// Stack depth whose text content is being skipped.
+    skip_depth: std::cell::Cell<Option<usize>>,
+    /// Set when any bound is exceeded; the caller then emits no spans.
+    too_complex: std::cell::Cell<bool>,
+}
+
+impl MatrixHtmlSink {
+    /// Creates an empty sink for one HTML body.
+    fn new() -> Self {
+        Self {
+            events: std::cell::RefCell::new(Vec::new()),
+            open: std::cell::RefCell::new(Vec::new()),
+            elements: std::cell::Cell::new(0),
+            skip_depth: std::cell::Cell::new(None),
+            too_complex: std::cell::Cell::new(false),
+        }
+    }
+
+    /// Records one event unless a bound has already been exceeded.
+    fn push(&self, event: MatrixHtmlEvent) {
+        let mut events = self.events.borrow_mut();
+        if events.len() >= MAX_MATRIX_FORMATTED_BODY_EVENTS {
+            self.too_complex.set(true);
+            return;
+        }
+        events.push(event);
+    }
+
+    /// Records a decoded text token.
+    fn record_text(&self, text: &str) {
+        if self.skip_depth.get().is_none() && !text.is_empty() {
+            self.push(MatrixHtmlEvent::Text(text.to_owned()));
+        }
+    }
+
+    /// Records one start or end tag token.
+    fn record_tag(&self, tag: &Tag) {
+        let name = tag.name.to_string().to_ascii_lowercase();
+        match tag.kind {
+            StartTag => self.record_start_tag(&name, tag),
+            EndTag => self.record_end_tag(&name),
+        }
+    }
+
+    /// Records one start tag token.
+    fn record_start_tag(&self, name: &str, tag: &Tag) {
+        if self.skip_depth.get().is_some() {
+            return;
+        }
+        if is_matrix_skipped_tag(name) {
+            let open = self.open.borrow();
+            self.skip_depth.set(Some(open.len()));
+            return;
+        }
+        if self.open.borrow().len() >= MAX_MATRIX_FORMATTED_BODY_DEPTH {
+            self.too_complex.set(true);
+            return;
+        }
+        let elements = self.elements.get();
+        if elements >= MAX_MATRIX_FORMATTED_BODY_ELEMENTS {
+            self.too_complex.set(true);
+            return;
+        }
+        self.elements.set(elements + 1);
+        self.open.borrow_mut().push(name.to_owned());
+        self.push(MatrixHtmlEvent::Start {
+            tag: name.to_owned(),
+            href: matrix_href(tag),
+        });
+    }
+
+    /// Records one end tag token and any elements it implicitly closes.
+    fn record_end_tag(&self, name: &str) {
+        if let Some(depth) = self.skip_depth.get() {
+            if is_matrix_skipped_tag(name) && self.open.borrow().len() == depth {
+                self.skip_depth.set(None);
+            }
+            return;
+        }
+
+        let mut open = self.open.borrow_mut();
+        let Some(index) = open.iter().rposition(|open| open == name) else {
+            return;
+        };
+        let closed = open.split_off(index);
+        drop(open);
+        for tag in closed.into_iter().rev() {
+            self.push(MatrixHtmlEvent::End(tag));
+        }
+    }
+
+    /// Returns the collected events, or an empty vector when a bound was hit.
+    fn finish(self) -> Vec<MatrixHtmlEvent> {
+        if self.too_complex.get() {
+            Vec::new()
+        } else {
+            self.events.into_inner()
+        }
+    }
+}
+
+impl TokenSink for MatrixHtmlSink {
+    type Handle = ();
+
+    fn process_token(&self, token: Token, _line_number: u64) -> TokenSinkResult<()> {
+        match token {
+            Token::CharacterTokens(chars) => self.record_text(chars.as_ref()),
+            Token::NullCharacterToken => self.record_text("\0"),
+            Token::TagToken(tag) => self.record_tag(&tag),
+            Token::EOFToken
+            | Token::ParseError(_)
+            | Token::CommentToken(_)
+            | Token::DoctypeToken(_) => {}
+        }
+        TokenSinkResult::Continue
+    }
+}
+
+/// Tags whose entire content must be skipped.
+fn is_matrix_skipped_tag(tag: &str) -> bool {
+    matches!(tag, "script" | "style" | "mx-reply")
+}
+
+/// Extracts a Matrix-permitted `href` from an `a` tag.
+fn matrix_href(tag: &Tag) -> Option<String> {
+    tag.attrs
+        .iter()
+        .find(|attr| &*attr.name.local == "href")
+        .map(|attr| attr.value.to_string())
+        .filter(|href| is_matrix_permitted_href(href))
+}
+
+/// Whether `href` uses a Matrix-approved absolute URL scheme.
+fn is_matrix_permitted_href(href: &str) -> bool {
+    let Some((scheme, rest)) = href.split_once(':') else {
+        return false;
+    };
+    if rest.is_empty() {
+        return false;
+    }
+    matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "ftp" | "mailto" | "magnet"
+    )
+}
+
+/// Maps a Matrix HTML tag to a neutral span format.
+fn matrix_format_for(tag: &str, href: Option<&str>) -> Option<TextFormat> {
+    match tag {
+        "b" | "strong" => Some(TextFormat::Bold),
+        "i" | "em" => Some(TextFormat::Italic),
+        "u" => Some(TextFormat::Underline),
+        "s" | "del" => Some(TextFormat::Strikethrough),
+        "code" => Some(TextFormat::Code),
+        "pre" => Some(TextFormat::Pre { language: None }),
+        "blockquote" => Some(TextFormat::Blockquote),
+        "a" => href.map(|url| TextFormat::Link {
+            url: url.to_owned(),
+        }),
+        other => Some(TextFormat::Other(other.to_owned())),
+    }
+}
+
+/// Converts collected token events into spans over the plain body.
+fn matrix_spans_from_events(body: &str, events: Vec<MatrixHtmlEvent>) -> Vec<TextSpan> {
+    let mut spans = Vec::new();
+    let mut active: Vec<(String, Option<String>, usize)> = Vec::new();
+    let mut html = String::new();
+    let mut runs = Vec::new();
+    let mut body_cursor = 0_usize;
+    for event in events {
+        match event {
+            MatrixHtmlEvent::Start { tag, href } => active.push((tag, href, html.len())),
+            MatrixHtmlEvent::Text(text) => {
+                let start = html.len();
+                html.push_str(&text);
+                runs.push((start, html.len()));
+            }
+            MatrixHtmlEvent::End(tag) => {
+                while let Some((open_tag, href, start)) = active.pop() {
+                    if open_tag == tag {
+                        let end = html.len();
+                        if let Some((body_start, body_end)) =
+                            align_html_run(body, &html, &runs, start, end, &mut body_cursor)
+                        {
+                            if let Some(format) = matrix_format_for(&open_tag, href.as_deref()) {
+                                if let Ok(span) = TextSpan::new(body, body_start, body_end, format)
+                                {
+                                    spans.push(span);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    spans
+}
+
+/// Finds a body byte range matching the HTML text before `end` and from `start`.
+fn align_html_run(
+    body: &str,
+    html: &str,
+    runs: &[(usize, usize)],
+    start: usize,
+    end: usize,
+    body_cursor: &mut usize,
+) -> Option<(usize, usize)> {
+    let run = html.get(start..end)?;
+    if run.is_empty() {
+        return None;
+    }
+    let prefix = html.get(..start)?;
+    let before = body.get(..*body_cursor)?;
+    if !html_prefix_matches(before, prefix) {
+        return None;
+    }
+    let tail = body.get(*body_cursor..)?;
+    let offset = tail.find(run)?;
+    let body_start = *body_cursor + offset;
+    let body_end = body_start + run.len();
+    if !html_suffix_matches(body, body_end, html.get(end..)?) {
+        return None;
+    }
+    *body_cursor = body_start;
+    let _ = runs;
+    Some((body_start, body_end))
+}
+
+/// Whether the plain prefix can correspond to the consumed HTML prefix.
+fn html_prefix_matches(body: &str, html: &str) -> bool {
+    body.ends_with(html) || html.ends_with(body)
+}
+
+/// Whether the plain suffix can correspond to the pending HTML suffix.
+fn html_suffix_matches(body: &str, offset: usize, html: &str) -> bool {
+    body.get(offset..)
+        .is_some_and(|tail| tail.starts_with(html) || html.starts_with(tail))
 }
 
 /// Maps a receipt event: one read marker per referenced event id and reader.

@@ -802,7 +802,7 @@ mod telegram_edges {
 #[cfg(feature = "matrix")]
 mod matrix_edges {
     use super::{matrix, Error};
-    use messenger_webhook::{Adapter, Channel, Headers, MatrixAdapter};
+    use messenger_webhook::{Adapter, Channel, Headers, MatrixAdapter, TextFormat};
 
     #[test]
     fn bearer_scheme_is_required_and_compared_exactly() {
@@ -981,6 +981,187 @@ mod matrix_edges {
         assert_eq!(attachment.filename.as_deref(), Some("notes.txt"));
         assert_eq!(attachment.mime_type, None);
         assert_eq!(attachment.size_bytes, None);
+    }
+
+    #[test]
+    fn formatted_body_html_is_parsed_into_spans() {
+        let payload = br#"{"type":"m.room.message","event_id":"$1","room_id":"!r:s",
+          "sender":"@a:s","content":{"msgtype":"m.text",
+          "format":"org.matrix.custom.html",
+          "body":"This is an example text message",
+          "formatted_body":"<b>This is an example text message</b>"}}"#;
+        let events = matrix().adapt(payload).unwrap();
+        let message = &events[0];
+
+        assert_eq!(message.text(), Some("This is an example text message"));
+        assert_eq!(message.spans().len(), 1);
+        assert_eq!(message.spans()[0].format, TextFormat::Bold);
+        assert_eq!(
+            message.span_text(0),
+            Some("This is an example text message")
+        );
+    }
+
+    #[test]
+    fn formatted_body_offsets_point_into_the_plain_body() {
+        let payload = br#"{"type":"m.room.message","event_id":"$1","room_id":"!r:s",
+          "sender":"@a:s","content":{"msgtype":"m.text",
+          "format":"org.matrix.custom.html",
+          "body":"prefix bold suffix",
+          "formatted_body":"prefix <strong>bold</strong> suffix"}}"#;
+        let events = matrix().adapt(payload).unwrap();
+        let message = &events[0];
+
+        assert_eq!(message.spans().len(), 1);
+        assert_eq!(message.spans()[0].start, 7);
+        assert_eq!(message.spans()[0].end, 11);
+        assert_eq!(message.span_text(0), Some("bold"));
+    }
+
+    #[test]
+    fn formatted_body_decodes_entities_before_aligning_offsets() {
+        let payload = br#"{"type":"m.room.message","event_id":"$1","room_id":"!r:s",
+          "sender":"@a:s","content":{"msgtype":"m.text",
+          "format":"org.matrix.custom.html",
+          "body":"Tom & Jerry are <friends>",
+          "formatted_body":"Tom &amp; Jerry are <em>&lt;friends&gt;</em>"}}"#;
+        let events = matrix().adapt(payload).unwrap();
+        let message = &events[0];
+
+        assert_eq!(message.text(), Some("Tom & Jerry are <friends>"));
+        assert_eq!(message.spans().len(), 1);
+        assert_eq!(message.span_text(0), Some("<friends>"));
+        assert_eq!(message.spans()[0].format, TextFormat::Italic);
+    }
+
+    #[test]
+    fn formatted_body_keeps_unsupported_tags_as_other() {
+        let payload = br#"{"type":"m.room.message","event_id":"$1","room_id":"!r:s",
+          "sender":"@a:s","content":{"msgtype":"m.text",
+          "format":"org.matrix.custom.html",
+          "body":"plain link",
+          "formatted_body":"<span>plain</span> <mark>link</mark>"}}"#;
+        let events = matrix().adapt(payload).unwrap();
+        let message = &events[0];
+
+        assert_eq!(message.spans().len(), 2);
+        assert_eq!(message.span_text(0), Some("plain"));
+        assert_eq!(message.span_text(1), Some("link"));
+        assert_eq!(message.spans()[0].format, TextFormat::Other("span".into()));
+        assert_eq!(message.spans()[1].format, TextFormat::Other("mark".into()));
+    }
+
+    #[test]
+    fn formatted_body_links_require_a_matrix_permitted_scheme() {
+        let payload = br#"{"type":"m.room.message","event_id":"$1","room_id":"!r:s",
+          "sender":"@a:s","content":{"msgtype":"m.text",
+          "format":"org.matrix.custom.html",
+          "body":"docs bad",
+          "formatted_body":"<a href=\"https://docs.rs\">docs</a> <a href=\"javascript:alert(1)\">bad</a>"}}"#;
+        let events = matrix().adapt(payload).unwrap();
+        let message = &events[0];
+
+        assert_eq!(message.spans().len(), 1);
+        assert_eq!(message.span_text(0), Some("docs"));
+        assert_eq!(
+            message.spans()[0].format,
+            TextFormat::Link {
+                url: "https://docs.rs".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn formatted_body_drops_script_and_style_content() {
+        let payload = br#"{"type":"m.room.message","event_id":"$1","room_id":"!r:s",
+          "sender":"@a:s","content":{"msgtype":"m.text",
+          "format":"org.matrix.custom.html",
+          "body":"safe",
+          "formatted_body":"<script>alert(1)</script><style>body{}</style><b>safe</b>"}}"#;
+        let events = matrix().adapt(payload).unwrap();
+        let message = &events[0];
+
+        assert_eq!(message.text(), Some("safe"));
+        assert_eq!(message.spans().len(), 1);
+        assert_eq!(message.span_text(0), Some("safe"));
+    }
+
+    #[test]
+    fn formatted_body_without_matching_plain_text_drops_offsets_only() {
+        let payload = br#"{"type":"m.room.message","event_id":"$1","room_id":"!r:s",
+          "sender":"@a:s","content":{"msgtype":"m.text",
+          "format":"org.matrix.custom.html",
+          "body":"plain fallback",
+          "formatted_body":"<b>different html body</b>"}}"#;
+        let events = matrix().adapt(payload).unwrap();
+        let message = &events[0];
+
+        assert_eq!(message.text(), Some("plain fallback"));
+        assert_eq!(message.spans(), []);
+    }
+
+    #[test]
+    fn formatted_body_size_depth_and_element_bounds_are_exact() {
+        let just_inside = format!(
+            "{{\"type\":\"m.room.message\",\"event_id\":\"$1\",\"room_id\":\"!r:s\",\"sender\":\"@a:s\",\"content\":{{\"msgtype\":\"m.text\",\"format\":\"org.matrix.custom.html\",\"body\":\"ok\",\"formatted_body\":\"<b>ok</b>{}\"}}}}",
+            " ".repeat(64 * 1024 - "<b>ok</b>".len())
+        );
+        let just_outside = format!(
+            "{{\"type\":\"m.room.message\",\"event_id\":\"$1\",\"room_id\":\"!r:s\",\"sender\":\"@a:s\",\"content\":{{\"msgtype\":\"m.text\",\"format\":\"org.matrix.custom.html\",\"body\":\"ok\",\"formatted_body\":\"<b>ok</b>{}\"}}}}",
+            " ".repeat(64 * 1024 + 1 - "<b>ok</b>".len())
+        );
+        assert_eq!(
+            matrix().adapt(just_inside.as_bytes()).unwrap()[0]
+                .spans()
+                .len(),
+            1
+        );
+        assert_eq!(
+            matrix().adapt(just_outside.as_bytes()).unwrap()[0]
+                .spans()
+                .len(),
+            0
+        );
+
+        let depth_just_inside = format!(
+            "{{\"type\":\"m.room.message\",\"event_id\":\"$1\",\"room_id\":\"!r:s\",\"sender\":\"@a:s\",\"content\":{{\"msgtype\":\"m.text\",\"format\":\"org.matrix.custom.html\",\"body\":\"x\",\"formatted_body\":\"{}x{}\"}}}}",
+            "<b>".repeat(99),
+            "</b>".repeat(99)
+        );
+        let depth_just_outside = format!(
+            "{{\"type\":\"m.room.message\",\"event_id\":\"$1\",\"room_id\":\"!r:s\",\"sender\":\"@a:s\",\"content\":{{\"msgtype\":\"m.text\",\"format\":\"org.matrix.custom.html\",\"body\":\"x\",\"formatted_body\":\"{}x{}\"}}}}",
+            "<b>".repeat(101),
+            "</b>".repeat(101)
+        );
+        assert_eq!(
+            matrix().adapt(depth_just_inside.as_bytes()).unwrap()[0]
+                .spans()
+                .len(),
+            99
+        );
+        assert_eq!(
+            matrix().adapt(depth_just_outside.as_bytes()).unwrap()[0].spans(),
+            []
+        );
+
+        let element_just_inside = format!(
+            "{{\"type\":\"m.room.message\",\"event_id\":\"$1\",\"room_id\":\"!r:s\",\"sender\":\"@a:s\",\"content\":{{\"msgtype\":\"m.text\",\"format\":\"org.matrix.custom.html\",\"body\":\"x\",\"formatted_body\":\"<span>x{}</span>\"}}}}",
+            "<span></span>".repeat(511)
+        );
+        let element_just_outside = format!(
+            "{{\"type\":\"m.room.message\",\"event_id\":\"$1\",\"room_id\":\"!r:s\",\"sender\":\"@a:s\",\"content\":{{\"msgtype\":\"m.text\",\"format\":\"org.matrix.custom.html\",\"body\":\"x\",\"formatted_body\":\"<span>x{}</span>\"}}}}",
+            "<span></span>".repeat(1024)
+        );
+        assert_eq!(
+            matrix().adapt(element_just_inside.as_bytes()).unwrap()[0]
+                .spans()
+                .len(),
+            1
+        );
+        assert_eq!(
+            matrix().adapt(element_just_outside.as_bytes()).unwrap()[0].spans(),
+            []
+        );
     }
 
     #[test]
