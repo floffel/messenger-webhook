@@ -605,7 +605,7 @@ impl MatrixClient {
             transport,
             config,
             token,
-            gates: RoomGates::new(GATE_CAPACITY),
+            gates: RoomGates::new(GATE_CAPACITY)?,
         })
     }
 
