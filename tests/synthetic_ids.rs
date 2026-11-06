@@ -269,6 +269,56 @@ fn a_synthetic_key_is_a_bounded_64_hex_character_digest() {
         .all(|byte| byte.is_ascii_hexdigit()));
 }
 
+#[test]
+fn placeholder_string_ids_are_synthesised_not_carried_verbatim() {
+    // "" was already handled; " ", the zero-width space and a surrounding
+    // padding all name nothing, so each must be synthesised. If they were kept
+    // verbatim every such event would share one key and the ledger would drop
+    // all but the first.
+    let build = |id: &str| {
+        json!({
+            "entry": [{ "changes": [{ "value": { "messages": [
+                { "id": id, "from": "49", "type": "text", "text": { "body": "Hallo" } }
+            ] } }] }]
+        })
+    };
+    for placeholder in ["", " ", "\t\n", "\u{200b}", "\u{00a0}", "   "] {
+        let events = adapt(&whatsapp(), &build(placeholder));
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0].has_synthetic_id(),
+            "{placeholder:?} must not be carried as a real id, got {:?}",
+            events[0].external_id
+        );
+    }
+}
+
+#[test]
+fn a_string_id_with_graphic_content_is_still_carried_verbatim() {
+    // The value just inside the boundary: whitespace padding around a real id.
+    let body = json!({
+        "entry": [{ "changes": [{ "value": { "messages": [
+            { "id": " wamid.1 ", "from": "49", "type": "text", "text": { "body": "Hallo" } }
+        ] } }] }]
+    });
+    let events = adapt(&whatsapp(), &body);
+    assert_eq!(events[0].external_id, " wamid.1 ");
+    assert!(!events[0].has_synthetic_id());
+}
+
+#[test]
+fn a_numeric_zero_id_stays_a_real_id() {
+    // Telegram message ids are numbers and 0 is legitimate; only strings have a
+    // placeholder form.
+    let body = json!({
+        "update_id": 7,
+        "message": { "message_id": 0, "chat": { "id": 1 }, "text": "Hallo" }
+    });
+    let events = adapt(&telegram(), &body);
+    assert_eq!(events[0].external_id, "0");
+    assert!(!events[0].has_synthetic_id());
+}
+
 proptest! {
     /// The key is a pure function of the body: any object without an `id` maps
     /// to one stable synthesised key, and two parses of the same body agree.
