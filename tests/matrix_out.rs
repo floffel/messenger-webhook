@@ -541,6 +541,53 @@ fn a_redaction_puts_the_reason_or_nothing() {
 }
 
 #[test]
+fn a_redaction_reason_must_fit_the_event_ceiling() {
+    let ceiling = messenger_webhook::matrix_out::MAX_CONTENT_BYTES;
+    let envelope = serde_json::json!({"reason": ""}).to_string().len();
+    let harness = harness(|config| config);
+    harness
+        .transport
+        .push_json(200, r#"{"event_id":"$redaction"}"#);
+
+    let at_limit = "x".repeat(ceiling - envelope);
+    block_on(
+        harness
+            .client
+            .redact("!r:example.org", "$abc", Some(&at_limit)),
+    )
+    .expect("exactly at the ceiling");
+    assert_eq!(harness.transport.call_count(), 1);
+    assert_eq!(
+        harness.transport.requests()[0].json().expect("json")["reason"]
+            .as_str()
+            .map(str::len),
+        Some(at_limit.len())
+    );
+
+    let over = "x".repeat(ceiling - envelope + 1);
+    let error = block_on(harness.client.redact("!r:example.org", "$abc", Some(&over)))
+        .expect_err("over the ceiling");
+    assert!(matches!(error, OutboundError::MessageTooLong { .. }));
+    assert!(error.is_client_error());
+    assert_eq!(harness.transport.call_count(), 1);
+}
+
+#[test]
+fn a_redaction_reason_rejects_control_characters_before_a_request_exists() {
+    let harness = harness(|config| config);
+
+    let error = block_on(
+        harness
+            .client
+            .redact("!r:example.org", "$abc", Some("bad\nreason")),
+    )
+    .expect_err("control character");
+    assert!(matches!(error, OutboundError::InvalidRequest { .. }));
+    assert!(error.to_string().contains("control character"));
+    assert_eq!(harness.transport.call_count(), 0);
+}
+
+#[test]
 fn an_event_type_the_crate_does_not_model_is_sent_verbatim() {
     let harness = harness(|config| config);
     harness
