@@ -8,6 +8,7 @@
 use std::fmt;
 use std::time::Duration;
 
+use futures_util::TryStreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::Body as HttpBody;
 use reqwest::{Client as HttpClient, Method as HttpMethod};
@@ -34,6 +35,20 @@ use crate::matrix_out::transport::{
 /// assert_eq!(DEFAULT_REQUEST_TIMEOUT, Duration::from_secs(30));
 /// ```
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Largest response body the shipped transport reads from a homeserver.
+///
+/// Matrix responses are small JSON objects or error pages. A hostile or
+/// misconfigured endpoint must not be able to make one Lambda invocation buffer
+/// an unbounded response body, so the transport checks the advertised length
+/// before reading and enforces the same ceiling while streaming.
+///
+/// ```
+/// use messenger_webhook::matrix_out::MAX_RESPONSE_BODY_BYTES;
+///
+/// assert_eq!(MAX_RESPONSE_BODY_BYTES, 1024 * 1024);
+/// ```
+pub const MAX_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
 
 /// A [`Transport`] backed by `reqwest`.
 ///
@@ -148,7 +163,7 @@ impl Transport for ReqwestTransport {
                     )
                 })
                 .collect();
-            let body = response.bytes().await.map_err(transport_error)?.to_vec();
+            let body = bounded_response_body(response).await?;
             Ok(Response {
                 status,
                 headers,
@@ -156,6 +171,48 @@ impl Transport for ReqwestTransport {
             })
         })
     }
+}
+
+/// Reads a response body no larger than [`MAX_RESPONSE_BODY_BYTES`].
+async fn bounded_response_body(response: reqwest::Response) -> Result<Vec<u8>, TransportError> {
+    let Ok(limit) = u64::try_from(MAX_RESPONSE_BODY_BYTES) else {
+        return Err(response_too_large(MAX_RESPONSE_BODY_BYTES, None));
+    };
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit)
+    {
+        let advertised = response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok());
+        return Err(response_too_large(MAX_RESPONSE_BODY_BYTES, advertised));
+    }
+
+    response
+        .bytes_stream()
+        .map_err(transport_error)
+        .try_fold(Vec::new(), |mut body, chunk| async move {
+            if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY_BYTES {
+                return Err(response_too_large(
+                    MAX_RESPONSE_BODY_BYTES,
+                    Some(body.len().saturating_add(chunk.len())),
+                ));
+            }
+            body.extend_from_slice(&chunk);
+            Ok(body)
+        })
+        .await
+}
+
+/// Builds the typed failure for a response body beyond the transport ceiling.
+fn response_too_large(limit: usize, actual: Option<usize>) -> TransportError {
+    let message = actual.map_or_else(
+        || format!("the response body exceeds the {limit}-byte transport ceiling"),
+        |actual| {
+            format!("the response body is {actual} bytes, the transport ceiling is {limit} bytes")
+        },
+    );
+    TransportError::new(TransportErrorKind::ResponseTooLarge, message)
 }
 
 /// Converts an outbound body into the type `reqwest` consumes.
@@ -354,6 +411,23 @@ mod tests {
         for (flags, expected) in cases {
             assert_eq!(classify_reqwest_failure(flags), expected);
         }
+    }
+
+    #[test]
+    fn response_too_large_names_the_limit_and_actual_size_when_known() {
+        let unknown = response_too_large(MAX_RESPONSE_BODY_BYTES, None);
+        assert_eq!(unknown.kind, TransportErrorKind::ResponseTooLarge);
+        assert!(unknown.message.contains("exceeds"));
+        assert!(unknown
+            .message
+            .contains(&MAX_RESPONSE_BODY_BYTES.to_string()));
+
+        let known = response_too_large(MAX_RESPONSE_BODY_BYTES, Some(MAX_RESPONSE_BODY_BYTES + 1));
+        assert_eq!(known.kind, TransportErrorKind::ResponseTooLarge);
+        assert!(known
+            .message
+            .contains(&(MAX_RESPONSE_BODY_BYTES + 1).to_string()));
+        assert!(known.message.contains(&MAX_RESPONSE_BODY_BYTES.to_string()));
     }
 
     proptest! {

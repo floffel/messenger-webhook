@@ -53,6 +53,7 @@ src/matrix_out/error.rs:impl OutboundError:fn is_client_error
 src/matrix_out/error.rs:impl OutboundError:fn is_retryable
 src/matrix_out/error.rs:impl OutboundError:fn txn_id
 src/matrix_out/http.rs:const DEFAULT_REQUEST_TIMEOUT
+src/matrix_out/http.rs:const MAX_RESPONSE_BODY_BYTES
 src/matrix_out/http.rs:impl ReqwestTransport:fn new
 src/matrix_out/http.rs:impl ReqwestTransport:fn timeout
 src/matrix_out/http.rs:impl ReqwestTransport:fn with_timeout
@@ -80,7 +81,7 @@ src/matrix_out/mod.rs:mod types
 src/matrix_out/mod.rs:struct TokioSleeper
 src/matrix_out/mod.rs:trait Sleeper
 src/matrix_out/mod.rs:use error::{OutboundError,OutboundResult}
-src/matrix_out/mod.rs:use http::{ReqwestTransport,DEFAULT_REQUEST_TIMEOUT}
+src/matrix_out/mod.rs:use http::{ReqwestTransport,DEFAULT_REQUEST_TIMEOUT,MAX_RESPONSE_BODY_BYTES}
 src/matrix_out/mod.rs:use ordering::GATE_CAPACITY
 src/matrix_out/mod.rs:use retry::{Operation,RetryPolicy,RetryPolicyError,Verdict,DEFAULT_BASE_DELAY_MS,DEFAULT_MAX_ATTEMPTS,DEFAULT_MAX_DELAY_MS,DEFAULT_MAX_RATE_LIMIT_WAIT_MS,}
 src/matrix_out/mod.rs:use testing::{RecordedRequest,RecordingSleeper,StubCounters,StubTransport}
@@ -159,6 +160,7 @@ src/matrix_out/transport.rs:impl TransportError:fn other
 src/matrix_out/transport.rs:impl TransportError:fn timeout
 src/matrix_out/transport.rs:impl TransportErrorKind:fn as_str
 src/matrix_out/transport.rs:impl TransportErrorKind:fn is_before_write
+src/matrix_out/transport.rs:impl TransportErrorKind:fn is_response_too_large
 src/matrix_out/transport.rs:impl TransportErrorKind:fn is_test_harness
 src/matrix_out/transport.rs:struct Request
 src/matrix_out/transport.rs:struct Response

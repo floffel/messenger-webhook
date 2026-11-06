@@ -608,6 +608,20 @@ pub enum TransportErrorKind {
     /// A test transport received a request it was not scripted to answer. This
     /// is a broken test, not a homeserver or network outcome.
     TestHarness,
+    /// The response arrived, but the body was larger than the transport's
+    /// configured ceiling.
+    ///
+    /// This is terminal for the attempt: the same endpoint will answer the same
+    /// way, and reading the body was stopped at the ceiling.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::transport::{TransportError, TransportErrorKind};
+    ///
+    /// let error = TransportError::new(TransportErrorKind::ResponseTooLarge, "too large");
+    /// assert!(error.kind.is_response_too_large());
+    /// assert_eq!(error.kind.as_str(), "response-too-large");
+    /// ```
+    ResponseTooLarge,
 }
 
 impl TransportErrorKind {
@@ -626,6 +640,7 @@ impl TransportErrorKind {
             Self::Other => "other",
             Self::InvalidRequest => "invalid-request",
             Self::TestHarness => "test-harness",
+            Self::ResponseTooLarge => "response-too-large",
         }
     }
 
@@ -655,6 +670,19 @@ impl TransportErrorKind {
     #[must_use]
     pub const fn is_test_harness(self) -> bool {
         matches!(self, Self::TestHarness)
+    }
+
+    /// Whether the response body was stopped at the transport ceiling.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::transport::TransportErrorKind;
+    ///
+    /// assert!(TransportErrorKind::ResponseTooLarge.is_response_too_large());
+    /// assert!(!TransportErrorKind::Other.is_response_too_large());
+    /// ```
+    #[must_use]
+    pub const fn is_response_too_large(self) -> bool {
+        matches!(self, Self::ResponseTooLarge)
     }
 }
 
@@ -909,10 +937,19 @@ mod tests {
                 "test-harness",
                 false,
             ),
+            (
+                TransportError::new(TransportErrorKind::ResponseTooLarge, "too large"),
+                "response-too-large",
+                false,
+            ),
         ] {
             assert_eq!(error.kind.as_str(), kind);
             assert_eq!(error.kind.is_before_write(), before);
             assert_eq!(error.kind.is_test_harness(), kind == "test-harness");
+            assert_eq!(
+                error.kind.is_response_too_large(),
+                kind == "response-too-large"
+            );
             assert_eq!(error.kind, error.kind.clone());
             assert!(error.to_string().contains(kind));
             assert!(error.to_string().contains(&error.message));

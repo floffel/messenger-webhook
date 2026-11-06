@@ -613,9 +613,9 @@ impl RetryPolicy {
                 self.retry_or_exhausted(attempt)
             }
             TransportErrorKind::Timeout | TransportErrorKind::Other => Verdict::Ambiguous,
-            TransportErrorKind::InvalidRequest | TransportErrorKind::TestHarness => {
-                Verdict::Rejected
-            }
+            TransportErrorKind::InvalidRequest
+            | TransportErrorKind::TestHarness
+            | TransportErrorKind::ResponseTooLarge => Verdict::Rejected,
         }
     }
 
