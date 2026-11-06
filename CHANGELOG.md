@@ -19,6 +19,13 @@ carry a `!` in the conventional-commit subject.
 
 ### Breaking
 
+- **`Registry::get` returns an owned shared adapter.** The registry now stores
+  `Arc<dyn Adapter>` and `get` returns `Arc<dyn Adapter>` instead of a borrow
+  tied to the registry, so runtime registration or secret rotation can clone
+  the adapter, release any registry lock, and dispatch without holding the lock
+  across adapter work. `Registry::register_shared` accepts an
+  `Arc<dyn Adapter>` for callers that already share one adapter elsewhere.
+  Closes #99.
 - **`Headers::insert` validates before it stores.** It now returns `Result` and
   rejects empty or non-token header names, values with bytes outside visible
   ASCII plus horizontal tab, and names or values above the new

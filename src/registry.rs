@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::model::{Channel, NormalizedMessage, OutboundMessage, ProviderPayload};
@@ -11,7 +12,9 @@ use crate::{check_body, Adapter, Headers};
 ///
 /// Registration is by [`Adapter::channel`]; looking up a channel nobody
 /// registered is a typed error, never a panic. The registry is immutable after
-/// setup, so it can be shared across tasks.
+/// setup, so it can be shared across tasks. Lookups return an owned
+/// [`Arc<dyn Adapter>`], so callers can drop any lock around a registry before
+/// dispatching to the adapter.
 ///
 /// ```
 /// # #[cfg(feature = "whatsapp")]
@@ -28,7 +31,7 @@ use crate::{check_body, Adapter, Headers};
 /// ```
 #[derive(Default)]
 pub struct Registry {
-    adapters: BTreeMap<Channel, Box<dyn Adapter>>,
+    adapters: BTreeMap<Channel, Arc<dyn Adapter>>,
 }
 
 impl Registry {
@@ -65,7 +68,36 @@ impl Registry {
     /// # }
     /// ```
     pub fn register<A: Adapter + 'static>(&mut self, adapter: A) -> &mut Self {
-        self.adapters.insert(adapter.channel(), Box::new(adapter));
+        self.adapters.insert(adapter.channel(), Arc::new(adapter));
+        self
+    }
+
+    /// Registers an already shared `adapter` under its channel.
+    ///
+    /// Registering a second adapter for the same channel replaces the first;
+    /// that keeps runtime configuration code simple. Use [`Registry::contains`]
+    /// before calling this method when a duplicate shared registration should
+    /// not replace the existing adapter.
+    ///
+    /// ```
+    /// # #[cfg(feature = "matrix")]
+    /// # fn demo() -> Result<(), messenger_webhook::Error> {
+    /// use std::sync::Arc;
+    /// use messenger_webhook::{Adapter, Channel, MatrixAdapter, Registry};
+    ///
+    /// let adapter: Arc<dyn Adapter> = Arc::new(MatrixAdapter::new("token"));
+    /// let mut registry = Registry::new();
+    /// registry.register_shared(adapter);
+    ///
+    /// assert_eq!(
+    ///     registry.get(&Channel::Matrix)?.channel(),
+    ///     Channel::Matrix
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn register_shared(&mut self, adapter: Arc<dyn Adapter>) -> &mut Self {
+        self.adapters.insert(adapter.channel(), adapter);
         self
     }
 
@@ -96,7 +128,7 @@ impl Registry {
         if self.adapters.contains_key(&channel) {
             return Err(Error::ChannelAlreadyRegistered(channel));
         }
-        self.adapters.insert(channel, Box::new(adapter));
+        self.adapters.insert(channel, Arc::new(adapter));
         Ok(())
     }
 
@@ -114,10 +146,10 @@ impl Registry {
     /// assert!(registry.get(&Channel::other("signal")?).is_err());
     /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
-    pub fn get(&self, channel: &Channel) -> Result<&dyn Adapter> {
+    pub fn get(&self, channel: &Channel) -> Result<Arc<dyn Adapter>> {
         self.adapters
             .get(channel)
-            .map(AsRef::as_ref)
+            .cloned()
             .ok_or_else(|| Error::UnknownChannel(channel.clone()))
     }
 
