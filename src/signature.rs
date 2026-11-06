@@ -44,15 +44,7 @@ const DIGEST_LEN: usize = 32;
 /// Returns [`Error::BadSignature`] if the HMAC construction rejects the key,
 /// which cannot happen for HMAC-SHA256 and would still fail closed.
 pub fn meta_signature(secret: &Secret, body: &[u8]) -> Result<String> {
-    if secret.is_empty() {
-        return Err(Error::MissingSecret {
-            channel: Channel::WhatsApp,
-        });
-    }
-    let digest =
-        hmac_sha256(secret.expose_secret().as_bytes(), body).ok_or(Error::BadSignature {
-            channel: Channel::WhatsApp,
-        })?;
+    let digest = hmac_sha256(secret, body)?;
     Ok(format!("{META_SIGNATURE_PREFIX}{}", encode_hex(&digest)))
 }
 
@@ -84,11 +76,7 @@ pub fn meta_signature(secret: &Secret, body: &[u8]) -> Result<String> {
 /// `sha256=` followed by 64 hex digits, and [`Error::BadSignature`] when the
 /// digest does not match `body`.
 pub fn verify_meta(secret: &Secret, header: &str, body: &[u8]) -> Result<()> {
-    if secret.is_empty() {
-        return Err(Error::MissingSecret {
-            channel: Channel::WhatsApp,
-        });
-    }
+    let actual = hmac_sha256(secret, body)?;
     let hex = header.strip_prefix(META_SIGNATURE_PREFIX).ok_or_else(|| {
         Error::MalformedVerificationHeader {
             channel: Channel::WhatsApp,
@@ -99,10 +87,6 @@ pub fn verify_meta(secret: &Secret, header: &str, body: &[u8]) -> Result<()> {
         channel: Channel::WhatsApp,
         reason: "signature digest is not 64 hex digits".to_owned(),
     })?;
-    let actual =
-        hmac_sha256(secret.expose_secret().as_bytes(), body).ok_or(Error::BadSignature {
-            channel: Channel::WhatsApp,
-        })?;
     if bool::from(expected.ct_eq(&actual)) {
         Ok(())
     } else {
@@ -113,7 +97,19 @@ pub fn verify_meta(secret: &Secret, header: &str, body: &[u8]) -> Result<()> {
 }
 
 /// HMAC-SHA256 as specified by RFC 2104.
-pub(crate) fn hmac_sha256(key: &[u8], message: &[u8]) -> Option<[u8; DIGEST_LEN]> {
+pub(crate) fn hmac_sha256(secret: &Secret, message: &[u8]) -> Result<[u8; DIGEST_LEN]> {
+    if secret.is_empty() {
+        return Err(Error::MissingSecret {
+            channel: Channel::WhatsApp,
+        });
+    }
+    hmac_sha256_bytes(secret.expose_secret().as_bytes(), message).ok_or(Error::BadSignature {
+        channel: Channel::WhatsApp,
+    })
+}
+
+/// HMAC-SHA256 over raw key bytes.
+fn hmac_sha256_bytes(key: &[u8], message: &[u8]) -> Option<[u8; DIGEST_LEN]> {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).ok()?;
     mac.update(message);
     mac.finalize().into_bytes().as_slice().try_into().ok()
@@ -141,7 +137,7 @@ mod tests {
     fn rfc4231_vectors_hold() {
         // Case 1: 20-byte key of 0x0b.
         let key = [0x0bu8; 20];
-        let digest = hmac_sha256(&key, b"Hi There").expect("hmac");
+        let digest = hmac_sha256_bytes(&key, b"Hi There").expect("hmac");
         assert_eq!(
             encode_hex(&digest),
             "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
@@ -150,7 +146,7 @@ mod tests {
         // Case 3: 20-byte key of 0xaa, 50 bytes of 0xdd.
         let key = [0xaau8; 20];
         let message = [0xddu8; 50];
-        let digest = hmac_sha256(&key, &message).expect("hmac");
+        let digest = hmac_sha256_bytes(&key, &message).expect("hmac");
         assert_eq!(
             encode_hex(&digest),
             "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe"
@@ -158,7 +154,7 @@ mod tests {
 
         // Case 6: key longer than the block size (131 bytes of 0xaa).
         let key = [0xaau8; 131];
-        let digest = hmac_sha256(
+        let digest = hmac_sha256_bytes(
             &key,
             b"Test Using Larger Than Block-Size Key - Hash Key First",
         )
@@ -167,6 +163,23 @@ mod tests {
             encode_hex(&digest),
             "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
         );
+    }
+
+    #[test]
+    fn hmac_sha256_refuses_empty_secret_at_the_primitive() {
+        assert!(matches!(
+            hmac_sha256(&Secret::new(""), b"{}"),
+            Err(Error::MissingSecret {
+                channel: Channel::WhatsApp
+            })
+        ));
+
+        // HMAC itself accepts the empty key; the guard above is what keeps it
+        // out of the crate-facing primitive.
+        assert!(hmac_sha256_bytes(b"", b"{}").is_some());
+
+        let digest = hmac_sha256(&Secret::new("x"), b"{}").expect("one-byte key hashes");
+        assert_eq!(digest, hmac_sha256_bytes(b"x", b"{}").expect("raw hmac"));
     }
 
     #[test]
