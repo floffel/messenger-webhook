@@ -378,28 +378,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::{utf16_to_byte_ranges, SpanError, TextFormat, TextSpan};
-    use proptest::strategy::Strategy;
 
     fn utf16_to_byte_range(text: &str, offset: u64, length: u64) -> Option<(usize, usize)> {
         utf16_to_byte_ranges(text, [Some((offset, length))])
             .into_iter()
             .next()
             .flatten()
-    }
-
-    fn any_text() -> impl proptest::strategy::Strategy<Value = String> {
-        proptest::collection::vec(
-            proptest::prop_oneof![
-                proptest::prelude::Just('a'),
-                proptest::prelude::Just('Z'),
-                proptest::prelude::Just('ä'),
-                proptest::prelude::Just('€'),
-                proptest::prelude::Just('😀'),
-                proptest::prelude::Just('🧑'),
-            ],
-            0..12,
-        )
-        .prop_map(|characters| characters.into_iter().collect())
     }
 
     #[test]
@@ -423,8 +407,13 @@ mod tests {
     fn astral_characters_count_twice() {
         // "a😀b": the emoji is 1 char, 2 UTF-16 units, 4 bytes.
         let text = "a😀b";
+        assert_eq!(utf16_to_byte_range("😀b", 0, 2), Some((0, 4)));
         assert_eq!(utf16_to_byte_range(text, 1, 2), Some((1, 5)));
         assert_eq!(utf16_to_byte_range(text, 0, 4), Some((0, 6)));
+        // The end unit can split the surrogate pair even when the start does
+        // not; that range has no byte equivalent either.
+        assert_eq!(utf16_to_byte_range("😀", 0, 1), None);
+        assert_eq!(utf16_to_byte_range(text, 1, 1), None);
         // A boundary inside the surrogate pair is unrepresentable.
         assert_eq!(utf16_to_byte_range(text, 2, 1), None);
     }
@@ -440,15 +429,48 @@ mod tests {
         assert_eq!(utf16_to_byte_range("ab", u64::MAX, 2), None);
     }
 
+    fn utf16_units(text: &str) -> u64 {
+        u64::try_from(text.encode_utf16().count()).unwrap_or(u64::MAX)
+    }
+
     proptest::proptest! {
         #[test]
+        fn every_byte_boundary_pair_round_trips(
+            text in proptest::prelude::any::<String>(),
+            a in proptest::prelude::any::<usize>(),
+            b in proptest::prelude::any::<usize>(),
+        ) {
+            let boundaries: Vec<usize> = text
+                .char_indices()
+                .map(|(byte, _)| byte)
+                .chain(std::iter::once(text.len()))
+                .collect();
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            let lo = lo % boundaries.len();
+            let hi = hi % boundaries.len();
+            let start = boundaries[lo.min(hi)];
+            let end = boundaries[lo.max(hi)];
+            proptest::prop_assume!(start < end);
+
+            let offset = utf16_units(&text[..start]);
+            let length = utf16_units(&text[start..end]);
+            proptest::prop_assert_eq!(
+                utf16_to_byte_range(&text, offset, length),
+                Some((start, end))
+            );
+        }
+
+        #[test]
         fn successful_ranges_are_usable_spans(
-            text in any_text(),
+            text in proptest::prelude::any::<String>(),
             offset in proptest::prelude::any::<u64>(),
             length in proptest::prelude::any::<u64>(),
         ) {
             if let Some((start, end)) = utf16_to_byte_range(&text, offset, length) {
                 proptest::prop_assert!(start < end);
+                proptest::prop_assert!(text.is_char_boundary(start));
+                proptest::prop_assert!(text.is_char_boundary(end));
+                proptest::prop_assert!(text.get(start..end).is_some());
                 proptest::prop_assert!(
                     TextSpan::new(&text, start, end, TextFormat::Bold).is_ok()
                 );

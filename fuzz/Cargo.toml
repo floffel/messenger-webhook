@@ -9,6 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+serde_json = "1"
 
 [dependencies.messenger-webhook]
 path = ".."
@@ -35,6 +36,10 @@ path = "fuzz_targets/subscription.rs"
 [[bin]]
 name = "verify_meta"
 path = "fuzz_targets/verify_meta.rs"
+
+[[bin]]
+name = "rich_offsets"
+path = "fuzz_targets/rich_offsets.rs"
 test = false
 doc = false
 bench = false
