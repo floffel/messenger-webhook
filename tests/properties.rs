@@ -6,9 +6,11 @@
 
 use proptest::prelude::*;
 use serde_json::{Map, Value};
+use std::str::FromStr;
 
 use messenger_webhook::{
-    Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, MAX_CHANNEL_NAME_BYTES,
+    Adapter, AttachmentKind, Channel, DeliveryStatus, Error, Headers, NormalizedMessage,
+    OutboundMessage, MAX_CHANNEL_NAME_BYTES,
 };
 
 /// Arbitrary JSON of bounded depth, including wrong types in every position.
@@ -45,6 +47,42 @@ fn adapters() -> Vec<Box<dyn Adapter>> {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
+
+    /// Rendering a modelled enum and parsing it back is lossless. The payload
+    /// variants carry unknown strings verbatim, while known names win over a
+    /// same-spelled `Other`/`Unknown` payload.
+    #[test]
+    fn provider_enum_string_round_trips(
+        channel in prop_oneof![
+            Just(Channel::WhatsApp),
+            Just(Channel::Telegram),
+            Just(Channel::Matrix),
+            "signal|sms|rss-feed".prop_map(Channel::Other),
+        ],
+        kind in prop_oneof![
+            Just(AttachmentKind::Image),
+            Just(AttachmentKind::Video),
+            Just(AttachmentKind::Audio),
+            Just(AttachmentKind::Voice),
+            Just(AttachmentKind::Document),
+            Just(AttachmentKind::Sticker),
+            Just(AttachmentKind::Location),
+            Just(AttachmentKind::Contact),
+            "poll|reaction|unknown".prop_map(AttachmentKind::Other),
+        ],
+        status in prop_oneof![
+            Just(DeliveryStatus::Sent),
+            Just(DeliveryStatus::Delivered),
+            Just(DeliveryStatus::Read),
+            Just(DeliveryStatus::Failed),
+            Just(DeliveryStatus::Deleted),
+            "queued|held|unknown".prop_map(DeliveryStatus::Unknown),
+        ],
+    ) {
+        prop_assert_eq!(Channel::from_str(channel.as_str()).unwrap(), channel);
+        prop_assert_eq!(AttachmentKind::from_str(kind.as_str()).unwrap(), kind);
+        prop_assert_eq!(DeliveryStatus::from_str(status.as_str()).unwrap(), status);
+    }
 
     /// Any JSON document, at any depth, from any provider: `adapt` returns a
     /// result and never panics, and every event is internally consistent.

@@ -14,6 +14,7 @@ use messenger_webhook::{
     RetryPolicy, Secret, MAX_BODY_BYTES, MAX_BODY_READ_BYTES, MAX_CHANNEL_NAME_BYTES,
     MAX_IDEMPOTENCY_KEY_BYTES,
 };
+use std::str::FromStr;
 
 #[test]
 fn channel_names_and_display() {
@@ -32,6 +33,14 @@ fn channel_names_and_display() {
     assert_eq!(Channel::Telegram.to_string(), "telegram");
     assert_eq!(Channel::Matrix.to_string(), "matrix");
     assert_eq!(Channel::Other("signal".to_owned()).to_string(), "signal");
+
+    assert_eq!(Channel::from_str("whatsapp").unwrap(), Channel::WhatsApp);
+    assert_eq!(Channel::from_str("telegram").unwrap(), Channel::Telegram);
+    assert_eq!(Channel::from_str("matrix").unwrap(), Channel::Matrix);
+    assert_eq!(
+        Channel::from_str("signal").unwrap(),
+        Channel::Other("signal".to_owned())
+    );
 }
 
 #[test]
@@ -91,6 +100,7 @@ fn attachment_kind_names() {
     ];
     for (kind, name) in kinds {
         assert_eq!(kind.as_str(), name);
+        assert_eq!(AttachmentKind::from_str(name).unwrap(), kind);
     }
 }
 
@@ -106,6 +116,7 @@ fn delivery_status_names() {
     ];
     for (status, name) in states {
         assert_eq!(status.as_str(), name);
+        assert_eq!(DeliveryStatus::from_str(name).unwrap(), status);
     }
 }
 

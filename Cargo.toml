@@ -36,6 +36,7 @@ hmac = "0.13"
 const-hex = { version = "1.19.3", default-features = false, features = ["alloc"] }
 subtle = "2"
 thiserror = "2"
+strum = { version = "0.28.0", features = ["derive"] }
 # One HTTP stack, one TLS backend: rustls, so no OpenSSL build. `json` is off on
 # purpose - the crate serialises with serde_json itself and sends bytes, which
 # keeps the transport dumb and the wire shape under this crate's control.
