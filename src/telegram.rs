@@ -108,12 +108,7 @@ impl Adapter for TelegramAdapter {
                 channel: Channel::Telegram,
             });
         }
-        let header = headers
-            .get(SECRET_TOKEN_HEADER)
-            .ok_or(Error::MissingVerificationHeader {
-                channel: Channel::Telegram,
-                header: SECRET_TOKEN_HEADER,
-            })?;
+        let header = headers.exactly_one(Channel::Telegram, SECRET_TOKEN_HEADER)?;
         if self.secret.ct_eq(header.as_bytes()) {
             Ok(())
         } else {

@@ -93,12 +93,7 @@ impl Adapter for MatrixAdapter {
                 channel: Channel::Matrix,
             });
         }
-        let header = headers
-            .get(AUTHORIZATION_HEADER)
-            .ok_or(Error::MissingVerificationHeader {
-                channel: Channel::Matrix,
-                header: AUTHORIZATION_HEADER,
-            })?;
+        let header = headers.exactly_one(Channel::Matrix, AUTHORIZATION_HEADER)?;
         let (scheme, token) =
             header
                 .split_once(' ')

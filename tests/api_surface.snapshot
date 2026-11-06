@@ -1,7 +1,9 @@
 src/error.rs:enum Error
 src/error.rs:impl Error:fn is_retryable
+src/headers.rs:impl Headers:fn append
 src/headers.rs:impl Headers:fn from_pairs
 src/headers.rs:impl Headers:fn get
+src/headers.rs:impl Headers:fn get_all
 src/headers.rs:impl Headers:fn insert
 src/headers.rs:impl Headers:fn is_empty
 src/headers.rs:impl Headers:fn len

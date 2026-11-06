@@ -24,8 +24,21 @@ fn insert_model(entries: &mut Vec<(String, String)>, name: &str, value: &str) {
 fn model_value<'a>(entries: &'a [(String, String)], name: &str) -> Option<&'a str> {
     entries
         .iter()
+        .rev()
         .find(|(key, _)| key == &name.to_ascii_lowercase())
         .map(|(_, value)| value.as_str())
+}
+
+fn append_model(entries: &mut Vec<(String, String)>, name: &str, value: &str) {
+    entries.push((name.to_ascii_lowercase(), value.to_owned()));
+}
+
+fn get_all_model<'a>(entries: &'a [(String, String)], name: &str) -> Vec<&'a str> {
+    let name = name.to_ascii_lowercase();
+    entries
+        .iter()
+        .filter_map(|(key, value)| (key == &name).then_some(value.as_str()))
+        .collect()
 }
 
 proptest! {
@@ -60,15 +73,15 @@ proptest! {
         }
     }
 
-    /// The constructor forms are exactly repeated `insert` calls, including
-    /// duplicate keys and names that only differ by ASCII case.
+    /// The constructor forms preserve duplicates instead of normalising them
+    /// last-write-wins, including names that only differ by ASCII case.
     #[test]
-    fn constructors_match_repeated_insert(
+    fn constructors_preserve_repeated_fields(
         pairs in prop::collection::vec((header_name(), ".*"), 0..24),
     ) {
-        let mut expected = Headers::new();
+        let mut expected = Vec::new();
         for (name, value) in &pairs {
-            expected.insert(name, value.clone());
+            append_model(&mut expected, name, value);
         }
 
         let from_pairs = Headers::from_pairs(
@@ -84,9 +97,15 @@ proptest! {
             .collect();
         let from_slice = Headers::from(borrowed.as_slice());
 
-        prop_assert_eq!(&from_pairs, &expected);
-        prop_assert_eq!(&collected, &expected);
-        prop_assert_eq!(&from_slice, &expected);
+        for headers in [&from_pairs, &collected, &from_slice] {
+            prop_assert_eq!(headers.len(), expected.len());
+            for (name, _) in &pairs {
+                prop_assert_eq!(
+                    headers.get_all(name).collect::<Vec<_>>(),
+                    get_all_model(&expected, name)
+                );
+            }
+        }
     }
 }
 
@@ -101,19 +120,28 @@ fn empty_header_name_is_preserved() {
 }
 
 #[test]
-fn duplicate_keys_are_last_wins_without_reordering_other_entries() {
+fn constructors_preserve_duplicates_and_get_returns_the_last_field() {
     let mut headers = Headers::new();
     headers.insert("First", "1");
     headers.insert("Second", "2");
     headers.insert("FIRST", "3");
 
-    assert_eq!(headers.len(), 2);
-    assert_eq!(headers.get("first"), Some("3"));
-    assert_eq!(headers.get("second"), Some("2"));
     assert_eq!(
         headers,
         Headers::from_iter([("first", "3"), ("second", "2")])
     );
+
+    let repeated = Headers::from_iter([("First", "1"), ("FIRST", "2"), ("Second", "3")]);
+    assert_eq!(repeated.len(), 3);
+    assert_eq!(repeated.get("first"), Some("2"));
+    assert_eq!(repeated.get("second"), Some("3"));
+    assert_eq!(repeated.get_all("first").collect::<Vec<_>>(), ["1", "2"]);
+
+    let mut normalised = repeated;
+    normalised.insert("first", "4");
+    assert_eq!(normalised.len(), 2);
+    assert_eq!(normalised.get("first"), Some("4"));
+    assert_eq!(normalised.get_all("first").collect::<Vec<_>>(), ["4"]);
 }
 
 #[test]

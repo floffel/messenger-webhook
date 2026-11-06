@@ -19,6 +19,12 @@ carry a `!` in the conventional-commit subject.
 
 ### Added
 
+- **Repeated HTTP header fields are observable.** `Headers::append`,
+  `Headers::from_pairs`, `Headers::from_iter` and `Headers::from` now preserve
+  repeated field names, and `Headers::get_all` returns every value for a name
+  in insertion order. `Headers::insert` keeps its last-write-wins
+  normalisation for callers that intentionally build a single-value map.
+  Closes #25.
 - **Outbound retry metadata.** `ProviderPayload` now carries
   `retry(): RetryPolicy` and `idempotency_key(): Option<&IdempotencyKey>`, so a
   caller that owns HTTP retries can tell whether repeating an outbound request
@@ -57,6 +63,12 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- **Verification headers must appear exactly once.** A proxy or attacker can
+  forward repeated `X-Hub-Signature-256`, `X-Telegram-Bot-Api-Secret-Token` or
+  `Authorization` fields; the adapters used to authenticate whichever value
+  happened to be stored last. `Headers` now preserves duplicates and every
+  verifier returns the new typed `Error::DuplicateVerificationHeader` instead
+  of choosing one. Closes #25.
 - **`Registry::encode` rejects cross-channel messages.** The registry used the
   caller's `channel` argument for dispatch but never compared it with
   `NormalizedMessage::channel`, so a message tagged for one provider could be

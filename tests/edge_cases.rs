@@ -184,7 +184,7 @@ fn deeply_nested_json_fails_instead_of_overflowing_the_stack() {
 #[cfg(feature = "whatsapp")]
 mod whatsapp_edges {
     use super::{whatsapp, Error, Headers};
-    use messenger_webhook::{signature::meta_signature, Adapter, Secret, WhatsAppAdapter};
+    use messenger_webhook::{signature::meta_signature, Adapter, Channel, Secret, WhatsAppAdapter};
 
     fn signed(body: &[u8]) -> Headers {
         Headers::from_pairs([(
@@ -212,6 +212,34 @@ mod whatsapp_edges {
             adapter.verify(&headers, b"{}"),
             Err(Error::MissingSecret { .. })
         ));
+    }
+
+    #[test]
+    fn duplicate_signature_headers_fail_closed() {
+        let body = b"{}";
+        let valid = meta_signature(&Secret::new("app-secret"), body).unwrap();
+
+        let single = Headers::from_pairs([("x-hub-signature-256", valid.clone())]);
+        assert!(whatsapp().verify(&single, body).is_ok());
+
+        for values in [
+            [valid.clone(), valid.clone()],
+            [valid.clone(), "sha256=00".to_owned()],
+            ["sha256=00".to_owned(), valid.clone()],
+        ] {
+            let headers = Headers::from_pairs([
+                ("x-hub-signature-256", values[0].as_str()),
+                ("X-Hub-Signature-256", values[1].as_str()),
+            ]);
+            assert!(matches!(
+                whatsapp().verify(&headers, body),
+                Err(Error::DuplicateVerificationHeader {
+                    channel: Channel::WhatsApp,
+                    header: "x-hub-signature-256",
+                    count: 2,
+                })
+            ));
+        }
     }
 
     /// A zero-length HMAC key is legal, so an unset secret would otherwise
@@ -472,7 +500,7 @@ mod whatsapp_edges {
 #[cfg(feature = "telegram")]
 mod telegram_edges {
     use super::{telegram, Error};
-    use messenger_webhook::{Adapter, Headers, TelegramAdapter};
+    use messenger_webhook::{Adapter, Channel, Headers, TelegramAdapter};
 
     #[test]
     fn token_header_is_compared_exactly() {
@@ -509,6 +537,31 @@ mod telegram_edges {
     fn header_name_is_case_insensitive() {
         let headers = Headers::from_iter([("X-Telegram-Bot-Api-Secret-Token", "bot-secret")]);
         assert!(telegram().verify(&headers, b"{}").is_ok());
+    }
+
+    #[test]
+    fn duplicate_token_headers_fail_closed() {
+        let single = Headers::from_iter([("x-telegram-bot-api-secret-token", "bot-secret")]);
+        assert!(telegram().verify(&single, b"{}").is_ok());
+
+        for values in [
+            ["bot-secret", "bot-secret"],
+            ["bot-secret", "wrong"],
+            ["wrong", "bot-secret"],
+        ] {
+            let headers = Headers::from_iter([
+                ("x-telegram-bot-api-secret-token", values[0]),
+                ("X-Telegram-Bot-Api-Secret-Token", values[1]),
+            ]);
+            assert!(matches!(
+                telegram().verify(&headers, b"{}"),
+                Err(Error::DuplicateVerificationHeader {
+                    channel: Channel::Telegram,
+                    header: "x-telegram-bot-api-secret-token",
+                    count: 2,
+                })
+            ));
+        }
     }
 
     #[test]
@@ -626,7 +679,7 @@ mod telegram_edges {
 #[cfg(feature = "matrix")]
 mod matrix_edges {
     use super::{matrix, Error};
-    use messenger_webhook::{Adapter, Headers, MatrixAdapter};
+    use messenger_webhook::{Adapter, Channel, Headers, MatrixAdapter};
 
     #[test]
     fn bearer_scheme_is_required_and_compared_exactly() {
@@ -674,6 +727,29 @@ mod matrix_edges {
             adapter.verify(&headers, b"{}"),
             Err(Error::MissingSecret { .. })
         ));
+    }
+
+    #[test]
+    fn duplicate_authorization_headers_fail_closed() {
+        let single = Headers::from_iter([("authorization", "Bearer hs-token")]);
+        assert!(matrix().verify(&single, b"{}").is_ok());
+
+        for values in [
+            ["Bearer hs-token", "Bearer hs-token"],
+            ["Bearer hs-token", "Bearer wrong"],
+            ["Bearer wrong", "Bearer hs-token"],
+        ] {
+            let headers =
+                Headers::from_iter([("authorization", values[0]), ("Authorization", values[1])]);
+            assert!(matches!(
+                matrix().verify(&headers, b"{}"),
+                Err(Error::DuplicateVerificationHeader {
+                    channel: Channel::Matrix,
+                    header: "authorization",
+                    count: 2,
+                })
+            ));
+        }
     }
 
     #[test]

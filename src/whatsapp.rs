@@ -110,13 +110,7 @@ impl Adapter for WhatsAppAdapter {
                 channel: Channel::WhatsApp,
             });
         }
-        let header =
-            headers
-                .get(META_SIGNATURE_HEADER)
-                .ok_or(Error::MissingVerificationHeader {
-                    channel: Channel::WhatsApp,
-                    header: META_SIGNATURE_HEADER,
-                })?;
+        let header = headers.exactly_one(Channel::WhatsApp, META_SIGNATURE_HEADER)?;
         signature::verify_meta(&self.secret, header, body)
     }
 
