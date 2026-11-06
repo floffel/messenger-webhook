@@ -163,14 +163,40 @@ fn normalized_message_helpers() {
     message.edit_of = Some("1".to_owned());
     assert!(message.is_edit());
 
-    let reaction = Reaction {
-        message_id: "1".to_owned(),
-        emoji: "👍".to_owned(),
-        removed: false,
-        added_reactions: vec!["👍".to_owned()],
-        removed_reactions: Vec::new(),
-    };
-    assert!(!reaction.removed);
+    let reaction = Reaction::add("1", "👍").unwrap();
+    assert_eq!(reaction.message_id(), "1");
+    assert_eq!(reaction.emoji(), "👍");
+    assert!(!reaction.removed());
+    assert_eq!(reaction.added_reactions(), ["👍"]);
+    assert_eq!(reaction.removed_reactions(), [] as [String; 0]);
+    assert!(Reaction::add("1", "").is_err());
+}
+
+#[test]
+fn reaction_add_and_remove_have_one_canonical_representation() {
+    let added = Reaction::add("1", "👍").unwrap();
+    assert_eq!(added.message_id(), "1");
+    assert_eq!(added.emoji(), "👍");
+    assert!(!added.removed());
+    assert_eq!(added.added_reactions(), ["👍"]);
+    assert_eq!(added.removed_reactions(), [] as [String; 0]);
+
+    let removed = Reaction::remove("1");
+    assert_eq!(removed.message_id(), "1");
+    assert_eq!(removed.emoji(), "");
+    assert!(removed.removed());
+    assert_eq!(removed.added_reactions(), [] as [String; 0]);
+    assert_eq!(removed.removed_reactions(), [] as [String; 0]);
+
+    for key in ["", " ", "\t\n", "\u{200b}"] {
+        assert!(
+            matches!(
+                Reaction::add("1", key),
+                Err(Error::InvalidReactionKey { .. })
+            ),
+            "{key:?} must not be an added reaction key"
+        );
+    }
 }
 
 #[test]

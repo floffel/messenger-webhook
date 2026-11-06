@@ -319,6 +319,25 @@ pub enum Error {
         reason: String,
     },
 
+    /// A reaction key is missing, empty, or shaped such that it cannot identify
+    /// a reaction.
+    ///
+    /// ```
+    /// use messenger_webhook::{Error, Reaction};
+    ///
+    /// let error = Reaction::add("wamid.1", "").unwrap_err();
+    /// assert!(matches!(error, Error::InvalidReactionKey { .. }));
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     "invalid reaction key: an added reaction key must contain a visible character"
+    /// );
+    /// ```
+    #[error("invalid reaction key: {reason}")]
+    InvalidReactionKey {
+        /// Why the key was rejected.
+        reason: String,
+    },
+
     /// No adapter is registered for the requested channel.
     #[error("no adapter registered for channel {0}")]
     UnknownChannel(Channel),

@@ -709,11 +709,11 @@ mod telegram_edges {
             "user":{"id":2},"date":1,"old_reaction":[{"type":"emoji","emoji":"\ud83d\udc4d"}],"new_reaction":[]}}"#;
         let events = telegram().adapt(removed).unwrap();
         let reaction = events[0].reaction.as_ref().unwrap();
-        assert!(reaction.removed);
-        assert_eq!(reaction.emoji, "");
-        assert_eq!(reaction.added_reactions, Vec::<String>::new());
-        assert_eq!(reaction.removed_reactions, ["👍"]);
-        assert_eq!(reaction.message_id, "9");
+        assert!(reaction.removed());
+        assert_eq!(reaction.emoji(), "");
+        assert_eq!(reaction.added_reactions(), Vec::<String>::new());
+        assert_eq!(reaction.removed_reactions(), ["👍"]);
+        assert_eq!(reaction.message_id(), "9");
     }
 
     #[test]
@@ -724,10 +724,10 @@ mod telegram_edges {
                 {"type":"emoji","emoji":"\u2764\ufe0f"}]}}"#;
         let events = telegram().adapt(payload).unwrap();
         let reaction = events[0].reaction.as_ref().unwrap();
-        assert!(!reaction.removed);
-        assert_eq!(reaction.emoji, "👍");
-        assert_eq!(reaction.added_reactions, ["👍", "❤️"]);
-        assert_eq!(reaction.removed_reactions, Vec::<String>::new());
+        assert!(!reaction.removed());
+        assert_eq!(reaction.emoji(), "👍");
+        assert_eq!(reaction.added_reactions(), ["👍", "❤️"]);
+        assert_eq!(reaction.removed_reactions(), Vec::<String>::new());
     }
 
     #[test]
@@ -737,10 +737,10 @@ mod telegram_edges {
             "new_reaction":[{"type":"emoji","emoji":"\u2764\ufe0f"}]}}"#;
         let events = telegram().adapt(payload).unwrap();
         let reaction = events[0].reaction.as_ref().unwrap();
-        assert!(!reaction.removed);
-        assert_eq!(reaction.emoji, "❤️");
-        assert_eq!(reaction.added_reactions, ["❤️"]);
-        assert_eq!(reaction.removed_reactions, ["👍"]);
+        assert!(!reaction.removed());
+        assert_eq!(reaction.emoji(), "❤️");
+        assert_eq!(reaction.added_reactions(), ["❤️"]);
+        assert_eq!(reaction.removed_reactions(), ["👍"]);
     }
 
     #[test]
@@ -752,10 +752,10 @@ mod telegram_edges {
             );
             let events = telegram().adapt(payload.as_bytes()).unwrap();
             let reaction = events[0].reaction.as_ref().unwrap();
-            assert!(!reaction.removed, "{new_reaction}");
-            assert_eq!(reaction.emoji, "");
-            assert_eq!(reaction.added_reactions, Vec::<String>::new());
-            assert_eq!(reaction.removed_reactions, Vec::<String>::new());
+            assert!(!reaction.removed(), "{new_reaction}");
+            assert_eq!(reaction.emoji(), "");
+            assert_eq!(reaction.added_reactions(), Vec::<String>::new());
+            assert_eq!(reaction.removed_reactions(), Vec::<String>::new());
         }
     }
 }

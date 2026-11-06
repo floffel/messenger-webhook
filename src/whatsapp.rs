@@ -324,15 +324,11 @@ fn normalize_message(message: &Value) -> Result<NormalizedMessage> {
             // object, not on the message itself.
             if let Some(reaction) = json::child(message, "reaction") {
                 if let Some(target) = json::id(reaction, "message_id") {
-                    let emoji = json::string(reaction, "emoji")
-                        .unwrap_or_default()
-                        .to_owned();
-                    normalized.reaction = Some(Reaction {
-                        message_id: target,
-                        removed: emoji.is_empty(),
-                        emoji,
-                        added_reactions: Vec::new(),
-                        removed_reactions: Vec::new(),
+                    let emoji = json::string(reaction, "emoji").unwrap_or_default();
+                    normalized.reaction = Some(if emoji.is_empty() {
+                        Reaction::remove(target)
+                    } else {
+                        Reaction::add(target, emoji)?
                     });
                 }
             }

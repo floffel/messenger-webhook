@@ -222,6 +222,13 @@ src/model.rs:impl ProviderPayload:fn method
 src/model.rs:impl ProviderPayload:fn new
 src/model.rs:impl ProviderPayload:fn retry
 src/model.rs:impl ProviderPayload:fn with_retry
+src/model.rs:impl Reaction:fn add
+src/model.rs:impl Reaction:fn added_reactions
+src/model.rs:impl Reaction:fn emoji
+src/model.rs:impl Reaction:fn message_id
+src/model.rs:impl Reaction:fn remove
+src/model.rs:impl Reaction:fn removed
+src/model.rs:impl Reaction:fn removed_reactions
 src/model.rs:impl RetryPolicy:fn as_str
 src/model.rs:impl RetryPolicy:fn is_unsafe_without_key
 src/model.rs:struct Attachment

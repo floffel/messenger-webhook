@@ -5,8 +5,8 @@
 //! `None` for a missing *or* mistyped field, so a surprise in one field never
 //! fails the whole batch — the adapter simply carries what it can.
 
+use crate::model::has_graphic;
 use serde_json::Value;
-use unicode_general_category::{get_general_category, GeneralCategory};
 
 /// Borrows any field.
 pub(crate) fn child<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
@@ -23,30 +23,6 @@ pub(crate) fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
     child(value, key)
         .and_then(Value::as_array)
         .map_or(&[], Vec::as_slice)
-}
-
-/// Whether `text` holds at least one character a reader would see.
-///
-/// A provider id of `" "` or `"\u{200b}"` names nothing, so treating it as a
-/// real id collapses every such event onto one key and the ledger drops all but
-/// the first. Whitespace is not enough to decide this — a zero-width space is a
-/// `Cf` format character, not whitespace — so the general category is used:
-/// a control, format, surrogate, private-use, unassigned or separator code
-/// point is padding, anything else is a real id.
-fn has_graphic(text: &str) -> bool {
-    text.chars().any(|c| {
-        !matches!(
-            get_general_category(c),
-            GeneralCategory::Control
-                | GeneralCategory::Format
-                | GeneralCategory::Surrogate
-                | GeneralCategory::PrivateUse
-                | GeneralCategory::Unassigned
-                | GeneralCategory::LineSeparator
-                | GeneralCategory::ParagraphSeparator
-                | GeneralCategory::SpaceSeparator
-        )
-    })
 }
 
 /// Reads an identifier that may arrive as a string or as a number.
@@ -100,7 +76,8 @@ pub(crate) fn millis_to_seconds(millis: Option<i64>) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_graphic, id};
+    use super::id;
+    use crate::model::has_graphic;
     use serde_json::json;
 
     #[test]

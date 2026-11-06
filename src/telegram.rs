@@ -457,13 +457,13 @@ fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
         sender_id,
     );
     normalized.timestamp = json::integer(reaction, "date");
-    normalized.reaction = Some(Reaction {
+    normalized.reaction = Some(Reaction::from_parts(
         message_id,
         emoji,
         removed,
         added_reactions,
         removed_reactions,
-    });
+    )?);
     normalized.provider_type = Some("message_reaction".to_owned());
     normalized.raw = Some(reaction.clone());
     Ok(normalized)

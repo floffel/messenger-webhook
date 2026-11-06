@@ -82,6 +82,13 @@ carry a `!` in the conventional-commit subject.
   the constant-time comparison path, while `Secret::expose_secret` returns the
   raw `&str` as an explicit escape hatch for provider integration points.
   Closes #110.
+- **Reaction removal has one canonical representation.** `Reaction` no longer
+  exposes `emoji` and `removed` as independent public fields, where
+  `emoji: "👍", removed: true` and `emoji: "", removed: false` could describe
+  the same event under one reading and different events under another. Reactions
+  are built with `Reaction::add` / `Reaction::remove`, added keys are validated
+  as non-empty visible strings, and removed reactions cannot carry a current
+  key. Closes #94.
 - **Pre-write request validation is terminal, not ambiguous.** `ReqwestTransport`
   now reports an HTTP header it cannot express as an invalid request before a
   connection is used, and the retry classifier rejects it instead of treating a
