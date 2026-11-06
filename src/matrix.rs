@@ -169,7 +169,7 @@ impl Adapter for MatrixAdapter {
             content
         };
 
-        apply_relations(&mut content, message);
+        apply_relations(&mut content, message)?;
         payload(
             Channel::Matrix,
             ProviderMethod::Put,
@@ -260,14 +260,22 @@ fn media_content(attachment: &Attachment, text: &str) -> Result<serde_json::Map<
 }
 
 /// Adds `m.relates_to` (reply, thread or edit) to an outbound `content`.
-fn apply_relations(content: &mut serde_json::Map<String, Value>, message: &OutboundMessage) {
+fn apply_relations(
+    content: &mut serde_json::Map<String, Value>,
+    message: &OutboundMessage,
+) -> Result<()> {
     if let Some(target) = &message.edit_of {
-        let mut replacement = serde_json::Map::new();
-        if let Some(msgtype) = content.get("msgtype") {
-            replacement.insert("msgtype".to_owned(), msgtype.clone());
+        let mut replacement = content.clone();
+        replacement.remove("m.relates_to");
+        replacement.remove("m.new_content");
+        if is_media_replacement_without_url(&replacement) {
+            return Err(Error::InvalidMessage {
+                channel: Channel::Matrix,
+                reason: "Matrix media edits require a url in m.new_content".to_owned(),
+            });
         }
-        if let Some(body) = content.get("body") {
-            replacement.insert("body".to_owned(), body.clone());
+        if let Some(body) = replacement.get("body").and_then(Value::as_str) {
+            content.insert("body".to_owned(), Value::String(format!("* {body}")));
         }
         content.insert("m.new_content".to_owned(), Value::Object(replacement));
         content.insert(
@@ -291,6 +299,16 @@ fn apply_relations(content: &mut serde_json::Map<String, Value>, message: &Outbo
             serde_json::json!({ "m.in_reply_to": { "event_id": reply } }),
         );
     }
+    Ok(())
+}
+
+/// Whether an edit replacement describes media but has no source url.
+fn is_media_replacement_without_url(replacement: &serde_json::Map<String, Value>) -> bool {
+    let media = matches!(
+        replacement.get("msgtype").and_then(Value::as_str),
+        Some("m.image" | "m.video" | "m.audio" | "m.file" | "m.sticker")
+    );
+    media && replacement.get("url").is_none()
 }
 
 /// Maps one Matrix event of any type.
