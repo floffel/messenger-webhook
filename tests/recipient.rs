@@ -17,17 +17,17 @@ use messenger_webhook::{Channel, WhatsAppAdapter};
 
 #[cfg(feature = "whatsapp")]
 fn whatsapp() -> WhatsAppAdapter {
-    WhatsAppAdapter::new("secret")
+    WhatsAppAdapter::new("secret-secret-secret").expect("adapter")
 }
 
 #[cfg(feature = "telegram")]
 fn telegram() -> TelegramAdapter {
-    TelegramAdapter::new("secret")
+    TelegramAdapter::new("secret-secret-secret").expect("adapter")
 }
 
 #[cfg(feature = "matrix")]
 fn matrix() -> MatrixAdapter {
-    MatrixAdapter::new("secret")
+    MatrixAdapter::new("secret-secret-secret").expect("adapter")
 }
 
 /// Encodes `id` through `adapter` and reports whether it was accepted.

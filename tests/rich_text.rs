@@ -22,7 +22,8 @@ use serde_json::{json, Value};
 fn adapt(message: &Value) -> NormalizedMessage {
     let body = json!({ "update_id": 1, "message": message });
     let bytes = serde_json::to_vec(&body).expect("body");
-    TelegramAdapter::new("secret")
+    TelegramAdapter::new("secret-secret-secret")
+        .expect("adapter")
         .adapt(&bytes)
         .expect("adapt")
         .into_iter()
@@ -306,7 +307,8 @@ fn whatsapp_text_messages_carry_no_spans() {
             "messages": [{ "id": "wamid.1", "from": "49", "type": "text", "text": { "body": "hi" } }]
         }}]}]
     });
-    let events = messenger_webhook::WhatsAppAdapter::new("app-secret")
+    let events = messenger_webhook::WhatsAppAdapter::new("app-secret-app-secret")
+        .expect("adapter")
         .adapt(&serde_json::to_vec(&body).expect("body"))
         .expect("adapt");
     assert_eq!(events.len(), 1);
@@ -373,7 +375,10 @@ fn readme_example_runs() {
     let body = br#"{"update_id":1,"message":{"message_id":7,"from":{"id":42},
         "chat":{"id":-1001},"date":1729600000,"text":"Hallo Welt",
         "entities":[{"type":"bold","offset":6,"length":4}]}}"#;
-    let events = TelegramAdapter::new("secret").adapt(body).expect("adapt");
+    let events = TelegramAdapter::new("secret-secret-secret")
+        .expect("adapter")
+        .adapt(body)
+        .expect("adapt");
     let message = &events[0];
 
     assert_eq!(message.text(), Some("Hallo Welt"));

@@ -35,7 +35,7 @@ fn corpus() -> Vec<(Channel, Headers, &'static [u8])> {
         let body: &'static [u8] = br#"{"entry":[{"changes":[{"value":{"messages":[
             {"id":"wamid.1","from":"4915112345678","timestamp":"1729600000","type":"text","text":{"body":"Hallo"}}]}}]}]}"#;
         let signature = messenger_webhook::signature::meta_signature(
-            &messenger_webhook::Secret::new("secret"),
+            &messenger_webhook::Secret::new("secret-secret-secret").expect("secret"),
             body,
         )
         .unwrap();
@@ -49,7 +49,10 @@ fn corpus() -> Vec<(Channel, Headers, &'static [u8])> {
     {
         corpus.push((
             Channel::Telegram,
-            Headers::from_iter([("x-telegram-bot-api-secret-token", "secret")]),
+            Headers::from_iter([(
+                "x-telegram-bot-api-secret-token",
+                "secret-secret-secret",
+            )]),
             br#"{"update_id":1,"message":{"message_id":7,"from":{"id":42},"chat":{"id":-1001},"date":1,"text":"Hallo"}}"#,
         ));
     }
@@ -57,7 +60,7 @@ fn corpus() -> Vec<(Channel, Headers, &'static [u8])> {
     {
         corpus.push((
             Channel::Matrix,
-            Headers::from_iter([("authorization", "Bearer secret")]),
+            Headers::from_iter([("authorization", "Bearer secret-secret-secret")]),
             br#"{"type":"m.room.message","event_id":"$1","room_id":"!r:s","sender":"@a:s","content":{"msgtype":"m.text","body":"Hallo"}}"#,
         ));
     }
@@ -68,11 +71,16 @@ fn registry() -> Registry {
     #[allow(unused_mut)]
     let mut registry = Registry::new();
     #[cfg(feature = "whatsapp")]
-    registry.register(messenger_webhook::WhatsAppAdapter::new("secret"));
+    registry.register(
+        messenger_webhook::WhatsAppAdapter::new("secret-secret-secret").expect("adapter"),
+    );
     #[cfg(feature = "telegram")]
-    registry.register(messenger_webhook::TelegramAdapter::new("secret"));
+    registry.register(
+        messenger_webhook::TelegramAdapter::new("secret-secret-secret").expect("adapter"),
+    );
     #[cfg(feature = "matrix")]
-    registry.register(messenger_webhook::MatrixAdapter::new("secret"));
+    registry
+        .register(messenger_webhook::MatrixAdapter::new("secret-secret-secret").expect("adapter"));
     registry
 }
 
@@ -126,7 +134,8 @@ fn thirty_two_tasks_share_one_borrowed_adapter() {
     // No Arc, no interior mutability: a plain shared reference is enough.
     #[cfg(feature = "matrix")]
     {
-        let adapter = messenger_webhook::MatrixAdapter::new("secret");
+        let adapter =
+            messenger_webhook::MatrixAdapter::new("secret-secret-secret").expect("adapter");
         let adapter: &dyn Adapter = &adapter;
         let body = br#"{"events":[
             {"type":"m.room.message","event_id":"$1","room_id":"!r:s","sender":"@a:s","content":{"msgtype":"m.text","body":"a"}},
@@ -149,7 +158,9 @@ fn thirty_two_tasks_share_one_borrowed_adapter() {
 fn concurrent_verification_of_a_forged_body_always_fails() {
     #[cfg(feature = "whatsapp")]
     {
-        let adapter = Arc::new(messenger_webhook::WhatsAppAdapter::new("secret"));
+        let adapter = Arc::new(
+            messenger_webhook::WhatsAppAdapter::new("secret-secret-secret").expect("adapter"),
+        );
         let mut handles = Vec::new();
         for worker in 0..THREADS {
             let adapter = Arc::clone(&adapter);

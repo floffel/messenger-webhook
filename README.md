@@ -67,8 +67,8 @@ use messenger_webhook::{Channel, Headers, Registry, TelegramAdapter, WhatsAppAda
 
 let mut registry = Registry::new();
 registry
-    .register(WhatsAppAdapter::new("app-secret"))
-    .register(TelegramAdapter::new("bot-secret"));
+    .register(WhatsAppAdapter::new("app-secret-app-secret"))
+    .register(TelegramAdapter::new("bot-secret-bot-secret"));
 
 // Verify and normalise in one step; an unregistered channel is a typed error.
 let events = registry.handle(&Channel::WhatsApp, &headers, &body)?;
@@ -79,7 +79,7 @@ let events = registry.handle(&Channel::WhatsApp, &headers, &body)?;
 ```rust
 use messenger_webhook::{Adapter, Channel, OutboundMessage, TelegramAdapter};
 
-let adapter = TelegramAdapter::new("bot-secret");
+let adapter = TelegramAdapter::new("bot-secret-bot-secret");
 let message = OutboundMessage::text(Channel::Telegram, "-1001", "Hallo");
 let payload = adapter.encode(&message)?;
 
@@ -255,7 +255,7 @@ use messenger_webhook::{Adapter, TextFormat, TelegramAdapter};
 let body = br#"{"update_id":1,"message":{"message_id":7,"from":{"id":42},
     "chat":{"id":-1001},"date":1729600000,"text":"Hallo Welt",
     "entities":[{"type":"bold","offset":6,"length":4}]}}"#;
-let events = TelegramAdapter::new("secret").adapt(body)?;
+let events = TelegramAdapter::new("secret-secret-secret").adapt(body)?;
 let message = &events[0];
 
 assert_eq!(message.text(), Some("Hallo Welt"));

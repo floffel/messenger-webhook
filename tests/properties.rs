@@ -37,11 +37,17 @@ fn arb_json() -> impl Strategy<Value = Value> {
 fn adapters() -> Vec<Box<dyn Adapter>> {
     let mut adapters: Vec<Box<dyn Adapter>> = Vec::new();
     #[cfg(feature = "whatsapp")]
-    adapters.push(Box::new(messenger_webhook::WhatsAppAdapter::new("secret")));
+    adapters.push(Box::new(
+        messenger_webhook::WhatsAppAdapter::new("secret-secret-secret").expect("adapter"),
+    ));
     #[cfg(feature = "telegram")]
-    adapters.push(Box::new(messenger_webhook::TelegramAdapter::new("secret")));
+    adapters.push(Box::new(
+        messenger_webhook::TelegramAdapter::new("secret-secret-secret").expect("adapter"),
+    ));
     #[cfg(feature = "matrix")]
-    adapters.push(Box::new(messenger_webhook::MatrixAdapter::new("secret")));
+    adapters.push(Box::new(
+        messenger_webhook::MatrixAdapter::new("secret-secret-secret").expect("adapter"),
+    ));
     adapters
 }
 
@@ -236,21 +242,21 @@ proptest! {
 
         #[cfg(feature = "whatsapp")]
         {
-            let events = messenger_webhook::WhatsAppAdapter::new("s")
+            let events = messenger_webhook::WhatsAppAdapter::new("secret-secret-secret").expect("adapter")
                 .adapt(&serde_json::to_vec(&whatsapp).unwrap())
                 .unwrap();
             prop_assert_eq!(&events[0].raw.as_ref().unwrap()[&key], &value);
         }
         #[cfg(feature = "telegram")]
         {
-            let events = messenger_webhook::TelegramAdapter::new("s")
+            let events = messenger_webhook::TelegramAdapter::new("secret-secret-secret").expect("adapter")
                 .adapt(&serde_json::to_vec(&telegram).unwrap())
                 .unwrap();
             prop_assert_eq!(&events[0].raw.as_ref().unwrap()[&key], &value);
         }
         #[cfg(feature = "matrix")]
         {
-            let events = messenger_webhook::MatrixAdapter::new("s")
+            let events = messenger_webhook::MatrixAdapter::new("secret-secret-secret").expect("adapter")
                 .adapt(&serde_json::to_vec(&matrix).unwrap())
                 .unwrap();
             prop_assert_eq!(&events[0].raw.as_ref().unwrap()[&key], &value);
@@ -280,7 +286,7 @@ fn digits() -> impl Strategy<Value = String> {
 /// Wrap an outbound body the way the provider would echo it back inbound.
 #[cfg(feature = "telegram")]
 fn telegram_echo(conversation: &str, text: &str) {
-    let adapter = messenger_webhook::TelegramAdapter::new("secret");
+    let adapter = messenger_webhook::TelegramAdapter::new("secret-secret-secret").expect("adapter");
     let message = OutboundMessage::text(Channel::Telegram, conversation, text);
     let payload = adapter.encode(&message).unwrap();
     let body: Map<String, Value> = serde_json::from_slice(payload.body()).unwrap();
@@ -325,7 +331,7 @@ proptest! {
     #[cfg(feature = "whatsapp")]
     #[test]
     fn whatsapp_text_round_trips(recipient in digits(), text in arb_text()) {
-        let adapter = messenger_webhook::WhatsAppAdapter::new("secret");
+        let adapter = messenger_webhook::WhatsAppAdapter::new("secret-secret-secret").expect("adapter");
         let message = OutboundMessage::text(Channel::WhatsApp, recipient.clone(), text.clone());
         let payload = adapter.encode(&message).unwrap();
         let body: Value = serde_json::from_slice(payload.body()).unwrap();
@@ -351,7 +357,7 @@ proptest! {
         room in "![a-z]{1,8}:[a-z]{1,8}",
         text in arb_text(),
     ) {
-        let adapter = messenger_webhook::MatrixAdapter::new("secret");
+        let adapter = messenger_webhook::MatrixAdapter::new("secret-secret-secret").expect("adapter");
         let message = OutboundMessage::text(Channel::Matrix, room.clone(), text.clone());
         let content: Value = adapter.encode(&message).unwrap().json().unwrap();
         let event = serde_json::json!({
@@ -369,7 +375,7 @@ proptest! {
     #[cfg(feature = "matrix")]
     #[test]
     fn matrix_reply_round_trips(reply in "\\$[a-z0-9]{1,8}") {
-        let adapter = messenger_webhook::MatrixAdapter::new("secret");
+        let adapter = messenger_webhook::MatrixAdapter::new("secret-secret-secret").expect("adapter");
         let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "hi");
         message.reply_to = Some(reply.clone());
         let content: Value = adapter.encode(&message).unwrap().json().unwrap();
@@ -385,7 +391,7 @@ proptest! {
     #[cfg(feature = "telegram")]
     #[test]
     fn telegram_length_boundary_is_exact(units in 1024usize..=5120) {
-        let adapter = messenger_webhook::TelegramAdapter::new("secret");
+        let adapter = messenger_webhook::TelegramAdapter::new("secret-secret-secret").expect("adapter");
         let text = "😀".repeat(units / 2) ; // two UTF-16 units per emoji
         let measured = text.encode_utf16().count();
         let message = OutboundMessage::text(Channel::Telegram, "1", text);
@@ -401,7 +407,7 @@ proptest! {
     #[cfg(feature = "whatsapp")]
     #[test]
     fn whatsapp_length_boundary_is_exact(characters in 1000usize..=4200) {
-        let adapter = messenger_webhook::WhatsAppAdapter::new("secret");
+        let adapter = messenger_webhook::WhatsAppAdapter::new("secret-secret-secret").expect("adapter");
         let text = "ä".repeat(characters); // two bytes per character
         let message = OutboundMessage::text(Channel::WhatsApp, "49", text);
         let result = adapter.encode(&message);

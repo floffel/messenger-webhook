@@ -31,16 +31,18 @@ fn registration_is_by_channel_and_replaceable() {
         use messenger_webhook::TelegramAdapter;
 
         let mut registry = Registry::new();
-        registry.register(TelegramAdapter::new("first"));
-        registry.register(TelegramAdapter::new("second"));
+        registry.register(TelegramAdapter::new("first-secret-value").expect("adapter"));
+        registry.register(TelegramAdapter::new("second-secret-value").expect("adapter"));
 
         assert_eq!(registry.len(), 1, "same channel replaces, not duplicates");
         assert_eq!(registry.channels(), vec![Channel::Telegram]);
 
-        let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "second")]);
+        let headers =
+            Headers::from_iter([("x-telegram-bot-api-secret-token", "second-secret-value")]);
         assert!(registry.verify(&Channel::Telegram, &headers, b"{}").is_ok());
 
-        let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "first")]);
+        let headers =
+            Headers::from_iter([("x-telegram-bot-api-secret-token", "first-secret-value")]);
         assert!(matches!(
             registry.verify(&Channel::Telegram, &headers, b"{}"),
             Err(Error::BadSignature { .. })
@@ -84,7 +86,7 @@ fn lookups_use_the_normalised_custom_channel_name() {
         let mut registry = Registry::new();
         registry
             .register(Custom)
-            .register(TelegramAdapter::new("secret"));
+            .register(TelegramAdapter::new("secret-secret-secret").expect("adapter"));
 
         let canonical = Channel::other(" CUSTOM ").expect("trimmed custom name is valid");
         assert!(registry.contains(&canonical));
@@ -104,10 +106,10 @@ fn try_register_reports_a_duplicate_instead_of_replacing() {
 
         let mut registry = Registry::new();
         registry
-            .try_register(TelegramAdapter::new("first"))
+            .try_register(TelegramAdapter::new("first-secret-value").expect("adapter"))
             .expect("the first registration succeeds");
         let error = registry
-            .try_register(TelegramAdapter::new("second"))
+            .try_register(TelegramAdapter::new("second-secret-value").expect("adapter"))
             .expect_err("the second registration is a typed error");
         assert!(matches!(
             error,
@@ -116,10 +118,12 @@ fn try_register_reports_a_duplicate_instead_of_replacing() {
 
         // The first adapter is kept: the shadowed secret still verifies and
         // the replacement candidate does not.
-        let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "first")]);
+        let headers =
+            Headers::from_iter([("x-telegram-bot-api-secret-token", "first-secret-value")]);
         assert!(registry.verify(&Channel::Telegram, &headers, b"{}").is_ok());
 
-        let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "second")]);
+        let headers =
+            Headers::from_iter([("x-telegram-bot-api-secret-token", "second-secret-value")]);
         assert!(matches!(
             registry.verify(&Channel::Telegram, &headers, b"{}"),
             Err(Error::BadSignature { .. })
@@ -133,15 +137,17 @@ fn get_returns_a_shared_adapter_that_outlives_registry_changes() {
     use messenger_webhook::TelegramAdapter;
 
     let mut registry = Registry::new();
-    registry.register(TelegramAdapter::new("first"));
+    registry.register(TelegramAdapter::new("first-secret-value").expect("adapter"));
     let first = registry.get(&Channel::Telegram).unwrap();
 
-    registry.register(TelegramAdapter::new("second"));
+    registry.register(TelegramAdapter::new("second-secret-value").expect("adapter"));
 
-    let first_headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "first")]);
+    let first_headers =
+        Headers::from_iter([("x-telegram-bot-api-secret-token", "first-secret-value")]);
     assert!(first.verify(&first_headers, b"{}").is_ok());
 
-    let second_headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "second")]);
+    let second_headers =
+        Headers::from_iter([("x-telegram-bot-api-secret-token", "second-secret-value")]);
     assert!(registry
         .verify(&Channel::Telegram, &second_headers, b"{}")
         .is_ok());
@@ -156,7 +162,8 @@ fn get_returns_a_shared_adapter_that_outlives_registry_changes() {
 fn register_shared_keeps_the_callers_arc() {
     use messenger_webhook::TelegramAdapter;
 
-    let shared: Arc<dyn Adapter> = Arc::new(TelegramAdapter::new("secret"));
+    let shared: Arc<dyn Adapter> =
+        Arc::new(TelegramAdapter::new("secret-secret-secret").expect("adapter"));
     let mut registry = Registry::new();
     registry.register_shared(Arc::clone(&shared));
 
@@ -164,7 +171,7 @@ fn register_shared_keeps_the_callers_arc() {
     assert!(Arc::ptr_eq(&shared, &fetched));
 
     drop(registry);
-    let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "secret")]);
+    let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "secret-secret-secret")]);
     assert!(shared.verify(&headers, b"{}").is_ok());
 }
 
@@ -175,11 +182,16 @@ fn channels_are_sorted_and_counted() {
     assert_eq!(registry.len(), 0);
 
     #[cfg(feature = "telegram")]
-    registry.register(messenger_webhook::TelegramAdapter::new("s"));
+    registry.register(
+        messenger_webhook::TelegramAdapter::new("secret-secret-secret").expect("adapter"),
+    );
     #[cfg(feature = "whatsapp")]
-    registry.register(messenger_webhook::WhatsAppAdapter::new("s"));
+    registry.register(
+        messenger_webhook::WhatsAppAdapter::new("secret-secret-secret").expect("adapter"),
+    );
     #[cfg(feature = "matrix")]
-    registry.register(messenger_webhook::MatrixAdapter::new("s"));
+    registry
+        .register(messenger_webhook::MatrixAdapter::new("secret-secret-secret").expect("adapter"));
 
     let channels = registry.channels();
     assert_eq!(channels, {
@@ -203,12 +215,12 @@ fn handle_verifies_before_it_parses() {
     {
         use messenger_webhook::{signature::meta_signature, Secret, WhatsAppAdapter};
 
-        let secret = Secret::new("app-secret");
+        let secret = Secret::new("app-secret-app-secret").expect("secret");
         let body = br#"{"entry":[{"changes":[{"value":{"messages":[
             {"id":"wamid.1","from":"49","timestamp":"1729600000","type":"text","text":{"body":"Hallo"}}]}}]}]}"#;
 
         let mut registry = Registry::new();
-        registry.register(WhatsAppAdapter::new("app-secret"));
+        registry.register(WhatsAppAdapter::new("app-secret-app-secret").expect("adapter"));
 
         let mut headers = Headers::new();
         headers
@@ -225,7 +237,7 @@ fn handle_verifies_before_it_parses() {
         forged
             .insert(
                 "x-hub-signature-256",
-                meta_signature(&Secret::new("other"), body).unwrap(),
+                meta_signature(&Secret::new("other-secret-value").expect("secret"), body).unwrap(),
             )
             .unwrap();
         assert!(matches!(
@@ -326,7 +338,7 @@ fn encode_dispatches_by_channel() {
         use messenger_webhook::{MatrixAdapter, OutboundMessage};
 
         let mut registry = Registry::new();
-        registry.register(MatrixAdapter::new("token"));
+        registry.register(MatrixAdapter::new("secret-secret-secret").expect("adapter"));
         let message = OutboundMessage::text(Channel::Matrix, "!r:example.org", "hi");
         let payload = registry.encode(&Channel::Matrix, &message).unwrap();
         assert_eq!(payload.channel(), &Channel::Matrix);
@@ -346,8 +358,8 @@ fn encode_rejects_a_message_from_another_channel() {
 
     let mut registry = Registry::new();
     registry
-        .register(MatrixAdapter::new("token"))
-        .register(TelegramAdapter::new("secret"));
+        .register(MatrixAdapter::new("secret-secret-secret").expect("adapter"))
+        .register(TelegramAdapter::new("secret-secret-secret").expect("adapter"));
 
     let matrix_message = OutboundMessage::text(Channel::Matrix, "!r:example.org", "hi");
     let error = registry
@@ -384,17 +396,23 @@ fn registry_is_send_sync_and_debug_is_redacted() {
     #[cfg(feature = "whatsapp")]
     {
         let mut registry = Registry::new();
-        registry.register(messenger_webhook::WhatsAppAdapter::new("super-secret"));
+        registry.register(
+            messenger_webhook::WhatsAppAdapter::new("super-secret-super-secret").expect("adapter"),
+        );
 
         let rendered = format!("{registry:?}");
         assert!(rendered.starts_with("Registry"));
-        assert!(!rendered.contains("super-secret"), "no secrets in Debug");
+        assert!(
+            !rendered.contains("super-secret-super-secret"),
+            "no secrets in Debug"
+        );
         assert!(rendered.contains("adapters"));
         assert!(rendered.contains("WhatsApp"));
         assert!(rendered.contains("WhatsAppAdapter"));
 
         // The adapter itself must not leak the secret either.
-        let adapter = messenger_webhook::WhatsAppAdapter::new("super-secret");
-        assert!(!format!("{adapter:?}").contains("super-secret"));
+        let adapter =
+            messenger_webhook::WhatsAppAdapter::new("super-secret-super-secret").expect("adapter");
+        assert!(!format!("{adapter:?}").contains("super-secret-super-secret"));
     }
 }

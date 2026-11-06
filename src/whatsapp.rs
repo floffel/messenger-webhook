@@ -12,7 +12,7 @@
 //! use messenger_webhook::{Adapter, Channel, OutboundMessage, WhatsAppAdapter};
 //!
 //! let message = OutboundMessage::text(Channel::WhatsApp, "4915112345678", "Hallo");
-//! let payload = WhatsAppAdapter::new("app-secret").encode(&message)?;
+//! let payload = WhatsAppAdapter::new("app-secret-app-secret")?.encode(&message)?;
 //! assert_eq!(payload.json()?["text"]["body"], "Hallo");
 //! # Ok::<(), messenger_webhook::Error>(())
 //! ```
@@ -53,8 +53,8 @@ pub const MAX_CAPTION_BYTES: usize = 1024;
 /// ```
 /// use messenger_webhook::{signature::meta_signature, Adapter, Headers, Secret, WhatsAppAdapter};
 ///
-/// let secret = Secret::new("app-secret");
-/// let adapter = WhatsAppAdapter::new("app-secret");
+/// let secret = Secret::new("app-secret-app-secret")?;
+/// let adapter = WhatsAppAdapter::new("app-secret-app-secret")?;
 /// let body = br#"{"entry":[{"changes":[{"value":{"messages":[
 ///     {"id":"wamid.1","from":"4915112345678","timestamp":"1729600000","type":"text","text":{"body":"Hallo"}}]}}]}]}"#;
 ///
@@ -75,16 +75,32 @@ impl WhatsAppAdapter {
     /// Creates an adapter that verifies with `app_secret` — the app secret from
     /// the Meta app dashboard.
     ///
+    /// # Errors
+    ///
+    /// [`Error::MissingSecret`] when `app_secret` is empty, and
+    /// [`Error::WeakSecret`] when it is shorter than [`crate::secret::MIN_SECRET_BYTES`].
+    ///
     /// ```
     /// use messenger_webhook::{Adapter, WhatsAppAdapter};
     ///
-    /// assert_eq!(WhatsAppAdapter::new("s").channel().as_str(), "whatsapp");
+    /// assert_eq!(
+    ///     WhatsAppAdapter::new("app-secret-app-secret")?
+    ///         .channel()
+    ///         .as_str(),
+    ///     "whatsapp"
+    /// );
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
-    #[must_use]
-    pub fn new(app_secret: impl Into<String>) -> Self {
-        Self {
-            secret: Secret::new(app_secret),
+    pub fn new(app_secret: impl Into<String>) -> Result<Self> {
+        let app_secret = app_secret.into();
+        if app_secret.is_empty() {
+            return Err(Error::MissingSecret {
+                channel: Channel::WhatsApp,
+            });
         }
+        Ok(Self {
+            secret: Secret::new(app_secret)?,
+        })
     }
 
     /// The header Meta signs with.

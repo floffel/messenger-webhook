@@ -10,7 +10,7 @@
 //! ```
 //! use messenger_webhook::{Adapter, Channel, MatrixAdapter, OutboundMessage};
 //!
-//! let adapter = MatrixAdapter::new("hs-token");
+//! let adapter = MatrixAdapter::new("hs-token-hs-token")?;
 //! let message = OutboundMessage::text(Channel::Matrix, "!room:example.org", "Hallo");
 //! let payload = adapter.encode(&message)?;
 //! assert_eq!(payload.method(), "PUT");
@@ -46,12 +46,12 @@ pub const AUTHORIZATION_HEADER: &str = "authorization";
 /// ```
 /// use messenger_webhook::{Adapter, Headers, MatrixAdapter};
 ///
-/// let adapter = MatrixAdapter::new("hs-token");
+/// let adapter = MatrixAdapter::new("hs-token-hs-token")?;
 /// let body = br#"{"type":"m.room.message","event_id":"$1","room_id":"!r:example.org",
 ///     "sender":"@a:example.org","origin_server_ts":1729600000000,
 ///     "content":{"msgtype":"m.text","body":"Hallo"}}"#;
 ///
-/// let headers = Headers::from_iter([("authorization", "Bearer hs-token")]);
+/// let headers = Headers::from_iter([("authorization", "Bearer hs-token-hs-token")]);
 /// adapter.verify(&headers, body)?;
 ///
 /// let events = adapter.adapt(body)?;
@@ -68,16 +68,32 @@ impl MatrixAdapter {
     /// Creates an adapter that verifies with the application service
     /// `hs_token`.
     ///
+    /// # Errors
+    ///
+    /// [`Error::MissingSecret`] when `hs_token` is empty, and
+    /// [`Error::WeakSecret`] when it is shorter than [`crate::secret::MIN_SECRET_BYTES`].
+    ///
     /// ```
     /// use messenger_webhook::{Adapter, MatrixAdapter};
     ///
-    /// assert_eq!(MatrixAdapter::new("t").channel().as_str(), "matrix");
+    /// assert_eq!(
+    ///     MatrixAdapter::new("hs-token-hs-token")?
+    ///         .channel()
+    ///         .as_str(),
+    ///     "matrix"
+    /// );
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
-    #[must_use]
-    pub fn new(hs_token: impl Into<String>) -> Self {
-        Self {
-            token: Secret::new(hs_token),
+    pub fn new(hs_token: impl Into<String>) -> Result<Self> {
+        let hs_token = hs_token.into();
+        if hs_token.is_empty() {
+            return Err(Error::MissingSecret {
+                channel: Channel::Matrix,
+            });
         }
+        Ok(Self {
+            token: Secret::new(hs_token)?,
+        })
     }
 }
 

@@ -9,17 +9,17 @@ use messenger_webhook::{read_body, Adapter, Error, Headers, MAX_BODY_BYTES, MAX_
 
 #[cfg(feature = "whatsapp")]
 fn whatsapp() -> messenger_webhook::WhatsAppAdapter {
-    messenger_webhook::WhatsAppAdapter::new("app-secret")
+    messenger_webhook::WhatsAppAdapter::new("app-secret-app-secret").expect("adapter")
 }
 
 #[cfg(feature = "telegram")]
 fn telegram() -> messenger_webhook::TelegramAdapter {
-    messenger_webhook::TelegramAdapter::new("bot-secret")
+    messenger_webhook::TelegramAdapter::new("bot-secret-bot-secret").expect("adapter")
 }
 
 #[cfg(feature = "matrix")]
 fn matrix() -> messenger_webhook::MatrixAdapter {
-    messenger_webhook::MatrixAdapter::new("hs-token")
+    messenger_webhook::MatrixAdapter::new("hs-token-hs-token").expect("adapter")
 }
 
 /// Every adapter that is compiled into this build.
@@ -189,7 +189,7 @@ mod whatsapp_edges {
     fn signed(body: &[u8]) -> Headers {
         Headers::from_pairs([(
             "x-hub-signature-256",
-            meta_signature(&Secret::new("app-secret"), body).unwrap(),
+            meta_signature(&Secret::new("app-secret-app-secret").expect("secret"), body).unwrap(),
         )])
     }
 
@@ -205,11 +205,8 @@ mod whatsapp_edges {
 
     #[test]
     fn empty_secret_fails_closed_even_with_a_valid_looking_header() {
-        let adapter = WhatsAppAdapter::new("");
-        let headers =
-            Headers::from_pairs([("x-hub-signature-256", format!("sha256={}", "0".repeat(64)))]);
         assert!(matches!(
-            adapter.verify(&headers, b"{}"),
+            WhatsAppAdapter::new(""),
             Err(Error::MissingSecret { .. })
         ));
     }
@@ -217,7 +214,8 @@ mod whatsapp_edges {
     #[test]
     fn duplicate_signature_headers_fail_closed() {
         let body = b"{}";
-        let valid = meta_signature(&Secret::new("app-secret"), body).unwrap();
+        let valid =
+            meta_signature(&Secret::new("app-secret-app-secret").expect("secret"), body).unwrap();
 
         let single = Headers::from_pairs([("x-hub-signature-256", valid.clone())]);
         assert!(whatsapp().verify(&single, body).is_ok());
@@ -246,47 +244,29 @@ mod whatsapp_edges {
     /// verify `sha256=HMAC("", body)` for *any* body — an attacker forges it.
     #[test]
     fn empty_secret_rejects_a_correctly_computed_empty_key_hmac() {
-        // HMAC-SHA256(key = "", message = "{}"), computed independently:
-        //   python3 -c "import hmac,hashlib;print(hmac.new(b'',b'{}',hashlib.sha256).hexdigest())"
-        const FORGED: &str =
-            "sha256=22f8eea909400af98adf3681a9f31923ef6b7fcba4abb553d92823a3e9d5c25e";
-
-        // The public verifier refuses before it hashes anything.
+        // The public constructor refuses before a secret can reach a verifier.
         assert!(matches!(
-            messenger_webhook::signature::verify_meta(&Secret::new(""), FORGED, b"{}"),
-            Err(Error::MissingSecret { .. })
+            Secret::new(""),
+            Err(Error::WeakSecret { actual: 0, .. })
         ));
 
-        // ... and it refuses with a header that is not even well formed, i.e.
-        // the empty-secret check runs before parsing.
+        // Boundary: one byte below the minimum is rejected, the minimum itself
+        // is accepted and signs a value that only verifies for its own body.
         assert!(matches!(
-            messenger_webhook::signature::verify_meta(&Secret::new(""), "sha256=nothex", b"{}"),
-            Err(Error::MissingSecret { .. })
+            Secret::new("a".repeat(messenger_webhook::secret::MIN_SECRET_BYTES - 1)),
+            Err(Error::WeakSecret { .. })
         ));
-
-        // The signer refuses too, so a mock/caller cannot mint an empty-key
-        // signature in the first place.
-        assert!(matches!(
-            meta_signature(&Secret::new(""), b"{}"),
-            Err(Error::MissingSecret { .. })
-        ));
-
-        // Boundary pair: the shortest non-empty secret is a real key and
-        // produces a signature that verifies only for its own body.
-        let shortest = Secret::new("x");
-        let header = meta_signature(&shortest, b"{}").expect("one-byte key signs");
-        assert_ne!(header, FORGED);
+        let shortest =
+            Secret::new("a".repeat(messenger_webhook::secret::MIN_SECRET_BYTES)).expect("minimum");
+        let header = meta_signature(&shortest, b"{}").expect("minimum secret signs");
         assert!(messenger_webhook::signature::verify_meta(&shortest, &header, b"{}").is_ok());
-        assert!(matches!(
-            messenger_webhook::signature::verify_meta(&shortest, FORGED, b"{}"),
-            Err(Error::BadSignature { .. })
-        ));
     }
 
     #[test]
     fn signature_header_shape_is_enforced() {
         let body = b"{}";
-        let valid = meta_signature(&Secret::new("app-secret"), body).unwrap();
+        let valid =
+            meta_signature(&Secret::new("app-secret-app-secret").expect("secret"), body).unwrap();
         let hex = valid.trim_start_matches("sha256=");
 
         let cases = [
@@ -338,7 +318,11 @@ mod whatsapp_edges {
         // Another secret's signature.
         let foreign = Headers::from_pairs([(
             "x-hub-signature-256",
-            meta_signature(&Secret::new("other"), br#"{"entry":[]}"#).unwrap(),
+            meta_signature(
+                &Secret::new("other-secret-value").expect("secret"),
+                br#"{"entry":[]}"#,
+            )
+            .unwrap(),
         )]);
         assert!(matches!(
             whatsapp().verify(&foreign, br#"{"entry":[]}"#),
@@ -527,7 +511,7 @@ mod telegram_edges {
         let adapter = telegram();
         assert!(adapter
             .verify(
-                &Headers::from_iter([("x-telegram-bot-api-secret-token", "bot-secret")]),
+                &Headers::from_iter([("x-telegram-bot-api-secret-token", "bot-secret-bot-secret")]),
                 b"{}"
             )
             .is_ok());
@@ -545,29 +529,29 @@ mod telegram_edges {
 
     #[test]
     fn empty_secret_fails_closed() {
-        let adapter = TelegramAdapter::new("");
-        let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "")]);
         assert!(matches!(
-            adapter.verify(&headers, b"{}"),
+            TelegramAdapter::new(""),
             Err(Error::MissingSecret { .. })
         ));
     }
 
     #[test]
     fn header_name_is_case_insensitive() {
-        let headers = Headers::from_iter([("X-Telegram-Bot-Api-Secret-Token", "bot-secret")]);
+        let headers =
+            Headers::from_iter([("X-Telegram-Bot-Api-Secret-Token", "bot-secret-bot-secret")]);
         assert!(telegram().verify(&headers, b"{}").is_ok());
     }
 
     #[test]
     fn duplicate_token_headers_fail_closed() {
-        let single = Headers::from_iter([("x-telegram-bot-api-secret-token", "bot-secret")]);
+        let single =
+            Headers::from_iter([("x-telegram-bot-api-secret-token", "bot-secret-bot-secret")]);
         assert!(telegram().verify(&single, b"{}").is_ok());
 
         for values in [
-            ["bot-secret", "bot-secret"],
-            ["bot-secret", "wrong"],
-            ["wrong", "bot-secret"],
+            ["bot-secret-bot-secret", "bot-secret-bot-secret"],
+            ["bot-secret-bot-secret", "wrong-secret-value"],
+            ["wrong-secret-value", "bot-secret-bot-secret"],
         ] {
             let headers = Headers::from_iter([
                 ("x-telegram-bot-api-secret-token", values[0]),
@@ -786,21 +770,21 @@ mod matrix_edges {
         let adapter = matrix();
         assert!(adapter
             .verify(
-                &Headers::from_iter([("authorization", "Bearer hs-token")]),
+                &Headers::from_iter([("authorization", "Bearer hs-token-hs-token")]),
                 b"{}"
             )
             .is_ok());
         assert!(adapter
             .verify(
-                &Headers::from_iter([("authorization", "bearer hs-token")]),
+                &Headers::from_iter([("authorization", "bearer hs-token-hs-token")]),
                 b"{}"
             )
             .is_ok());
 
         for (header, expected) in [
-            ("Bearer wrong", true),
-            ("Basic hs-token", false),
-            ("hs-token", false),
+            ("Bearer wrong-secret-value", true),
+            ("Basic hs-token-hs-token", false),
+            ("hs-token-hs-token", false),
             ("Bearer ", true),
         ] {
             let headers = Headers::from_iter([("authorization", header)]);
@@ -823,7 +807,7 @@ mod matrix_edges {
     fn malformed_authorization_scheme_is_not_echoed() {
         let adapter = matrix();
         let scheme = "Basic\r\nx-secret";
-        let header = format!("{scheme} hs-token");
+        let header = format!("{scheme} hs-token-hs-token");
         let headers = Headers::from_iter([("authorization", header.as_str())]);
 
         let error = adapter.verify(&headers, b"{}").unwrap_err();
@@ -845,23 +829,21 @@ mod matrix_edges {
 
     #[test]
     fn empty_token_fails_closed() {
-        let adapter = MatrixAdapter::new("");
-        let headers = Headers::from_iter([("authorization", "Bearer ")]);
         assert!(matches!(
-            adapter.verify(&headers, b"{}"),
+            MatrixAdapter::new(""),
             Err(Error::MissingSecret { .. })
         ));
     }
 
     #[test]
     fn duplicate_authorization_headers_fail_closed() {
-        let single = Headers::from_iter([("authorization", "Bearer hs-token")]);
+        let single = Headers::from_iter([("authorization", "Bearer hs-token-hs-token")]);
         assert!(matrix().verify(&single, b"{}").is_ok());
 
         for values in [
-            ["Bearer hs-token", "Bearer hs-token"],
-            ["Bearer hs-token", "Bearer wrong"],
-            ["Bearer wrong", "Bearer hs-token"],
+            ["Bearer hs-token-hs-token", "Bearer hs-token-hs-token"],
+            ["Bearer hs-token-hs-token", "Bearer wrong-secret-value"],
+            ["Bearer wrong-secret-value", "Bearer hs-token-hs-token"],
         ] {
             let headers =
                 Headers::from_iter([("authorization", values[0]), ("Authorization", values[1])]);

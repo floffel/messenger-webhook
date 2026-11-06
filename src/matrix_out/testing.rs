@@ -21,7 +21,7 @@
 //! let client = MatrixClient::new(
 //!     transport.clone(),
 //!     ClientConfig::new("https://matrix.example.org")?,
-//!     "syt_token",
+//!     "syt_token_123456",
 //! )?;
 //!
 //! let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -339,7 +339,7 @@ impl Transport for StubTransport {
 /// let client = MatrixClient::new(
 ///     transport.clone(),
 ///     ClientConfig::new("https://m.example")?.with_sleeper(sleeper.clone()),
-///     "syt",
+///     "syt_token_123456",
 /// )?;
 ///
 /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;

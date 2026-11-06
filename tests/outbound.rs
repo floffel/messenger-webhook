@@ -29,7 +29,7 @@ mod whatsapp {
     };
 
     fn adapter() -> WhatsAppAdapter {
-        WhatsAppAdapter::new("secret")
+        WhatsAppAdapter::new("secret-secret-secret").expect("adapter")
     }
 
     #[test]
@@ -203,7 +203,7 @@ mod telegram {
     };
 
     fn adapter() -> TelegramAdapter {
-        TelegramAdapter::new("secret")
+        TelegramAdapter::new("secret-secret-secret").expect("adapter")
     }
 
     #[test]
@@ -368,7 +368,7 @@ mod matrix {
     };
 
     fn adapter() -> MatrixAdapter {
-        MatrixAdapter::new("hs-token")
+        MatrixAdapter::new("hs-token-hs-token").expect("adapter")
     }
 
     #[test]
@@ -527,7 +527,8 @@ fn payload_type_is_channel_typed() {
     #[cfg(feature = "telegram")]
     {
         use messenger_webhook::TelegramAdapter;
-        let payload = TelegramAdapter::new("s")
+        let payload = TelegramAdapter::new("secret-secret-secret")
+            .expect("adapter")
             .encode(&OutboundMessage::text(Channel::Telegram, "1", "hi"))
             .unwrap();
         assert_eq!(payload.channel(), &Channel::Telegram);
@@ -536,7 +537,8 @@ fn payload_type_is_channel_typed() {
     #[cfg(feature = "whatsapp")]
     {
         use messenger_webhook::WhatsAppAdapter;
-        let payload = WhatsAppAdapter::new("s")
+        let payload = WhatsAppAdapter::new("secret-secret-secret")
+            .expect("adapter")
             .encode(&OutboundMessage::text(Channel::WhatsApp, "49", "hi"))
             .unwrap();
         assert_eq!(payload.channel(), &Channel::WhatsApp);
@@ -545,7 +547,8 @@ fn payload_type_is_channel_typed() {
     #[cfg(feature = "matrix")]
     {
         use messenger_webhook::MatrixAdapter;
-        let payload = MatrixAdapter::new("s")
+        let payload = MatrixAdapter::new("secret-secret-secret")
+            .expect("adapter")
             .encode(&OutboundMessage::text(Channel::Matrix, "!r:s", "hi"))
             .unwrap();
         assert_eq!(payload.channel(), &Channel::Matrix);

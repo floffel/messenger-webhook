@@ -411,16 +411,22 @@ fn headers_debug_redacts_credential_values() {
 
 #[test]
 fn secret_api() {
-    let secret = Secret::new("token");
+    let secret = Secret::new("secret-secret-secret").expect("secret");
     // A custom `is_empty` is not the `assert_is_empty` lint's target.
     assert!(!secret.is_empty());
-    assert_eq!(secret.expose_secret(), "token");
-    assert!(secret.ct_eq(b"token"));
+    assert_eq!(secret.expose_secret(), "secret-secret-secret");
+    assert!(secret.ct_eq(b"secret-secret-secret"));
     assert!(!secret.ct_eq(b"toke"));
     assert!(!secret.ct_eq(b""));
-    assert!(Secret::new("").is_empty());
+    assert!(matches!(
+        Secret::new(""),
+        Err(Error::WeakSecret {
+            actual: 0,
+            minimum: messenger_webhook::secret::MIN_SECRET_BYTES,
+        })
+    ));
     assert_eq!(format!("{secret:?}"), "Secret(<redacted>)");
-    assert!(!format!("{secret:?}").contains("token"));
+    assert!(!format!("{secret:?}").contains("secret-secret-secret"));
 }
 
 #[test]
@@ -502,12 +508,12 @@ fn hmac_construction_error_keeps_its_source_chain() {
 
 #[test]
 fn signature_helpers_are_usable_from_outside() {
-    let secret = Secret::new("app-secret");
+    let secret = Secret::new("app-secret-app-secret").expect("secret");
     let header = signature::meta_signature(&secret, b"body").unwrap();
     assert!(header.starts_with(signature::META_SIGNATURE_PREFIX));
     assert_eq!(signature::META_SIGNATURE_HEADER, "x-hub-signature-256");
     assert!(signature::verify_meta(&secret, &header, b"body").is_ok());
-    assert!(signature::verify_meta(&secret, &header, b"other").is_err());
+    assert!(signature::verify_meta(&secret, &header, b"other-secret-value").is_err());
 }
 
 #[test]
@@ -521,13 +527,17 @@ fn registry_accessors() {
 
     #[cfg(feature = "matrix")]
     {
-        registry.register(messenger_webhook::MatrixAdapter::new("t"));
+        registry.register(
+            messenger_webhook::MatrixAdapter::new("matrix-secret-value").expect("adapter"),
+        );
         assert!(registry.contains(&Channel::Matrix));
         assert_eq!(registry.len(), 1);
         assert!(!format!("{registry:?}").contains("t\""));
 
         let error = registry
-            .try_register(messenger_webhook::MatrixAdapter::new("u"))
+            .try_register(
+                messenger_webhook::MatrixAdapter::new("matrix-secret-other").expect("adapter"),
+            )
             .expect_err("matrix is already registered");
         assert!(matches!(
             error,

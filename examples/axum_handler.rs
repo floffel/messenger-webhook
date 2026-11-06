@@ -35,7 +35,7 @@ type AppState = Arc<WhatsAppAdapter>;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let secret = std::env::var("WA_APP_SECRET").unwrap_or_else(|_| "dev-only-secret".to_owned());
-    let state: AppState = Arc::new(WhatsAppAdapter::new(secret));
+    let state: AppState = Arc::new(WhatsAppAdapter::new(secret).expect("adapter"));
 
     let app = Router::new()
         .route("/webhook/whatsapp", post(handle))

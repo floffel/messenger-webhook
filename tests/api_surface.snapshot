@@ -252,6 +252,7 @@ src/rich.rs:impl TextSpan:fn covers
 src/rich.rs:impl TextSpan:fn new
 src/rich.rs:impl TextSpan:fn slice
 src/rich.rs:struct TextSpan
+src/secret.rs:const MIN_SECRET_BYTES
 src/secret.rs:impl Secret:fn ct_eq
 src/secret.rs:impl Secret:fn expose_secret
 src/secret.rs:impl Secret:fn is_empty
