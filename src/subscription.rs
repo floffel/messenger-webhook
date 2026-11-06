@@ -85,11 +85,11 @@ pub const META_VERIFY_TOKEN_PARAM: &str = "hub.verify_token";
 /// ```
 pub const META_SUBSCRIBE_MODE: &str = "subscribe";
 
-/// Longest challenge this crate echoes back, in bytes.
+/// Longest `hub.challenge` this crate parses, in bytes.
 ///
 /// Meta documents the challenge as an integer, so any real value is a handful
-/// of digits; the ceiling only exists because the value is reflected into the
-/// response and a reflected value must be bounded.
+/// of digits; the ceiling is a pre-parse guard before the reflected value is
+/// converted to its canonical decimal form.
 ///
 /// ```
 /// use messenger_webhook::subscription::MAX_CHALLENGE_BYTES;
@@ -112,7 +112,9 @@ const PHP_VERIFY_TOKEN_PARAM: &str = "hub_verify_token";
 /// Pass the raw query string (everything after `?` in the `GET` URL) and the
 /// token that was entered in the app dashboard. On success the caller answers
 /// `200` with the returned value as its body and `text/plain` as its content
-/// type; every error means the request is not from Meta and deserves `403`.
+/// type. Meta documents the challenge as an integer, so this function parses it
+/// and returns the canonical decimal rendering; every error means the request
+/// is not from Meta and deserves `403`.
 ///
 /// ```
 /// use messenger_webhook::{subscription::meta_subscription_challenge, Secret};
@@ -135,9 +137,9 @@ const PHP_VERIFY_TOKEN_PARAM: &str = "hub_verify_token";
 ///   fails closed instead of accepting the request.
 /// - [`Error::MalformedVerificationRequest`] when a parameter is missing, is
 ///   present twice, is not a single `subscribe` in `hub.mode`, or when the
-///   challenge is empty, longer than [`MAX_CHALLENGE_BYTES`] or not printable, non-space
-///   ASCII — it is reflected into the response, so a control byte in it would
-///   be a response-splitting bug in the caller.
+///   challenge is empty, longer than [`MAX_CHALLENGE_BYTES`] or not an
+///   unsigned 64-bit integer — it is reflected into the response, so only the
+///   canonical decimal rendering of a parsed integer is returned.
 /// - [`Error::BadSignature`] when the token does not match. The comparison is
 ///   constant time, and the raw value never reaches the error message.
 pub fn meta_subscription_challenge(secret: &Secret, query: &str) -> Result<String> {
@@ -186,14 +188,11 @@ pub fn meta_subscription_challenge(secret: &Secret, query: &str) -> Result<Strin
     if challenge.len() > MAX_CHALLENGE_BYTES {
         return Err(malformed("hub.challenge is over the length limit"));
     }
-    // Space is excluded as well: the challenge is documented as an integer, so
-    // a space in it means the query was mangled (a `+` or a stray `%20`), and a
-    // whitespace-only value is never worth reflecting.
-    if !challenge.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
-        return Err(malformed("hub.challenge is not printable ASCII"));
-    }
+    let challenge: u64 = challenge
+        .parse()
+        .map_err(|_| malformed("hub.challenge is not an unsigned integer"))?;
 
-    Ok(challenge)
+    Ok(challenge.to_string())
 }
 
 /// Builds the typed error for a request that does not have the documented shape.

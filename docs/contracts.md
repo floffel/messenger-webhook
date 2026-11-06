@@ -176,7 +176,8 @@ What the crate does with it:
 
 - `subscription::meta_subscription_challenge` takes the raw query string and the
   dashboard token, compares the token in constant time and returns the challenge
-  — the exact bytes of `hub.challenge`, nothing concatenated onto them.
+  parsed as an unsigned integer and rendered canonically in decimal; nothing is
+  concatenated onto it.
 - Both spellings of every parameter are accepted (`hub.mode` and `hub_mode`),
   because the underscore note above means an endpoint behind a PHP layer sees the
   second one.
@@ -184,13 +185,13 @@ What the crate does with it:
   would otherwise carry two candidate tokens and the endpoint would have to pick
   one. Unknown parameters are ignored.
 - The challenge is reflected into the caller's response, so it is bounded
-  (`MAX_CHALLENGE_BYTES`) and must be printable, non-space ASCII; a value
-  containing CR/LF would be response splitting in a handler that put it in a
-  header, and a whitespace-only value means the query was mangled.
+  (`MAX_CHALLENGE_BYTES`) and parsed as an integer before it is returned. Only
+  canonical decimal digits can therefore be reflected, so markup, quotes, angle
+  brackets, backslashes or CR/LF never reach the caller's response body.
 - An empty dashboard token fails closed (`Error::MissingSecret`) before the query
   is even parsed, because comparing against an unset token accepts anyone.
 
-Pinned by `tests/subscription.rs` (24 tests, two of them proptest properties:
+Pinned by `tests/subscription.rs` (26 tests, two of them proptest properties:
 "challenge returned exactly when the token matches" and "arbitrary query strings
 never panic"). The sample request above is the first test case, byte for byte.
 
