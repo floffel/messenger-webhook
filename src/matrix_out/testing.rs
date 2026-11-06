@@ -39,14 +39,15 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::matrix_out::transport::{
-    Body, BoxFuture, Method, Request, Response, Transport, TransportError, TransportErrorKind,
+    redacted_headers, redacted_url, Body, BoxFuture, Method, Request, Response, Transport,
+    TransportError, TransportErrorKind,
 };
 use crate::matrix_out::Sleeper;
 
 /// One request the stub received.
 ///
-/// [`Debug`] redacts the authorisation header, so a failing assertion can print
-/// the recorded calls without printing the access token.
+/// [`Debug`] redacts credential headers and `access_token` query values, so a
+/// failing assertion can print the recorded calls without printing secrets.
 ///
 /// ```
 /// use messenger_webhook::matrix_out::testing::RecordedRequest;
@@ -118,20 +119,11 @@ impl RecordedRequest {
 
 impl fmt::Debug for RecordedRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let headers: Vec<(&str, &str)> = self
-            .headers
-            .iter()
-            .map(|(name, value)| {
-                if name.eq_ignore_ascii_case("authorization") {
-                    (name.as_str(), "<redacted>")
-                } else {
-                    (name.as_str(), value.as_str())
-                }
-            })
-            .collect();
+        let headers = redacted_headers(&self.headers);
+        let url = redacted_url(&self.url);
         f.debug_struct("RecordedRequest")
             .field("method", &self.method)
-            .field("url", &self.url)
+            .field("url", &url)
             .field("headers", &headers)
             .field("body", &format_args!("{} bytes", self.body.len()))
             .finish()
@@ -453,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn requests_are_recorded_without_the_credential() {
+    fn requests_are_recorded_without_credentials() {
         let stub = StubTransport::new();
         stub.push_status(200);
         call(&stub).expect("scripted");
@@ -461,7 +453,32 @@ mod tests {
         assert_eq!(recorded.method, Method::Put);
         assert_eq!(recorded.header("authorization"), Some("Bearer secret"));
         assert_eq!(recorded.json().expect("json body"), serde_json::json!({}));
-        assert!(!format!("{recorded:?}").contains("secret"));
+        let mut recorded = recorded;
+        recorded.url = "https://example.org/x?access_token=url_secret&filename=cat.png".into();
+        recorded
+            .headers
+            .push(("proxy-authorization".into(), "Basic proxy_secret".into()));
+        recorded
+            .headers
+            .push(("cookie".into(), "session=cookie_secret".into()));
+        recorded
+            .headers
+            .push(("x-api-key".into(), "api_key_secret".into()));
+        recorded
+            .headers
+            .push(("x-auth-token".into(), "auth_token_secret".into()));
+        let rendered = format!("{recorded:?}");
+        for secret in [
+            "secret",
+            "proxy_secret",
+            "cookie_secret",
+            "api_key_secret",
+            "auth_token_secret",
+        ] {
+            assert!(!rendered.contains(secret), "{rendered}");
+        }
+        assert!(rendered.contains("filename=cat.png"), "{rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
         assert_eq!(stub.requests().len(), 1);
     }
 
