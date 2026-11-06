@@ -1,5 +1,6 @@
 //! Events the provider sent without an id: they are carried, not dropped, and
-//! the synthesised key is stable across replays and distinct per content.
+//! the synthesised key is stable across replays and distinct per content,
+//! envelope position and Telegram update id.
 
 #![cfg(all(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -101,6 +102,85 @@ fn different_content_yields_a_different_synthetic_id() {
     let first = adapt(&whatsapp(), &build("one"));
     let second = adapt(&whatsapp(), &build("two"));
     assert_ne!(first[0].external_id, second[0].external_id);
+}
+
+#[test]
+fn identical_idless_bodies_at_different_envelope_paths_get_distinct_ids() {
+    let whatsapp_message = json!({
+        "from": "4915112345678", "timestamp": "1729600000",
+        "type": "text", "text": { "body": "same" }
+    });
+    let whatsapp_body = json!({
+        "entry": [{ "changes": [{ "value": { "messages": [
+            whatsapp_message.clone(), whatsapp_message
+        ] } }] }]
+    });
+    let whatsapp_events = adapt(&whatsapp(), &whatsapp_body);
+    assert_eq!(whatsapp_events.len(), 2);
+    assert!(whatsapp_events
+        .iter()
+        .all(NormalizedMessage::has_synthetic_id));
+    assert_ne!(
+        whatsapp_events[0].external_id, whatsapp_events[1].external_id,
+        "the messages[] index must separate identical bodies"
+    );
+
+    let telegram_message = json!({ "chat": { "id": -1001 }, "text": "same" });
+    let telegram_body = json!({
+        "message": telegram_message.clone(), "edited_message": telegram_message
+    });
+    let telegram_events = adapt(&telegram(), &telegram_body);
+    assert_eq!(telegram_events.len(), 2);
+    assert!(telegram_events
+        .iter()
+        .all(NormalizedMessage::has_synthetic_id));
+    assert_ne!(
+        telegram_events[0].external_id, telegram_events[1].external_id,
+        "the update field must separate identical bodies"
+    );
+
+    let matrix_event = json!({
+        "type": "m.room.message", "room_id": "!r:example.org",
+        "sender": "@a:example.org", "content": { "msgtype": "m.text", "body": "same" }
+    });
+    let matrix_body = json!({ "events": [matrix_event.clone(), matrix_event] });
+    let matrix_events = adapt(&matrix(), &matrix_body);
+    assert_eq!(matrix_events.len(), 2);
+    assert!(matrix_events
+        .iter()
+        .all(NormalizedMessage::has_synthetic_id));
+    assert_ne!(
+        matrix_events[0].external_id, matrix_events[1].external_id,
+        "the events[] index must separate identical bodies"
+    );
+
+    let replay = adapt(&whatsapp(), &whatsapp_body);
+    assert_eq!(
+        whatsapp_events[0].external_id, replay[0].external_id,
+        "the same object at the same path must stay stable across replays"
+    );
+}
+
+#[test]
+fn telegram_update_id_separates_identical_idless_messages_across_deliveries() {
+    let message = json!({ "chat": { "id": -1001 }, "text": "same" });
+    let first_body = json!({ "update_id": 41, "message": message.clone() });
+    let second_body = json!({ "update_id": 42, "message": message });
+
+    let first = adapt(&telegram(), &first_body);
+    let retry = adapt(&telegram(), &first_body);
+    let second = adapt(&telegram(), &second_body);
+
+    assert_eq!(first.len(), 1);
+    assert!(first[0].has_synthetic_id());
+    assert_eq!(
+        first[0].external_id, retry[0].external_id,
+        "a retry of the same update must keep its synthetic id"
+    );
+    assert_ne!(
+        first[0].external_id, second[0].external_id,
+        "a different update carrying an identical body is a different event"
+    );
 }
 
 #[test]

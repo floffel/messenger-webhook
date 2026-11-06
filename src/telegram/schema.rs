@@ -24,6 +24,7 @@ use serde_json::Value;
 pub(super) const MESSAGE_REACTION: &str = "message_reaction";
 
 pub(super) const MESSAGE_ID: &str = "message_id";
+pub(super) const UPDATE_ID: &str = "update_id";
 pub(super) const MESSAGE_THREAD_ID: &str = "message_thread_id";
 pub(super) const CHAT_ID: &str = "chat_id";
 pub(super) const CHAT: &str = "chat";
@@ -475,8 +476,8 @@ mod tests {
         FIRST_NAME, FROM, HEIGHT, ID, LANGUAGE, LAST_NAME, LATITUDE, LENGTH, LOCATION, LONGITUDE,
         MESSAGE_ID, MESSAGE_REACTION, MESSAGE_THREAD_ID, MIME_TYPE, NAME, NEW_REACTION, OFFSET,
         OLD_REACTION, PHONE_NUMBER, PHOTO, POLL, REPLY_PARAMETERS, REPLY_TO_MESSAGE, SENDER_CHAT,
-        STICKER, TEXT, TITLE, TYPE, UPDATE_KINDS, URL, USER, VIDEO, VIDEO_FIELDS, VIDEO_NOTE,
-        VOICE, WIDTH,
+        STICKER, TEXT, TITLE, TYPE, UPDATE_ID, UPDATE_KINDS, URL, USER, VIDEO, VIDEO_FIELDS,
+        VIDEO_NOTE, VOICE, WIDTH,
     };
 
     /// The exact object field names from
@@ -487,6 +488,7 @@ mod tests {
         let fields = [
             (MESSAGE_REACTION, "message_reaction"),
             (MESSAGE_ID, "message_id"),
+            (UPDATE_ID, "update_id"),
             (MESSAGE_THREAD_ID, "message_thread_id"),
             (CHAT_ID, "chat_id"),
             (CHAT, "chat"),
