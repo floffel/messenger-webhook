@@ -335,6 +335,7 @@ fn a_4xx_is_terminal_and_never_retried() {
     }
     assert!(!error.is_retryable());
     assert!(!error.is_ambiguous());
+    assert!(error.is_client_error());
     assert_eq!(harness.transport.call_count(), 1);
     assert_eq!(harness.sleeper.delays(), [] as [std::time::Duration; 0]);
 }

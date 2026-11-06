@@ -251,8 +251,8 @@ impl OutboundError {
         }
     }
 
-    /// Whether the failure is about the request the caller built, rather than
-    /// about the homeserver or the network.
+    /// Whether the failure is terminal for this request: the caller must change
+    /// the request, credentials or permissions before trying again.
     ///
     /// A `true` answer means the same call will always fail with the same error
     /// until the argument changes.
@@ -261,6 +261,12 @@ impl OutboundError {
     /// use messenger_webhook::matrix_out::OutboundError;
     ///
     /// assert!(OutboundError::InvalidRequest { reason: "x".into() }.is_client_error());
+    /// assert!(OutboundError::Rejected {
+    ///     status: 403,
+    ///     errcode: "M_FORBIDDEN".into(),
+    ///     message: "not in room".into(),
+    /// }
+    /// .is_client_error());
     /// assert!(!OutboundError::Transport { attempts: 1, reason: "dns".into() }.is_client_error());
     /// ```
     #[must_use]
@@ -273,6 +279,7 @@ impl OutboundError {
                 | Self::InvalidRequest { .. }
                 | Self::MessageTooLong { .. }
                 | Self::MediaTooLarge { .. }
+                | Self::Rejected { .. }
         )
     }
 }
@@ -363,10 +370,69 @@ mod tests {
         }
     }
 
-    /// The delivery half of the variant table: what the homeserver or the
-    /// network did.
+    /// Client-error rows among the delivery variants: the homeserver or
+    /// homeserver-adjacent layers told the caller to change the request.
     #[test]
-    fn every_delivery_variant_reports_its_classification() {
+    fn every_rejected_variant_reports_its_classification() {
+        let cases: Vec<(OutboundError, bool, bool, bool, String)> = vec![
+            (
+                OutboundError::Rejected {
+                    status: 400,
+                    errcode: "M_UNKNOWN".into(),
+                    message: "bad request".into(),
+                },
+                false,
+                false,
+                true,
+                "the homeserver rejected the request with 400 (M_UNKNOWN): bad request".into(),
+            ),
+            (
+                OutboundError::Rejected {
+                    status: 403,
+                    errcode: "M_FORBIDDEN".into(),
+                    message: "not in room".into(),
+                },
+                false,
+                false,
+                true,
+                "the homeserver rejected the request with 403 (M_FORBIDDEN): not in room".into(),
+            ),
+            (
+                OutboundError::Rejected {
+                    status: 404,
+                    errcode: "M_NOT_FOUND".into(),
+                    message: "no such room".into(),
+                },
+                false,
+                false,
+                true,
+                "the homeserver rejected the request with 404 (M_NOT_FOUND): no such room".into(),
+            ),
+            (
+                OutboundError::Rejected {
+                    status: 413,
+                    errcode: "M_TOO_LARGE".into(),
+                    message: "too big".into(),
+                },
+                false,
+                false,
+                true,
+                "the homeserver rejected the request with 413 (M_TOO_LARGE): too big".into(),
+            ),
+        ];
+
+        for (error, retryable, ambiguous, client_error, text) in cases {
+            assert_eq!(error.is_retryable(), retryable, "{error:?}");
+            assert_eq!(error.is_ambiguous(), ambiguous, "{error:?}");
+            assert_eq!(error.is_client_error(), client_error, "{error:?}");
+            assert_eq!(error.to_string(), text, "{error:?}");
+        }
+    }
+
+    /// The non-rejected delivery variants: what the homeserver or the network
+    /// did after the request had already been formed.
+    #[test]
+    fn every_non_rejected_delivery_variant_reports_its_classification() {
         let txn = TxnId::new("t1").expect("valid txn");
         let cases: Vec<(OutboundError, bool, bool, bool, String)> = vec![
             (
@@ -392,17 +458,6 @@ mod tests {
                 false,
                 false,
                 "the homeserver rate-limited the request (M_LIMIT_EXCEEDED): slow down".into(),
-            ),
-            (
-                OutboundError::Rejected {
-                    status: 403,
-                    errcode: "M_FORBIDDEN".into(),
-                    message: "not in room".into(),
-                },
-                false,
-                false,
-                false,
-                "the homeserver rejected the request with 403 (M_FORBIDDEN): not in room".into(),
             ),
             (
                 OutboundError::Server {
