@@ -391,9 +391,29 @@ mod whatsapp_edges {
         let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
             {"id":"wamid.1","from":"49","type":"button_reply_v9","button_reply_v9":{"id":"b1"}}]}}]}]}"#;
         let events = whatsapp().adapt(payload).unwrap();
+        assert_eq!(events.len(), 1);
         assert_eq!(events[0].provider_type.as_deref(), Some("button_reply_v9"));
         assert!(events[0].raw.is_some());
         assert!(events[0].text().is_none());
+        assert_eq!(events[0].attachments.len(), 0);
+    }
+
+    #[test]
+    fn unknown_message_types_keep_readable_text() {
+        let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
+            {"id":"wamid.1","from":"49","type":"com.example.poll","com.example.poll":{"body":"Which day?"}},
+            {"id":"wamid.2","from":"49","type":"button_reply_v9","button_reply_v9":{"caption":"Yes"}},
+            {"id":"wamid.3","from":"49","type":"future_text","text":{"body":"Hello"}},
+            {"id":"wamid.4","from":"49","type":"future_body","body":"Plain body"}]}}]}]}"#;
+        let events = whatsapp().adapt(payload).unwrap();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].text(), Some("Which day?"));
+        assert_eq!(events[1].text(), Some("Yes"));
+        assert_eq!(events[2].text(), Some("Hello"));
+        assert_eq!(events[3].text(), Some("Plain body"));
+        for event in events {
+            assert_eq!(event.attachments.len(), 0);
+        }
     }
 
     #[test]

@@ -320,11 +320,27 @@ fn normalize_message(message: &Value) -> Result<NormalizedMessage> {
             }
         }
         // Buttons, interactive replies, orders, system notices and future
-        // types keep their provider name and full payload in `raw`.
-        _ => {}
+        // types keep their provider name and full payload in `raw`. If the
+        // provider included readable text, carry it instead of hiding it in
+        // the raw payload.
+        _ => normalized.set_text(unknown_text(message, &provider_type)),
     }
 
     Ok(normalized)
+}
+
+/// Lifts text from an unrecognised message shape without inventing media.
+fn unknown_text(message: &Value, provider_type: &str) -> Option<String> {
+    json::child(message, "text")
+        .and_then(|text| json::string(text, "body"))
+        .or_else(|| {
+            json::child(message, provider_type).and_then(|content| json::string(content, "body"))
+        })
+        .or_else(|| {
+            json::child(message, provider_type).and_then(|content| json::string(content, "caption"))
+        })
+        .or_else(|| json::string(message, "body"))
+        .map(str::to_owned)
 }
 
 /// Maps a media object (`image`, `document`, `audio`, `video`, `sticker`).
