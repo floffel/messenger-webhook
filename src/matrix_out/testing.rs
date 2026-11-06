@@ -139,11 +139,50 @@ enum Outcome {
     Failure(TransportError),
 }
 
+/// The scripted queue and the recorded calls, guarded by one lock so a call and
+/// its scripted answer move atomically.
+#[derive(Debug, Default)]
+struct State {
+    script: VecDeque<Outcome>,
+    recorded: Vec<RecordedRequest>,
+}
+
+/// A consistent snapshot of a [`StubTransport`]'s counters, read under one
+/// lock.
+///
+/// Because the script and the recorded calls share a single mutex, a reader can
+/// never observe a call that is recorded while its scripted answer is still
+/// queued: `calls + remaining` always equals the number of outcomes pushed so
+/// far (until the script is exhausted).
+///
+/// ```
+/// use messenger_webhook::matrix_out::StubTransport;
+///
+/// let stub = StubTransport::new();
+/// stub.push_status(204);
+/// let counters = stub.counters();
+/// assert_eq!(counters.calls, 0);
+/// assert_eq!(counters.remaining, 1);
+/// ```
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StubCounters {
+    /// How many requests the stub has answered.
+    pub calls: usize,
+    /// How many scripted outcomes are still queued.
+    pub remaining: usize,
+}
+
 /// A [`Transport`] that replays a scripted queue and records what it was asked
 /// to do.
 ///
 /// Interior mutability throughout, so one stub can be shared by 32 tasks behind
 /// an `Arc` — which is how the crate's concurrency test drives one client.
+///
+/// The script and the recorded calls live behind a single lock, so recording a
+/// call and consuming its scripted answer happen in one critical section:
+/// [`counters`](StubTransport::counters) never sees the half-done state where a
+/// call is recorded but its answer is still queued.
 ///
 /// ```
 /// use messenger_webhook::matrix_out::StubTransport;
@@ -156,8 +195,7 @@ enum Outcome {
 /// ```
 #[derive(Debug, Default)]
 pub struct StubTransport {
-    script: Mutex<VecDeque<Outcome>>,
-    recorded: Mutex<Vec<RecordedRequest>>,
+    state: Mutex<State>,
 }
 
 impl StubTransport {
@@ -185,7 +223,7 @@ impl StubTransport {
     /// assert_eq!(stub.remaining(), 1);
     /// ```
     pub fn push(&self, response: Response) -> &Self {
-        self.lock_script().push_back(Outcome::Response(response));
+        self.lock().script.push_back(Outcome::Response(response));
         self
     }
 
@@ -227,7 +265,7 @@ impl StubTransport {
     /// assert_eq!(stub.remaining(), 1);
     /// ```
     pub fn push_failure(&self, error: TransportError) -> &Self {
-        self.lock_script().push_back(Outcome::Failure(error));
+        self.lock().script.push_back(Outcome::Failure(error));
         self
     }
 
@@ -240,7 +278,7 @@ impl StubTransport {
     /// ```
     #[must_use]
     pub fn requests(&self) -> Vec<RecordedRequest> {
-        self.lock_recorded().clone()
+        self.lock().recorded.clone()
     }
 
     /// How many requests have been made.
@@ -252,7 +290,7 @@ impl StubTransport {
     /// ```
     #[must_use]
     pub fn call_count(&self) -> usize {
-        self.lock_recorded().len()
+        self.lock().recorded.len()
     }
 
     /// The most recent request, if any.
@@ -264,7 +302,7 @@ impl StubTransport {
     /// ```
     #[must_use]
     pub fn last_request(&self) -> Option<RecordedRequest> {
-        self.lock_recorded().last().cloned()
+        self.lock().recorded.last().cloned()
     }
 
     /// How many scripted outcomes are still queued.
@@ -278,15 +316,31 @@ impl StubTransport {
     /// ```
     #[must_use]
     pub fn remaining(&self) -> usize {
-        self.lock_script().len()
+        self.lock().script.len()
     }
 
-    fn lock_script(&self) -> std::sync::MutexGuard<'_, VecDeque<Outcome>> {
-        self.script.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Both counters read under one lock, so a call and its scripted answer
+    /// can never be observed split across two critical sections.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::StubTransport;
+    ///
+    /// let stub = StubTransport::new();
+    /// stub.push_status(204);
+    /// assert_eq!(stub.counters().remaining, 1);
+    /// assert_eq!(stub.counters().calls, 0);
+    /// ```
+    #[must_use]
+    pub fn counters(&self) -> StubCounters {
+        let state = self.lock();
+        StubCounters {
+            calls: state.recorded.len(),
+            remaining: state.script.len(),
+        }
     }
 
-    fn lock_recorded(&self) -> std::sync::MutexGuard<'_, Vec<RecordedRequest>> {
-        self.recorded.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -304,8 +358,12 @@ impl Transport for StubTransport {
             };
             let method = recorded.method;
             let url = recorded.url.clone();
-            self.lock_recorded().push(recorded);
-            match self.lock_script().pop_front() {
+            // One guard over the shared state: the call is recorded and its
+            // scripted answer consumed in the same critical section, so no
+            // observer sees a recorded call whose answer is still queued.
+            let mut state = self.lock();
+            state.recorded.push(recorded);
+            match state.script.pop_front() {
                 Some(Outcome::Response(response)) => Ok(response),
                 Some(Outcome::Failure(error)) => Err(error),
                 None => Err(TransportError::new(
@@ -483,6 +541,60 @@ mod tests {
             .map(|request| request.url)
             .collect();
         assert_eq!(urls.len(), TASKS);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn counters_observe_each_call_and_its_scripted_answer_atomically() {
+        const TASKS: usize = 64;
+
+        let stub = Arc::new(StubTransport::new());
+        for _ in 0..TASKS {
+            stub.push_json(200, r#"{"event_id":"$ok"}"#);
+        }
+
+        // A monitor on its own OS thread repeatedly snapshots both counters.
+        // Recording a call and consuming its scripted answer share one lock, so
+        // `calls + remaining` must equal the number of pushed outcomes on every
+        // single read — never the half-done state where a call is recorded but
+        // its answer is still queued.
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let monitor = {
+            let stub = Arc::clone(&stub);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let counters = stub.counters();
+                    assert_eq!(
+                        counters.calls + counters.remaining,
+                        TASKS,
+                        "observed a call without its scripted answer consumed"
+                    );
+                }
+            })
+        };
+
+        let mut handles = Vec::with_capacity(TASKS);
+        for task in 0..TASKS {
+            let stub = Arc::clone(&stub);
+            handles.push(tokio::spawn(async move {
+                stub.send(Request::new(
+                    Method::Put,
+                    format!("https://example.org/{task}"),
+                ))
+                .await
+            }));
+        }
+
+        for handle in handles {
+            let response = handle.await.expect("task").expect("scripted success");
+            assert_eq!(response.status(), 200);
+        }
+
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        monitor.join().expect("monitor");
+        let counters = stub.counters();
+        assert_eq!(counters.calls, TASKS);
+        assert_eq!(counters.remaining, 0);
     }
 
     #[test]

@@ -79,7 +79,7 @@ src/matrix_out/mod.rs:use error::{OutboundError,OutboundResult}
 src/matrix_out/mod.rs:use http::{ReqwestTransport,DEFAULT_REQUEST_TIMEOUT}
 src/matrix_out/mod.rs:use ordering::GATE_CAPACITY
 src/matrix_out/mod.rs:use retry::{Operation,RetryPolicy,RetryPolicyError,Verdict,DEFAULT_BASE_DELAY_MS,DEFAULT_MAX_ATTEMPTS,DEFAULT_MAX_DELAY_MS,DEFAULT_MAX_RATE_LIMIT_WAIT_MS,}
-src/matrix_out/mod.rs:use testing::{RecordedRequest,RecordingSleeper,StubTransport}
+src/matrix_out/mod.rs:use testing::{RecordedRequest,RecordingSleeper,StubCounters,StubTransport}
 src/matrix_out/mod.rs:use transport::Transport
 src/matrix_out/mod.rs:use types::{MediaKind,MediaUpload,MxcUri,SendOutcome,TxnId,DEFAULT_MAX_UPLOAD_BYTES,DEFAULT_TYPING_TIMEOUT_MS,MAX_CONTENT_BYTES,MAX_EVENT_TYPE_BYTES,MAX_ID_BYTES,MAX_MXC_URI_BYTES,MAX_TXN_ID_BYTES,}
 src/matrix_out/ordering.rs:const GATE_CAPACITY
@@ -113,6 +113,7 @@ src/matrix_out/testing.rs:impl RecordingSleeper:fn delays
 src/matrix_out/testing.rs:impl RecordingSleeper:fn new
 src/matrix_out/testing.rs:impl RecordingSleeper:fn total
 src/matrix_out/testing.rs:impl StubTransport:fn call_count
+src/matrix_out/testing.rs:impl StubTransport:fn counters
 src/matrix_out/testing.rs:impl StubTransport:fn last_request
 src/matrix_out/testing.rs:impl StubTransport:fn new
 src/matrix_out/testing.rs:impl StubTransport:fn push
@@ -123,6 +124,7 @@ src/matrix_out/testing.rs:impl StubTransport:fn remaining
 src/matrix_out/testing.rs:impl StubTransport:fn requests
 src/matrix_out/testing.rs:struct RecordedRequest
 src/matrix_out/testing.rs:struct RecordingSleeper
+src/matrix_out/testing.rs:struct StubCounters
 src/matrix_out/testing.rs:struct StubTransport
 src/matrix_out/transport.rs:enum Body
 src/matrix_out/transport.rs:enum Method
