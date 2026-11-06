@@ -527,6 +527,11 @@ pub(crate) fn validate_event_id(event_id: &str) -> Result<(), OutboundError> {
             reason: "the event id is empty".to_owned(),
         });
     }
+    if !event_id.starts_with('$') {
+        return Err(OutboundError::InvalidRequest {
+            reason: format!("Matrix event ids start with `$`, got {event_id:?}"),
+        });
+    }
     validate_id_value("event id", event_id)
 }
 
@@ -739,7 +744,12 @@ mod tests {
 
         assert!(validate_event_id("$abc").is_ok());
         assert!(validate_event_id("").is_err());
+        assert!(validate_event_id("!room:example.org").is_err());
+        assert!(validate_event_id("https://example.org/x").is_err());
         assert!(validate_event_id("$a\nb").is_err());
+        let max_event_id = format!("${}", "a".repeat(MAX_ID_BYTES - 1));
+        assert!(validate_event_id(&max_event_id).is_ok());
+        assert!(validate_event_id(&format!("{max_event_id}a")).is_err());
 
         assert!(validate_event_type("m.room.message").is_ok());
         assert!(validate_event_type("com.example.custom").is_ok());
