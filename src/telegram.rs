@@ -28,7 +28,7 @@ use crate::id;
 use crate::json;
 use crate::model::ProviderPayload;
 use crate::model::{Attachment, AttachmentKind, Channel, NormalizedMessage, Reaction};
-use crate::rich::{utf16_to_byte_range, TextFormat, TextSpan};
+use crate::rich::{utf16_to_byte_ranges, TextFormat, TextSpan};
 use crate::secret::Secret;
 use crate::{check_body, json_payload, recipient, utf16_len, Adapter};
 
@@ -435,7 +435,7 @@ fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
 ///
 /// `entities` describes `text`, `caption_entities` describes `caption`; the
 /// offsets are UTF-16 code units, so they go through
-/// [`utf16_to_byte_range`](crate::rich::utf16_to_byte_range) before a span is
+/// [`utf16_to_byte_ranges`](crate::rich::utf16_to_byte_ranges) before a span is
 /// built. An entity whose range cannot be expressed in bytes — a boundary
 /// inside a surrogate pair, an offset past the end — is dropped: the plain text
 /// is still complete, and inventing a run would mark text the provider did not
@@ -449,19 +449,27 @@ fn spans(message: &Value) -> Vec<TextSpan> {
         (None, Some(caption)) => (caption, "caption_entities"),
         (None, None) => return Vec::new(),
     };
-    json::array(message, field)
+    let entities = json::array(message, field);
+    let ranges = utf16_to_byte_ranges(text, entities.iter().map(entity_range));
+    entities
         .iter()
-        .filter_map(|entity| one_span(text, entity))
+        .zip(ranges)
+        .filter_map(|(entity, range)| one_span(text, entity, range?))
         .collect()
 }
 
 /// Maps one `MessageEntity` object onto a span of `text`.
-fn one_span(text: &str, entity: &Value) -> Option<TextSpan> {
+fn one_span(text: &str, entity: &Value, (start, end): (usize, usize)) -> Option<TextSpan> {
     let kind = json::string(entity, "type")?;
-    let offset = json::unsigned(entity, "offset")?;
-    let length = json::unsigned(entity, "length")?;
-    let (start, end) = utf16_to_byte_range(text, offset, length)?;
     TextSpan::new(text, start, end, format_of(kind, entity)).ok()
+}
+
+/// Reads the UTF-16 range Telegram put on one entity.
+fn entity_range(entity: &Value) -> Option<(u64, u64)> {
+    Some((
+        json::unsigned(entity, "offset")?,
+        json::unsigned(entity, "length")?,
+    ))
 }
 
 /// Maps a Telegram `MessageEntity.type` onto a [`TextFormat`].

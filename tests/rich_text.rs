@@ -260,6 +260,30 @@ fn entities_in_provider_order_and_overlapping_stay_untouched() {
     );
 }
 
+#[cfg(feature = "telegram")]
+#[test]
+fn many_entities_are_converted_in_provider_order_and_bad_ranges_do_not_shift() {
+    let message = with_entities(
+        "a😀bc",
+        &json!([
+            { "type": "bold", "offset": 1, "length": 2 },
+            { "type": "italic", "offset": 2, "length": 1 },
+            { "type": "underline", "offset": 3, "length": 2 },
+            { "type": "code", "offset": 0, "length": 99 },
+            { "type": "spoiler", "offset": 3, "length": 1 },
+        ]),
+    );
+
+    assert_eq!(
+        message
+            .spans
+            .iter()
+            .map(|span| (span.start, span.end, span.format.as_str()))
+            .collect::<Vec<_>>(),
+        [(1, 5, "bold"), (5, 7, "underline"), (5, 6, "spoiler")]
+    );
+}
+
 /// An adapter that carries neither markup nor a payload for one sends no spans.
 #[test]
 fn adapters_that_send_no_entities_produce_no_spans() {
