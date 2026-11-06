@@ -12,7 +12,7 @@ use std::time::Duration;
 use messenger_webhook::matrix_out::transport::{
     BoxFuture, Request, Response, Transport, TransportError,
 };
-use messenger_webhook::matrix_out::{ClientConfig, MatrixClient, StubTransport};
+use messenger_webhook::matrix_out::{ClientConfig, MatrixClient, Sleeper, StubTransport};
 
 /// Tasks per test. Well above the core count, so any shared-state bug shows.
 const TASKS: usize = 32;
@@ -122,6 +122,78 @@ impl Transport for SlowTransport {
             }
             self.live_total.fetch_sub(1, Ordering::SeqCst);
             Ok(Response::json(200, r#"{"event_id":"$ok"}"#))
+        })
+    }
+}
+
+/// A transport that rate-limits the first call for each transaction id, then
+/// accepts that same transaction.
+#[derive(Debug, Default)]
+struct RetryOnceTransport {
+    seen: Mutex<HashMap<String, u32>>,
+    calls: AtomicU32,
+}
+
+impl RetryOnceTransport {
+    fn call_count(&self) -> u32 {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl Transport for RetryOnceTransport {
+    fn send<'a>(&'a self, request: Request<'a>) -> BoxFuture<'a, Result<Response, TransportError>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let txn = request
+                .url()
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            let mut seen = self.seen.lock().expect("seen map");
+            let attempts = seen.entry(txn).or_insert(0);
+            *attempts += 1;
+            if *attempts == 1 {
+                Ok(Response::json(
+                    429,
+                    r#"{"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":1}"#,
+                ))
+            } else {
+                Ok(Response::json(200, r#"{"event_id":"$ok"}"#))
+            }
+        })
+    }
+}
+
+/// A sleeper that blocks the first retry until the test releases it.
+#[derive(Debug)]
+struct BlockingSleeper {
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+impl BlockingSleeper {
+    fn new() -> Self {
+        Self {
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        }
+    }
+
+    async fn wait_started(&self) {
+        self.started.notified().await;
+    }
+
+    fn release(&self) {
+        self.release.notify_one();
+    }
+}
+
+impl Sleeper for BlockingSleeper {
+    fn sleep(&self, _delay: Duration) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.started.notify_one();
+            self.release.notified().await;
         })
     }
 }
@@ -272,14 +344,9 @@ async fn ordering_off_admits_concurrent_sends_into_one_room() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retries_do_not_hold_a_room_gate_across_tasks() {
-    let transport = Arc::new(StubTransport::new());
+    let transport = Arc::new(RetryOnceTransport::default());
     // Every send is rate-limited once, so every send sleeps and retries.
-    for _ in 0..TASKS {
-        transport
-            .push_json(429, r#"{"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":1}"#)
-            .push_json(200, r#"{"event_id":"$ok"}"#);
-    }
-    let client = Arc::new(client(transport.clone()));
+    let client = Arc::new(client(Arc::clone(&transport) as Arc<dyn Transport>));
 
     let mut handles = Vec::with_capacity(TASKS);
     for _ in 0..TASKS {
@@ -297,7 +364,63 @@ async fn retries_do_not_hold_a_room_gate_across_tasks() {
         attempts,
         u32::try_from(TASKS).expect("TASKS fits in u32") * 2
     );
-    assert_eq!(transport.call_count(), TASKS * 2);
+    assert_eq!(
+        transport.call_count(),
+        u32::try_from(TASKS).expect("TASKS fits in u32") * 2
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retry_sleep_does_not_hold_the_room_gate() {
+    let transport = Arc::new(StubTransport::new());
+    transport
+        .push_json(
+            429,
+            r#"{"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":1000}"#,
+        )
+        .push_json(200, r#"{"event_id":"$first"}"#)
+        .push_json(200, r#"{"event_id":"$second"}"#);
+    let sleeper = Arc::new(BlockingSleeper::new());
+    let client = Arc::new(
+        MatrixClient::new(
+            transport.clone(),
+            ClientConfig::new("https://m.example")
+                .expect("valid")
+                .with_sleeper(sleeper.clone()),
+            "syt",
+        )
+        .expect("valid client"),
+    );
+
+    let first_client = Arc::clone(&client);
+    let first =
+        tokio::spawn(async move { first_client.send_text("!busy:m.example", "first").await });
+    sleeper.wait_started().await;
+
+    let second = tokio::time::timeout(
+        Duration::from_millis(200),
+        client.send_text("!busy:m.example", "second"),
+    )
+    .await;
+
+    sleeper.release();
+    let first = first
+        .await
+        .expect("no task panicked")
+        .expect("the first send eventually succeeds");
+    let second = second
+        .expect("the second send must not wait for the first retry sleep")
+        .expect("second send");
+
+    assert_eq!(first.attempts, 2);
+    assert_eq!(second.attempts, 1);
+    assert_eq!(
+        [first.event_id.as_str(), second.event_id.as_str()]
+            .into_iter()
+            .collect::<HashSet<_>>(),
+        HashSet::from(["$first", "$second"])
+    );
+    assert_eq!(transport.call_count(), 3);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
