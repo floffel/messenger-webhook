@@ -340,7 +340,11 @@ fn a_connection_that_never_opened_is_retryable_not_ambiguous() {
 
     assert!(matches!(
         error,
-        OutboundError::Transport { attempts: 2, .. }
+        OutboundError::Transport {
+            kind: TransportErrorKind::Connect,
+            attempts: 2,
+            ..
+        }
     ));
     assert!(error.is_retryable());
     assert!(!error.is_ambiguous());
@@ -367,6 +371,56 @@ fn a_read_timeout_on_a_send_is_retried_and_then_ambiguous() {
     let delays = harness.sleeper.delays();
     assert_eq!(delays.len(), 1);
     assert_in_jitter_window(RetryPolicy::default(), delays[0]);
+}
+
+#[test]
+fn a_read_timeout_on_a_get_stays_transport_but_is_ambiguous_not_retryable() {
+    let harness = harness(|config| {
+        config.with_retry(RetryPolicy::default().with_max_attempts(2).expect("valid"))
+    });
+    harness
+        .transport
+        .push_failure(TransportError::timeout("30s"))
+        .push_failure(TransportError::timeout("30s"));
+
+    let error = block_on(harness.client.whoami()).expect_err("timeout");
+
+    assert!(matches!(
+        error,
+        OutboundError::Transport {
+            kind: TransportErrorKind::Timeout,
+            attempts: 2,
+            ..
+        }
+    ));
+    assert!(!error.is_retryable(), "{error:?}");
+    assert!(error.is_ambiguous(), "{error:?}");
+    assert_eq!(harness.transport.call_count(), 2);
+}
+
+#[test]
+fn a_mid_flight_reset_on_a_get_stays_transport_but_is_ambiguous_not_retryable() {
+    let harness = harness(|config| {
+        config.with_retry(RetryPolicy::default().with_max_attempts(2).expect("valid"))
+    });
+    harness
+        .transport
+        .push_failure(TransportError::other("connection reset"))
+        .push_failure(TransportError::other("connection reset"));
+
+    let error = block_on(harness.client.whoami()).expect_err("reset");
+
+    assert!(matches!(
+        error,
+        OutboundError::Transport {
+            kind: TransportErrorKind::Other,
+            attempts: 2,
+            ..
+        }
+    ));
+    assert!(!error.is_retryable(), "{error:?}");
+    assert!(error.is_ambiguous(), "{error:?}");
+    assert_eq!(harness.transport.call_count(), 2);
 }
 
 #[test]

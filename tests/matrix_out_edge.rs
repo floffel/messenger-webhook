@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use messenger_webhook::matrix_out::transport::{Response, TransportError};
+use messenger_webhook::matrix_out::transport::{Response, TransportError, TransportErrorKind};
 use messenger_webhook::matrix_out::{
     ClientConfig, MatrixClient, MediaKind, MediaSendError, MediaUpload, MxcUri, OutboundError,
     RecordingSleeper, RetryPolicy, RetryPolicyError, StubTransport, TxnId, MAX_CONTENT_BYTES,
@@ -535,7 +535,11 @@ fn a_connect_failure_on_a_read_exhausts_into_a_retryable_transport_error() {
     let error = block_on(client.whoami()).expect_err("dns");
     assert!(matches!(
         error,
-        OutboundError::Transport { attempts: 2, .. }
+        OutboundError::Transport {
+            kind: TransportErrorKind::Connect,
+            attempts: 2,
+            ..
+        }
     ));
     assert!(error.is_retryable());
 }

@@ -1782,7 +1782,11 @@ fn transport_failure(
     if error.kind.is_before_write()
         || matches!(operation, Operation::Read | Operation::StateSetting)
     {
-        return OutboundError::Transport { attempts, reason };
+        return OutboundError::Transport {
+            kind: error.kind,
+            attempts,
+            reason,
+        };
     }
     OutboundError::Ambiguous {
         txn_id: txn.cloned(),

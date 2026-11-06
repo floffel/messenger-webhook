@@ -22,6 +22,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::matrix_out::retry::Operation;
+use crate::matrix_out::transport::TransportErrorKind;
 use crate::matrix_out::types::{MxcUri, TxnId};
 
 /// Everything the outbound client can fail with.
@@ -188,11 +189,28 @@ pub enum OutboundError {
         reason: String,
     },
 
-    /// No HTTP response was produced on any attempt. Only returned when nothing
-    /// could have been applied (a connection that was never established), so it
-    /// is retryable even for a non-idempotent request.
+    /// No HTTP response was produced on any attempt. The carried
+    /// [`TransportErrorKind`] says whether the request provably never left the
+    /// process; a post-write timeout or reset is kept as different data instead
+    /// of being collapsed into the reason string.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::transport::TransportErrorKind;
+    /// use messenger_webhook::matrix_out::OutboundError;
+    ///
+    /// let error = OutboundError::Transport {
+    ///     kind: TransportErrorKind::Connect,
+    ///     attempts: 2,
+    ///     reason: "dns".into(),
+    /// };
+    ///
+    /// assert!(error.is_retryable());
+    /// assert_eq!(error.to_string(), "the transport failed for all 2 attempts: dns");
+    /// ```
     #[error("the transport failed for all {attempts} attempts: {reason}")]
     Transport {
+        /// Where the transport failed relative to the write boundary.
+        kind: TransportErrorKind,
         /// How many attempts were made.
         attempts: u32,
         /// The transport's own message from the last attempt.
@@ -249,16 +267,17 @@ fn txn_id_suffix(txn_id: Option<&TxnId>) -> String {
 impl OutboundError {
     /// Whether the same request could succeed if it were retried unchanged.
     ///
-    /// `true` for [`OutboundError::RateLimited`], [`OutboundError::Transport`],
+    /// `true` for [`OutboundError::RateLimited`], for a
+    /// [`OutboundError::Transport`] whose kind is before-write,
     /// [`OutboundError::GateOverflow`], [`OutboundError::GateTimeout`] and
-    /// [`OutboundError::OrderingLost`], and [`OutboundError::Server`] only when
-    /// the server error belongs to a repeatable operation with no transaction
-    /// id. `false` for an ambiguous write: retrying it blindly is how a message
-    /// gets posted twice.
+    /// [`OutboundError::OrderingLost`], and for [`OutboundError::Server`] only
+    /// when the server error belongs to a repeatable operation with no
+    /// transaction id. `false` for an ambiguous write: retrying it blindly is
+    /// how a message gets posted twice.
     ///
     /// ```
     /// use std::time::Duration;
-    /// use messenger_webhook::matrix_out::{Operation, OutboundError};
+    /// use messenger_webhook::matrix_out::{transport::TransportErrorKind, Operation, OutboundError};
     ///
     /// let limited = OutboundError::RateLimited {
     ///     retry_after: Some(Duration::from_secs(1)),
@@ -267,6 +286,21 @@ impl OutboundError {
     /// };
     /// assert!(limited.is_retryable());
     /// assert!(!limited.is_ambiguous());
+    ///
+    /// let connect = OutboundError::Transport {
+    ///     kind: TransportErrorKind::Connect,
+    ///     attempts: 2,
+    ///     reason: "dns".into(),
+    /// };
+    /// assert!(connect.is_retryable());
+    ///
+    /// let timeout = OutboundError::Transport {
+    ///     kind: TransportErrorKind::Timeout,
+    ///     attempts: 2,
+    ///     reason: "read timeout".into(),
+    /// };
+    /// assert!(!timeout.is_retryable());
+    /// assert!(timeout.is_ambiguous());
     ///
     /// let server = OutboundError::Server {
     ///     operation: Operation::Read,
@@ -303,8 +337,8 @@ impl OutboundError {
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
         match self {
+            Self::Transport { kind, .. } => kind.is_before_write(),
             Self::RateLimited { .. }
-            | Self::Transport { .. }
             | Self::GateOverflow { .. }
             | Self::GateTimeout { .. }
             | Self::OrderingLost { .. } => true,
@@ -319,8 +353,11 @@ impl OutboundError {
     ///
     /// [`OutboundError::Ambiguous`], [`OutboundError::DecodeAfterWrite`] and
     /// [`OutboundError::Server`] are ambiguous when their carried operation or
-    /// transaction id says the request may have been applied. A caller must not
-    /// treat them as plain failures: the message may be in the room already.
+    /// transaction id says the request may have been applied. A
+    /// [`OutboundError::Transport`] is ambiguous when its kind is not
+    /// before-write, because no response arrived after the request may have been
+    /// written. A caller must not treat those as plain failures: the message may
+    /// be in the room already.
     ///
     /// ```
     /// use messenger_webhook::matrix_out::{OutboundError, TxnId};
@@ -346,6 +383,7 @@ impl OutboundError {
     pub const fn is_ambiguous(&self) -> bool {
         match self {
             Self::Ambiguous { .. } | Self::DecodeAfterWrite { .. } => true,
+            Self::Transport { kind, .. } => !kind.is_before_write(),
             Self::Server {
                 operation, txn_id, ..
             } => txn_id.is_some() || !operation.is_repeatable_with(txn_id.as_ref()),
@@ -391,6 +429,7 @@ impl OutboundError {
     /// until the argument changes.
     ///
     /// ```
+    /// use messenger_webhook::matrix_out::transport::TransportErrorKind;
     /// use messenger_webhook::matrix_out::OutboundError;
     ///
     /// assert!(OutboundError::InvalidRequest { reason: "x".into() }.is_client_error());
@@ -400,7 +439,7 @@ impl OutboundError {
     ///     message: "not in room".into(),
     /// }
     /// .is_client_error());
-    /// assert!(!OutboundError::Transport { attempts: 1, reason: "dns".into() }.is_client_error());
+    /// assert!(!OutboundError::Transport { kind: TransportErrorKind::Connect, attempts: 1, reason: "dns".into() }.is_client_error());
     /// ```
     #[must_use]
     pub const fn is_client_error(&self) -> bool {
@@ -493,10 +532,15 @@ impl MediaSendError {
     /// Whether the failed leg could succeed if it were retried unchanged.
     ///
     /// ```
+    /// use messenger_webhook::matrix_out::transport::TransportErrorKind;
     /// use messenger_webhook::matrix_out::{MediaSendError, OutboundError};
     ///
     /// let error = MediaSendError::Upload {
-    ///     source: Box::new(OutboundError::Transport { attempts: 1, reason: "dns".into() }),
+    ///     source: Box::new(OutboundError::Transport {
+    ///         kind: TransportErrorKind::Connect,
+    ///         attempts: 1,
+    ///         reason: "dns".into(),
+    ///     }),
     /// };
     /// assert!(error.is_retryable());
     /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
@@ -582,9 +626,14 @@ impl MediaSendError {
     /// The [`OutboundError`] from the leg that failed.
     ///
     /// ```
+    /// use messenger_webhook::matrix_out::transport::TransportErrorKind;
     /// use messenger_webhook::matrix_out::{MediaSendError, OutboundError};
     ///
-    /// let source = OutboundError::Transport { attempts: 1, reason: "dns".into() };
+    /// let source = OutboundError::Transport {
+    ///     kind: TransportErrorKind::Connect,
+    ///     attempts: 1,
+    ///     reason: "dns".into(),
+    /// };
     /// let error = MediaSendError::Upload { source: Box::new(source.clone()) };
     /// assert_eq!(error.outbound_error(), &source);
     /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
@@ -742,12 +791,49 @@ mod tests {
         }
     }
 
+    fn transport_and_ordering_cases() -> Vec<(OutboundError, bool, bool, bool, String)> {
+        vec![
+            (
+                OutboundError::Transport {
+                    kind: TransportErrorKind::Connect,
+                    attempts: 2,
+                    reason: "dns".into(),
+                },
+                true,
+                false,
+                false,
+                "the transport failed for all 2 attempts: dns".into(),
+            ),
+            (
+                OutboundError::Transport {
+                    kind: TransportErrorKind::Timeout,
+                    attempts: 2,
+                    reason: "read timeout".into(),
+                },
+                false,
+                true,
+                false,
+                "the transport failed for all 2 attempts: read timeout".into(),
+            ),
+            (
+                OutboundError::OrderingLost {
+                    room_id: "!busy:m.example".into(),
+                    capacity: 2,
+                },
+                true,
+                false,
+                false,
+                "per-room ordering is saturated at 2 active rooms; refusing unordered send to !busy:m.example".into(),
+            ),
+        ]
+    }
+
     /// The non-rejected delivery variants: what the homeserver or the network
     /// did after the request had already been formed.
     #[test]
     fn every_non_rejected_delivery_variant_reports_its_classification() {
         let txn = TxnId::new("t1").expect("valid txn");
-        let cases: Vec<(OutboundError, bool, bool, bool, String)> = vec![
+        let mut cases: Vec<(OutboundError, bool, bool, bool, String)> = vec![
             (
                 OutboundError::RateLimited {
                     retry_after: Some(Duration::from_millis(1500)),
@@ -810,27 +896,8 @@ mod tests {
                 false,
                 "the write may or may not have been applied after 1 attempts: read timeout".into(),
             ),
-            (
-                OutboundError::Transport {
-                    attempts: 2,
-                    reason: "dns".into(),
-                },
-                true,
-                false,
-                false,
-                "the transport failed for all 2 attempts: dns".into(),
-            ),
-            (
-                OutboundError::OrderingLost {
-                    room_id: "!busy:m.example".into(),
-                    capacity: 2,
-                },
-                true,
-                false,
-                false,
-                "per-room ordering is saturated at 2 active rooms; refusing unordered send to !busy:m.example".into(),
-            ),
         ];
+        cases.extend(transport_and_ordering_cases());
 
         for (error, retryable, ambiguous, client_error, text) in cases {
             assert_eq!(error.is_retryable(), retryable, "{error:?}");
@@ -916,6 +983,7 @@ mod tests {
         );
         assert_eq!(
             OutboundError::Transport {
+                kind: TransportErrorKind::Connect,
                 attempts: 1,
                 reason: "dns".into()
             }
@@ -1012,13 +1080,18 @@ mod tests {
                 client_error: true,
             },
             OutboundError::RateLimited { .. }
-            | OutboundError::Transport { .. }
             | OutboundError::GateOverflow { .. }
             | OutboundError::GateTimeout { .. }
             | OutboundError::OrderingLost { .. } => ExpectedClassification {
                 classification: Retryable,
                 client_error: false,
             },
+            OutboundError::Transport { kind, .. } if kind.is_before_write() => {
+                ExpectedClassification {
+                    classification: Retryable,
+                    client_error: false,
+                }
+            }
             OutboundError::Server {
                 operation, txn_id, ..
             } if txn_id.is_none() && operation.is_repeatable_with(txn_id.as_ref()) => {
@@ -1027,7 +1100,8 @@ mod tests {
                     client_error: false,
                 }
             }
-            OutboundError::Server { .. }
+            OutboundError::Transport { .. }
+            | OutboundError::Server { .. }
             | OutboundError::Ambiguous { .. }
             | OutboundError::DecodeAfterWrite { .. } => ExpectedClassification {
                 classification: Ambiguous,
@@ -1097,6 +1171,7 @@ mod tests {
                 reason: "x".into(),
             },
             OutboundError::Transport {
+                kind: TransportErrorKind::Connect,
                 attempts: 1,
                 reason: "x".into(),
             },

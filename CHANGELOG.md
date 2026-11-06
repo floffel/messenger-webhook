@@ -37,6 +37,7 @@ carry a `!` in the conventional-commit subject.
   only that leg, so a retry after an ambiguous media event no longer re-uploads
   the bytes or mints a second message. Closes #60.
 - `OutboundError::DecodeAfterWrite` now marks a `2xx` whose write response body cannot be decoded as ambiguous and carries the transaction id when there is one; unreadable read responses remain terminal `DecodeRead`. Closes #48.
+- `OutboundError::Transport` now carries the `TransportErrorKind` that produced it, so a read timeout or mid-flight reset is reported as ambiguous rather than as a provably unapplied retry. Closes #50.
 
 ### Changed
 
