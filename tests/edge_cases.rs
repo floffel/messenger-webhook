@@ -685,6 +685,41 @@ mod telegram_edges {
     }
 
     #[test]
+    fn photo_dimensions_stop_at_u32_before_choosing_the_largest() {
+        let payload = format!(
+            r#"{{"message":{{"message_id":1,"chat":{{"id":2}},"photo":[
+              {{"file_id":"small","width":90,"height":90}},
+              {{"file_id":"at-limit","width":{},"height":1}},
+              {{"file_id":"over-limit","width":{},"height":1}}
+            ]}}}}"#,
+            u32::MAX,
+            u64::from(u32::MAX) + 1
+        );
+        let events = telegram().adapt(payload.as_bytes()).unwrap();
+        let attachment = &events[0].attachments[0];
+        assert_eq!(attachment.id.as_deref(), Some("at-limit"));
+        assert_eq!(attachment.width, Some(u32::MAX));
+        assert_eq!(attachment.height, Some(1));
+    }
+
+    #[test]
+    fn crafted_photo_dimensions_do_not_overflow_when_skipped() {
+        let payload = format!(
+            r#"{{"message":{{"message_id":1,"chat":{{"id":2}},"photo":[
+              {{"file_id":"valid","width":1280,"height":1280}},
+              {{"file_id":"overflow","width":{},"height":{} }}
+            ]}}}}"#,
+            1u64 << 63,
+            1u64 << 63
+        );
+        let events = telegram().adapt(payload.as_bytes()).unwrap();
+        let attachment = &events[0].attachments[0];
+        assert_eq!(attachment.id.as_deref(), Some("valid"));
+        assert_eq!(attachment.width, Some(1280));
+        assert_eq!(attachment.height, Some(1280));
+    }
+
+    #[test]
     fn reaction_removal_keeps_an_empty_emoji() {
         let removed = br#"{"message_reaction":{"chat":{"id":1},"message_id":9,
             "user":{"id":2},"date":1,"old_reaction":[{"type":"emoji","emoji":"\ud83d\udc4d"}],"new_reaction":[]}}"#;
