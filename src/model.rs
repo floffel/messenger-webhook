@@ -829,6 +829,12 @@ pub struct NormalizedMessage {
     pub reaction: Option<Reaction>,
     /// Delivery state carried by this event.
     pub status: Option<DeliveryStatus>,
+    /// External id of the message [`Self::status`] refers to, when it is not
+    /// the same as [`Self::external_id`].
+    ///
+    /// Matrix `m.receipt` events carry the receipt event's own `event_id` in
+    /// [`Self::external_id`] and name the message that was read here.
+    pub status_for: Option<String>,
     /// Formatted runs inside [`Self::text`], in provider order.
     ///
     /// Offsets are UTF-8 byte offsets into `text`, so `text[start..end]` is the
@@ -864,6 +870,7 @@ impl NormalizedMessage {
             edit_of: None,
             reaction: None,
             status: None,
+            status_for: None,
             spans: Vec::new(),
             provider_type: None,
             raw: None,

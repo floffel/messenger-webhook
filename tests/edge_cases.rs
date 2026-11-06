@@ -916,9 +916,15 @@ mod matrix_edges {
           "content":{"$msg1":{"m.read":{"@b:s":{"ts":1729600000000}}},
                      "$msg2":{"m.read":{"@c:s":{"ts":1729600001000}}}}}"#;
         let events = matrix().adapt(payload).unwrap();
-        assert_eq!(events.len(), 1);
-        assert!(events[0].is_status_update());
-        assert_eq!(events[0].external_id, "$msg1");
+        assert_eq!(events.len(), 2);
+        assert!(events
+            .iter()
+            .all(messenger_webhook::NormalizedMessage::is_status_update));
+        assert!(events.iter().all(|event| event.external_id == "$r"));
+        assert_eq!(events[0].status_for.as_deref(), Some("$msg1"));
+        assert_eq!(events[0].sender_id, "@b:s");
+        assert_eq!(events[1].status_for.as_deref(), Some("$msg2"));
+        assert_eq!(events[1].sender_id, "@c:s");
     }
 
     #[test]

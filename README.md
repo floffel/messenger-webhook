@@ -236,6 +236,9 @@ timestamp plus:
   carry the complete change from providers that report a before/after state,
   such as Telegram's `message_reaction` update
 - `status` — `DeliveryStatus` (sent, delivered, read, failed, deleted, unknown)
+- `status_for` — the message id a status event refers to, when it differs from
+  `external_id` (Matrix `m.receipt` events keep the receipt event id while
+  naming the read message here)
 - `spans` — the provider's formatting as `TextSpan`s over `text` (see below)
 - `provider_type` — the provider's own event name, verbatim
 - `raw` — the provider object, verbatim

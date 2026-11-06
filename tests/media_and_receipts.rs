@@ -531,6 +531,9 @@ mod matrix {
                      "content":{"$m":{"m.fully_read":{"@b:s":{"ts":1}}}}}"#,
             )
             .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].external_id, "$1");
+        assert_eq!(events[0].status_for.as_deref(), Some("$m"));
         assert_eq!(
             events[0]
                 .status
@@ -543,6 +546,9 @@ mod matrix {
         let events = adapter()
             .adapt(br#"{"type":"m.receipt","event_id":"$1","room_id":"!r:s","content":{"$m":{}}}"#)
             .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].external_id, "$1");
+        assert_eq!(events[0].status_for.as_deref(), Some("$m"));
         assert_eq!(
             events[0]
                 .status
@@ -557,12 +563,50 @@ mod matrix {
                 br#"{"type":"m.receipt","event_id":"$1","room_id":"!r:s","content":{"$m":"garbage"}}"#,
             )
             .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].external_id, "$1");
+        assert_eq!(events[0].status_for.as_deref(), Some("$m"));
         assert_eq!(
             events[0]
                 .status
                 .as_ref()
                 .map(messenger_webhook::DeliveryStatus::as_str),
             Some("unknown")
+        );
+    }
+
+    #[test]
+    fn receipts_keep_their_event_id_and_expand_per_referenced_message() {
+        let payload =
+            br#"{"type":"m.receipt","event_id":"$receipt","room_id":"!r:s","sender":"@a:s",
+          "content":{"$b":{"m.read":{"@z:s":{"ts":3},"@a:s":{"ts":1}}},
+                     "$a":{"m.read":{"@c:s":{"ts":2}}},
+                     "$c":{"m.fully_read":{"@d:s":{"ts":4}}}}}"#;
+        let events = adapter().adapt(payload).unwrap();
+
+        assert_eq!(events.len(), 4);
+        assert!(events.iter().all(|event| event.external_id == "$receipt"));
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.status_for.as_deref().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            ["$a", "$b", "$b", "$c"]
+        );
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.sender_id.as_str())
+                .collect::<Vec<_>>(),
+            ["@c:s", "@a:s", "@z:s", "@d:s"]
+        );
+        assert_eq!(events[0].status, Some(DeliveryStatus::Read));
+        assert_eq!(
+            events[3]
+                .status
+                .as_ref()
+                .map(messenger_webhook::DeliveryStatus::as_str),
+            Some("m.fully_read")
         );
     }
 
