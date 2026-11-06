@@ -234,4 +234,68 @@ mod tests {
         assert!(!secret.ct_eq(b"ab"));
         assert!(!secret.ct_eq(b""));
     }
+
+    #[test]
+    fn verify_meta_classifies_malformed_headers_and_bad_signatures() {
+        let secret = Secret::new("app-secret");
+        let malformed_prefix = "expected sha256=<64 hex digits>".to_owned();
+        let malformed_digest = "signature digest is not 64 hex digits".to_owned();
+        let cases = [
+            (
+                "empty header",
+                String::new(),
+                Some(malformed_prefix.clone()),
+            ),
+            (
+                "missing prefix",
+                "a".repeat(64),
+                Some(malformed_prefix.clone()),
+            ),
+            (
+                "empty digest",
+                "sha256=".to_owned(),
+                Some(malformed_digest.clone()),
+            ),
+            (
+                "63 hex digits",
+                format!("sha256={}", "a".repeat(63)),
+                Some(malformed_digest.clone()),
+            ),
+            ("64 hex digits", format!("sha256={}", "a".repeat(64)), None),
+            (
+                "65 hex digits",
+                format!("sha256={}", "a".repeat(65)),
+                Some(malformed_digest.clone()),
+            ),
+            (
+                "wrong algorithm case",
+                format!("SHA256={}", "a".repeat(64)),
+                Some(malformed_prefix),
+            ),
+            (
+                "doubled prefix",
+                format!("sha256=sha256={}", "a".repeat(64)),
+                Some(malformed_digest),
+            ),
+        ];
+
+        let malformed_reason = |header: &str| match verify_meta(&secret, header, b"{}") {
+            Err(Error::MalformedVerificationHeader { channel, reason }) => Some((channel, reason)),
+            _ => None,
+        };
+
+        for (label, header, expected_reason) in cases {
+            let expected = expected_reason.map(|reason| (Channel::WhatsApp, reason));
+            assert_eq!(malformed_reason(&header), expected, "{label}");
+        }
+
+        let valid_for_other_body =
+            "sha256=5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843";
+        assert!(matches!(
+            verify_meta(&secret, valid_for_other_body, b"{}"),
+            Err(Error::BadSignature {
+                channel: Channel::WhatsApp
+            })
+        ));
+    }
 }
