@@ -473,7 +473,7 @@ enum CallKind<'a> {
         room_id: &'a str,
         event_id: &'a str,
         txn: &'a TxnId,
-        reason: Option<&'a str>,
+        content: Vec<u8>,
     },
     /// The typing marker.
     Typing {
@@ -865,8 +865,9 @@ impl MatrixClient {
     ///
     /// # Errors
     ///
-    /// [`OutboundError::InvalidRequest`] for an unusable room or event id, plus
-    /// every delivery error. A reason over the event ceiling is reported as
+    /// [`OutboundError::InvalidRequest`] for an unusable room or event id, or a
+    /// reason containing a control character, plus every delivery error. A
+    /// reason over the event ceiling is reported as
     /// [`OutboundError::MessageTooLong`].
     ///
     /// ```
@@ -897,13 +898,25 @@ impl MatrixClient {
     ) -> OutboundResult<SendOutcome> {
         types::validate_room_id(room_id)?;
         types::validate_event_id(event_id)?;
+        if let Some(reason) = reason {
+            if reason.chars().any(char::is_control) {
+                return Err(OutboundError::InvalidRequest {
+                    reason: "the redaction reason contains a control character".to_owned(),
+                });
+            }
+        }
+        let content = match reason {
+            Some(reason) => json!({ "reason": reason }),
+            None => json!({}),
+        };
+        let content = check_content(&content)?;
         let txn_id = TxnId::generate();
         let call = Call {
             kind: CallKind::Redact {
                 room_id,
                 event_id,
                 txn: &txn_id,
-                reason,
+                content,
             },
         };
         let attempted = self
@@ -1266,7 +1279,7 @@ impl MatrixClient {
                 room_id,
                 event_id,
                 txn,
-                reason,
+                content,
             } => {
                 let url = format!(
                     "{base}/_matrix/client/v3/rooms/{}/redact/{}/{}",
@@ -1274,13 +1287,9 @@ impl MatrixClient {
                     encode_path_segment(event_id),
                     encode_path_segment(txn.as_str()),
                 );
-                let mut body = serde_json::Map::new();
-                if let Some(reason) = reason {
-                    body.insert("reason".to_owned(), Value::String((*reason).to_owned()));
-                }
                 self.authorized(Method::Put, url)
                     .with_header("content-type", "application/json")
-                    .with_body(Body::Json(json_bytes(&Value::Object(body))))
+                    .with_body(Body::Json(content.clone()))
             }
             CallKind::Typing {
                 room_id,
