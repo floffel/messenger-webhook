@@ -15,8 +15,8 @@ use messenger_webhook::matrix_out::transport::{
     Method, Response, TransportError, TransportErrorKind,
 };
 use messenger_webhook::matrix_out::{
-    ClientConfig, MatrixClient, MediaKind, MediaUpload, Operation, OutboundError, RecordingSleeper,
-    RetryPolicy, StubTransport, TxnId,
+    ClientConfig, MatrixClient, MediaKind, MediaSendError, MediaUpload, MxcUri, Operation,
+    OutboundError, RecordingSleeper, RetryPolicy, StubTransport, TxnId,
 };
 
 /// A client wired to a stub and a recording sleeper, plus both handles.
@@ -838,6 +838,110 @@ fn an_ambiguous_upload_stops_send_media_before_the_message() {
 
     assert!(error.is_ambiguous());
     assert_eq!(harness.transport.call_count(), 1, "nothing was sent");
+}
+
+#[test]
+fn send_media_with_txn_uses_the_callers_transaction_id_and_returns_the_upload_uri() {
+    let harness = harness(|config| config);
+    harness
+        .transport
+        .push_json(200, r#"{"content_uri":"mxc://example.org/media"}"#)
+        .push_json(200, r#"{"event_id":"$img"}"#);
+
+    let txn = TxnId::new("media-42").expect("valid");
+    let upload = MediaUpload::new(b"png!", "image/png")
+        .with_filename("cat.png")
+        .with_kind(MediaKind::Image);
+    let outcome = block_on(harness.client.send_media_with_txn(
+        txn.clone(),
+        "!r:example.org",
+        &upload,
+        Some("cat"),
+    ))
+    .expect("sent");
+
+    assert_eq!(outcome.content_uri.as_str(), "mxc://example.org/media");
+    assert_eq!(outcome.send.event_id, "$img");
+    assert_eq!(outcome.send.txn_id, txn);
+    let calls = requests(&harness);
+    assert_eq!(calls.len(), 2);
+    assert!(
+        calls[1].url.ends_with("/send/m.room.message/media-42"),
+        "{}",
+        calls[1].url
+    );
+    assert_eq!(
+        calls[1].json().expect("json")["url"],
+        "mxc://example.org/media"
+    );
+}
+
+#[test]
+fn a_send_leg_failure_carries_the_upload_uri_and_txn_so_resume_skips_the_upload() {
+    let harness = harness(|config| {
+        config.with_retry(RetryPolicy::default().with_max_attempts(1).expect("valid"))
+    });
+    harness
+        .transport
+        .push_json(200, r#"{"content_uri":"mxc://example.org/media"}"#)
+        .push_json(500, r#"{"errcode":"M_UNKNOWN","error":"down"}"#);
+
+    let txn = TxnId::new("media-43").expect("valid");
+    let upload = MediaUpload::new(b"png!", "image/png")
+        .with_filename("cat.png")
+        .with_kind(MediaKind::Image);
+    let error = block_on(harness.client.send_media_with_txn(
+        txn.clone(),
+        "!r:example.org",
+        &upload,
+        Some("cat"),
+    ))
+    .expect_err("send failed");
+
+    let MediaSendError::Send {
+        content_uri,
+        txn_id,
+        source,
+    } = error
+    else {
+        panic!("the upload succeeded, so the send leg must be the failure");
+    };
+    assert_eq!(content_uri.as_str(), "mxc://example.org/media");
+    assert_eq!(txn_id, txn);
+    assert!(source.is_ambiguous());
+    assert_eq!(source.txn_id(), Some(&txn));
+    assert_eq!(
+        harness.transport.call_count(),
+        2,
+        "one upload, one failed send"
+    );
+
+    harness
+        .transport
+        .push_json(200, r#"{"event_id":"$resumed"}"#);
+    let resumed = block_on(harness.client.send_uploaded_media_with_txn(
+        txn.clone(),
+        "!r:example.org",
+        &MxcUri::parse("mxc://example.org/media").expect("valid uri"),
+        &upload,
+        Some("cat"),
+    ))
+    .expect("resumed");
+
+    assert_eq!(resumed.send.event_id, "$resumed");
+    assert_eq!(resumed.send.txn_id, txn);
+    assert_eq!(resumed.content_uri.as_str(), "mxc://example.org/media");
+    let calls = requests(&harness);
+    assert_eq!(calls.len(), 3, "resume must not upload again");
+    assert!(
+        calls[2].url.ends_with("/send/m.room.message/media-43"),
+        "{}",
+        calls[2].url
+    );
+    assert_eq!(
+        calls[2].json().expect("json")["url"],
+        "mxc://example.org/media"
+    );
 }
 
 #[test]

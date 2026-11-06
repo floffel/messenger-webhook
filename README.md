@@ -157,7 +157,8 @@ so your tests can do the same.
 | `send_typing` / `stop_typing` | `PUT /rooms/{id}/typing/{user}` | state-setting |
 | `send_read_receipt` | `POST /rooms/{id}/receipt/m.read/{event}` | state-setting |
 | `upload_media` | `POST /_matrix/media/v3/upload` | **none** |
-| `send_media` | upload, then `m.image`/`m.video`/`m.audio`/`m.file` | upload: none, send: transaction id |
+| `send_media` / `send_media_with_txn` | upload, then `m.image`/`m.video`/`m.audio`/`m.file` | upload: none, send: transaction id |
+| `send_uploaded_media_with_txn` | send an existing `mxc://` URI | transaction id |
 | `whoami` | `GET /account/whoami` | read |
 
 ### Delivery contract
@@ -183,6 +184,13 @@ The retry classifier takes that transaction id alongside the operation:
 transaction-keyed send fails closed as ambiguous rather than retrying blindly.
 Typing notifications and receipts use `Operation::StateSetting` because they
 converge without a reconciliation key.
+
+`send_media` is two legs, so it has one extra recovery point. Use
+`send_media_with_txn` when the caller owns the transaction id: it returns the
+uploaded `mxc://` URI and the send result. If the send leg then fails with
+`MediaSendError::Send`, repeat only that leg with
+`send_uploaded_media_with_txn` using the carried URI and transaction id; the
+bytes are not uploaded twice.
 
 Sends into one room are serialised (one request in flight, any number across
 rooms) so a bot's two-part reply cannot arrive out of order; turn it off with
