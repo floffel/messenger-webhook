@@ -174,10 +174,12 @@ Source: **Graph API — Webhooks, Getting Started**, *Verification Requests*,
 
 What the crate does with it:
 
-- `subscription::meta_subscription_challenge` takes the raw query string and the
-  dashboard token, compares the token in constant time and returns the challenge
-  parsed as an unsigned integer and rendered canonically in decimal; nothing is
-  concatenated onto it.
+- `subscription::meta_subscription_challenge` takes the channel whose
+  subscription is being answered, the raw query string and the dashboard token,
+  compares the token in constant time and returns the challenge parsed as an
+  unsigned integer and rendered canonically in decimal; nothing is concatenated
+  onto it. The channel is carried on every error, so a Messenger handshake
+  failure is not misreported as WhatsApp.
 - Both spellings of every parameter are accepted (`hub.mode` and `hub_mode`),
   because the underscore note above means an endpoint behind a PHP layer sees the
   second one.

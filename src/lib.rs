@@ -31,10 +31,10 @@
 //! step, [`read_body`] reads at most [`MAX_BODY_READ_BYTES`] bytes and returns
 //! [`Error::BodyTooLarge`] instead of growing without bound.
 //!
-//! A `WhatsApp` endpoint also receives one request that is not an event at all:
-//! Meta's subscription handshake. [`subscription::meta_subscription_challenge`]
-//! answers it — the token compared in constant time, the challenge echoed back
-//! and nothing else.
+//! A `WhatsApp` or Messenger endpoint also receives one request that is not an
+//! event at all: Meta's subscription handshake.
+//! [`subscription::meta_subscription_challenge`] answers it — the token
+//! compared in constant time, the challenge echoed back and nothing else.
 //!
 //! ```
 //! use messenger_webhook::{signature::meta_signature, Headers, Secret};
@@ -487,7 +487,7 @@ pub(crate) fn recipient(channel: Channel, message: &crate::OutboundMessage) -> R
                 ));
             }
         }
-        Channel::Other(_) => {}
+        Channel::Messenger | Channel::Other(_) => {}
     }
     Ok(id)
 }

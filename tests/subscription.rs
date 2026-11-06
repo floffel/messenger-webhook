@@ -47,16 +47,24 @@ fn request_with(key: &str, value: &str) -> String {
 
 #[test]
 fn the_documented_request_returns_the_challenge() {
-    let challenge = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), DOCS_QUERY)
-        .expect("the documented request is accepted");
+    let challenge = meta_subscription_challenge(
+        Channel::WhatsApp,
+        &Secret::new(TOKEN).expect("secret"),
+        DOCS_QUERY,
+    )
+    .expect("the documented request is accepted");
     assert_eq!(challenge, "1158201444");
 }
 
 #[test]
 fn a_wrong_token_is_a_bad_signature_on_the_whatsapp_channel() {
     let query = request_with(META_VERIFY_TOKEN_PARAM, "wrong-secret-value");
-    let error = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-        .expect_err("mismatch");
+    let error = meta_subscription_challenge(
+        Channel::WhatsApp,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect_err("mismatch");
     assert!(
         matches!(
             error,
@@ -74,15 +82,30 @@ fn a_token_that_shares_the_whole_prefix_is_still_rejected() {
     // the whole value instead of stopping at the first difference.
     let almost = format!("{}X", &TOKEN[..TOKEN.len() - 1]);
     let query = request_with(META_VERIFY_TOKEN_PARAM, &almost);
-    assert!(meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query).is_err());
+    assert!(meta_subscription_challenge(
+        Channel::WhatsApp,
+        &Secret::new(TOKEN).expect("secret"),
+        &query
+    )
+    .is_err());
 }
 
 #[test]
 fn a_token_that_is_a_prefix_of_the_secret_is_rejected() {
     let query = request_with(META_VERIFY_TOKEN_PARAM, &TOKEN[..TOKEN.len() - 1]);
-    let error = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-        .expect_err("short token");
+    let error = meta_subscription_challenge(
+        Channel::Messenger,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect_err("short token");
     assert!(matches!(error, Error::BadSignature { .. }));
+    assert!(matches!(
+        error,
+        Error::BadSignature {
+            channel: Channel::Messenger
+        }
+    ));
 }
 
 #[test]
@@ -121,13 +144,23 @@ fn every_parameter_is_required() {
         .into_iter()
         .filter(|(key, _)| *key != missing)
         .collect();
-        let error =
-            meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query(&pairs))
-                .expect_err("a missing parameter is rejected");
+        let error = meta_subscription_challenge(
+            Channel::Messenger,
+            &Secret::new(TOKEN).expect("secret"),
+            &query(&pairs),
+        )
+        .expect_err("a missing parameter is rejected");
         assert!(
             matches!(error, Error::MalformedVerificationRequest { .. }),
             "{missing} missing gave {error}"
         );
+        assert!(matches!(
+            error,
+            Error::MalformedVerificationRequest {
+                channel: Channel::Messenger,
+                ..
+            }
+        ));
         assert!(
             error.to_string().contains(missing),
             "{missing} should be named in {error}"
@@ -139,12 +172,23 @@ fn every_parameter_is_required() {
 fn mode_must_be_subscribe() {
     for value in ["unsubscribe", "Subscribe!", "sub", ""] {
         let query = request_with(META_MODE_PARAM, value);
-        let error = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-            .expect_err("a wrong mode is rejected");
+        let error = meta_subscription_challenge(
+            Channel::Messenger,
+            &Secret::new(TOKEN).expect("secret"),
+            &query,
+        )
+        .expect_err("a wrong mode is rejected");
         assert!(
             matches!(error, Error::MalformedVerificationRequest { .. }),
             "mode {value:?} gave {error}"
         );
+        assert!(matches!(
+            error,
+            Error::MalformedVerificationRequest {
+                channel: Channel::Messenger,
+                ..
+            }
+        ));
     }
 }
 
@@ -152,14 +196,23 @@ fn mode_must_be_subscribe() {
 fn a_trailing_space_in_the_mode_is_not_accepted() {
     // `+` decodes to a space, so this is the classic copy-paste slip.
     let query = format!("hub.mode=subscribe+&hub.challenge=1&hub.verify_token={TOKEN}");
-    assert!(meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query).is_err());
+    assert!(meta_subscription_challenge(
+        Channel::Messenger,
+        &Secret::new(TOKEN).expect("secret"),
+        &query
+    )
+    .is_err());
 }
 
 #[test]
 fn the_mode_is_compared_case_insensitively() {
     let query = request_with(META_MODE_PARAM, "SUBSCRIBE");
-    let challenge = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-        .expect("Meta's value in any case is the same value");
+    let challenge = meta_subscription_challenge(
+        Channel::WhatsApp,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect("Meta's value in any case is the same value");
     assert_eq!(challenge, "1158201444");
 }
 
@@ -169,12 +222,23 @@ fn a_conflicting_duplicate_parameter_is_rejected_even_when_one_value_matches() {
     let query = format!(
         "hub.mode=subscribe&hub.challenge=1&hub.verify_token={TOKEN}&hub.verify_token=other"
     );
-    let error = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-        .expect_err("ambiguity rejected");
+    let error = meta_subscription_challenge(
+        Channel::Messenger,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect_err("ambiguity rejected");
     assert!(
         matches!(error, Error::MalformedVerificationRequest { .. }),
         "unexpected error: {error}"
     );
+    assert!(matches!(
+        error,
+        Error::MalformedVerificationRequest {
+            channel: Channel::Messenger,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -190,8 +254,12 @@ fn identical_duplicate_parameters_are_accepted() {
         (META_VERIFY_TOKEN_PARAM, TOKEN),
     ]);
     assert_eq!(
-        meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-            .expect("identical duplicates are accepted"),
+        meta_subscription_challenge(
+            Channel::WhatsApp,
+            &Secret::new(TOKEN).expect("secret"),
+            &query
+        )
+        .expect("identical duplicates are accepted"),
         "42"
     );
 }
@@ -204,8 +272,12 @@ fn equal_php_aliases_are_accepted_as_one_parameter() {
         "hub.mode=subscribe&hub_mode=subscribe&hub.challenge=42&hub_challenge=42&hub.verify_token={TOKEN}&hub_verify_token={TOKEN}"
     );
     assert_eq!(
-        meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-            .expect("equal aliases are accepted"),
+        meta_subscription_challenge(
+            Channel::WhatsApp,
+            &Secret::new(TOKEN).expect("secret"),
+            &query
+        )
+        .expect("equal aliases are accepted"),
         "42"
     );
 }
@@ -219,8 +291,12 @@ fn conflicting_php_aliases_are_rejected() {
             "hub.mode=subscribe&hub.challenge=42&hub.verify_token={TOKEN}&hub_verify_token=other"
         ),
     ] {
-        let error = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-            .expect_err("conflicting aliases are rejected");
+        let error = meta_subscription_challenge(
+            Channel::WhatsApp,
+            &Secret::new(TOKEN).expect("secret"),
+            &query,
+        )
+        .expect_err("conflicting aliases are rejected");
         assert!(
             matches!(error, Error::MalformedVerificationRequest { .. }),
             "unexpected error for {query}: {error}"
@@ -233,8 +309,12 @@ fn a_duplicate_of_an_ignored_parameter_is_fine() {
     // Only the parameters this crate reads are checked for ambiguity.
     let query = format!("{DOCS_QUERY}&hub.debug=1&hub.debug=2");
     assert_eq!(
-        meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-            .expect("accepted"),
+        meta_subscription_challenge(
+            Channel::WhatsApp,
+            &Secret::new(TOKEN).expect("secret"),
+            &query
+        )
+        .expect("accepted"),
         "1158201444"
     );
 }
@@ -245,7 +325,12 @@ fn php_style_parameter_names_are_accepted() {
     // endpoint behind a PHP layer sees these spellings.
     let query = "hub_mode=subscribe&hub_challenge=99&hub_verify_token=meatyhamhock-meatyhamhock";
     assert_eq!(
-        meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), query).expect("accepted"),
+        meta_subscription_challenge(
+            Channel::WhatsApp,
+            &Secret::new(TOKEN).expect("secret"),
+            query
+        )
+        .expect("accepted"),
         "99"
     );
 }
@@ -254,8 +339,12 @@ fn php_style_parameter_names_are_accepted() {
 fn unknown_parameters_are_ignored() {
     let query = format!("{DOCS_QUERY}&hub.mode_extra=1&unrelated=value");
     assert_eq!(
-        meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-            .expect("accepted"),
+        meta_subscription_challenge(
+            Channel::WhatsApp,
+            &Secret::new(TOKEN).expect("secret"),
+            &query
+        )
+        .expect("accepted"),
         "1158201444"
     );
 }
@@ -270,7 +359,7 @@ fn percent_encoded_values_are_compared_after_decoding() {
         (META_VERIFY_TOKEN_PARAM, "a b&c=d/ü padded-pad"),
     ]);
     assert_eq!(
-        meta_subscription_challenge(&secret, &query).expect("accepted"),
+        meta_subscription_challenge(Channel::WhatsApp, &secret, &query).expect("accepted"),
         "7"
     );
 }
@@ -282,6 +371,7 @@ fn a_plus_in_the_token_is_a_space() {
     let query = "hub.mode=subscribe&hub.challenge=1&hub.verify_token=space+in+secret+padded";
     assert_eq!(
         meta_subscription_challenge(
+            Channel::WhatsApp,
             &Secret::new("space in secret padded").expect("secret"),
             query
         )
@@ -295,7 +385,12 @@ fn an_encoded_token_matches_the_plain_secret() {
     // Encoding is an application detail; the compared values are the decoded ones.
     let query = "hub.mode=subscribe&hub.challenge=1&hub.verify_token=meaty%68amhock-meatyhamhock";
     assert_eq!(
-        meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), query).expect("accepted"),
+        meta_subscription_challenge(
+            Channel::WhatsApp,
+            &Secret::new(TOKEN).expect("secret"),
+            query
+        )
+        .expect("accepted"),
         "1"
     );
 }
@@ -322,20 +417,35 @@ fn the_challenge_must_be_an_unsigned_integer() {
         "0x10",
     ] {
         let query = request_with(META_CHALLENGE_PARAM, value);
-        let error = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-            .expect_err("a non-integer challenge is rejected");
+        let error = meta_subscription_challenge(
+            Channel::Messenger,
+            &Secret::new(TOKEN).expect("secret"),
+            &query,
+        )
+        .expect_err("a non-integer challenge is rejected");
         assert!(
             matches!(error, Error::MalformedVerificationRequest { .. }),
             "challenge {value:?} gave {error}"
         );
+        assert!(matches!(
+            error,
+            Error::MalformedVerificationRequest {
+                channel: Channel::Messenger,
+                ..
+            }
+        ));
     }
 }
 
 #[test]
 fn the_challenge_is_returned_as_canonical_decimal() {
     let query = request_with(META_CHALLENGE_PARAM, "0001158201444");
-    let challenge = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-        .expect("leading zeroes are still an integer");
+    let challenge = meta_subscription_challenge(
+        Channel::WhatsApp,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect("leading zeroes are still an integer");
     assert_eq!(challenge, "1158201444");
     assert!(challenge.bytes().all(|byte| byte.is_ascii_digit()));
 }
@@ -343,7 +453,19 @@ fn the_challenge_is_returned_as_canonical_decimal() {
 #[test]
 fn an_empty_challenge_is_rejected() {
     let query = request_with(META_CHALLENGE_PARAM, "");
-    assert!(meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query).is_err());
+    let error = meta_subscription_challenge(
+        Channel::Messenger,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect_err("empty challenge");
+    assert!(matches!(
+        error,
+        Error::MalformedVerificationRequest {
+            channel: Channel::Messenger,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -351,16 +473,31 @@ fn the_challenge_length_is_a_pre_parse_guard() {
     let at_limit = "0".repeat(MAX_CHALLENGE_BYTES);
     let query = request_with(META_CHALLENGE_PARAM, &at_limit);
     assert_eq!(
-        meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-            .expect("at the ceiling"),
+        meta_subscription_challenge(
+            Channel::WhatsApp,
+            &Secret::new(TOKEN).expect("secret"),
+            &query
+        )
+        .expect("at the ceiling"),
         "0"
     );
 
     let past_limit = "1".repeat(MAX_CHALLENGE_BYTES + 1);
     let query = request_with(META_CHALLENGE_PARAM, &past_limit);
-    let error = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-        .expect_err("one byte past the ceiling");
+    let error = meta_subscription_challenge(
+        Channel::Messenger,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect_err("one byte past the ceiling");
     assert!(matches!(error, Error::MalformedVerificationRequest { .. }));
+    assert!(matches!(
+        error,
+        Error::MalformedVerificationRequest {
+            channel: Channel::Messenger,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -368,24 +505,43 @@ fn the_challenge_integer_range_is_exact() {
     let max = u64::MAX.to_string();
     let query = request_with(META_CHALLENGE_PARAM, &max);
     assert_eq!(
-        meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-            .expect("u64::MAX fits"),
+        meta_subscription_challenge(
+            Channel::WhatsApp,
+            &Secret::new(TOKEN).expect("secret"),
+            &query
+        )
+        .expect("u64::MAX fits"),
         max
     );
 
     let past_max = (u128::from(u64::MAX) + 1).to_string();
     let query = request_with(META_CHALLENGE_PARAM, &past_max);
-    let error = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-        .expect_err("one past u64::MAX is rejected");
+    let error = meta_subscription_challenge(
+        Channel::Messenger,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect_err("one past u64::MAX is rejected");
     assert!(matches!(error, Error::MalformedVerificationRequest { .. }));
+    assert!(matches!(
+        error,
+        Error::MalformedVerificationRequest {
+            channel: Channel::Messenger,
+            ..
+        }
+    ));
 }
 
 #[test]
 fn the_error_never_echoes_the_received_token() {
     // A log line must not contain what the attacker sent.
     let query = request_with(META_VERIFY_TOKEN_PARAM, "attacker-supplied-token");
-    let error = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
-        .expect_err("mismatch");
+    let error = meta_subscription_challenge(
+        Channel::Messenger,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect_err("mismatch");
     let rendered = error.to_string();
     assert!(
         !rendered.contains("attacker-supplied-token"),
@@ -410,8 +566,12 @@ fn the_malformed_error_is_terminal_and_reads_sensibly() {
 #[test]
 fn subscription_errors_distinguish_rejection_from_misconfiguration() {
     let secret = Secret::new(TOKEN).expect("secret");
-    let malformed = meta_subscription_challenge(&secret, "hub.mode=subscribe&hub.challenge=1")
-        .expect_err("missing verify token");
+    let malformed = meta_subscription_challenge(
+        Channel::WhatsApp,
+        &secret,
+        "hub.mode=subscribe&hub.challenge=1",
+    )
+    .expect_err("missing verify token");
     assert!(matches!(
         malformed,
         Error::MalformedVerificationRequest { .. }
@@ -419,7 +579,8 @@ fn subscription_errors_distinguish_rejection_from_misconfiguration() {
     assert!(!malformed.is_misconfiguration());
 
     let wrong_token = request_with(META_VERIFY_TOKEN_PARAM, "wrong-secret-value");
-    let bad_signature = meta_subscription_challenge(&secret, &wrong_token).expect_err("mismatch");
+    let bad_signature = meta_subscription_challenge(Channel::WhatsApp, &secret, &wrong_token)
+        .expect_err("mismatch");
     assert!(matches!(bad_signature, Error::BadSignature { .. }));
     assert!(!bad_signature.is_misconfiguration());
 
@@ -445,6 +606,7 @@ proptest! {
             (META_VERIFY_TOKEN_PARAM, &candidate),
         ]);
         let result = meta_subscription_challenge(
+            Channel::Messenger,
             &Secret::new(secret.clone()).expect("secret"),
             &query,
         );
@@ -465,6 +627,10 @@ proptest! {
     /// An arbitrary query string is answered, never a panic.
     #[test]
     fn arbitrary_query_strings_never_panic(query in "\\PC{0,200}") {
-        let _ = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query);
+        let _ = meta_subscription_challenge(
+            Channel::Messenger,
+            &Secret::new(TOKEN).expect("secret"),
+            &query,
+        );
     }
 }

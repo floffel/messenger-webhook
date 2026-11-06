@@ -58,6 +58,11 @@ impl Clone for Secret {
 }
 
 impl Secret {
+    #[cfg(all(test, feature = "whatsapp"))]
+    pub(crate) fn empty_for_test() -> Self {
+        Self(Zeroizing::new(String::new()))
+    }
+
     /// Wraps a raw secret value.
     ///
     /// # Errors

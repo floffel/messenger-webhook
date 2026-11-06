@@ -87,6 +87,8 @@ impl fmt::Display for ChannelName {
 pub enum Channel {
     /// `WhatsApp` Cloud API.
     WhatsApp,
+    /// Meta Messenger Platform.
+    Messenger,
     /// Telegram Bot API.
     Telegram,
     /// Matrix client-server or application-service events.
@@ -147,6 +149,7 @@ impl Channel {
     pub fn as_str(&self) -> &str {
         match self {
             Self::WhatsApp => "whatsapp",
+            Self::Messenger => "messenger",
             Self::Telegram => "telegram",
             Self::Matrix => "matrix",
             Self::Other(name) => name.as_str(),
@@ -207,6 +210,7 @@ impl FromStr for Channel {
     fn from_str(s: &str) -> crate::Result<Self> {
         match s {
             "whatsapp" => Ok(Self::WhatsApp),
+            "messenger" => Ok(Self::Messenger),
             "telegram" => Ok(Self::Telegram),
             "matrix" => Ok(Self::Matrix),
             other => Self::other(other),
@@ -237,7 +241,7 @@ fn validate_channel_name(name: &str) -> crate::Result<()> {
             reason: "channel name must match [a-z0-9_-]".to_owned(),
         });
     }
-    if matches!(name, "whatsapp" | "telegram" | "matrix") {
+    if matches!(name, "whatsapp" | "messenger" | "telegram" | "matrix") {
         return Err(crate::Error::InvalidChannelName {
             reason: format!("channel name {name:?} is reserved by a built-in channel"),
         });

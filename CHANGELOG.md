@@ -19,6 +19,14 @@ carry a `!` in the conventional-commit subject.
 
 ### Breaking
 
+- **`subscription::meta_subscription_challenge` takes the channel.** The
+  helper now takes the channel whose subscription is being answered as its
+  first argument instead of hard-coding `Channel::WhatsApp` in `MissingSecret`,
+  `BadSignature` and `MalformedVerificationRequest` failures. `Channel` gains a
+  built-in `Messenger` variant, which is additive through `#[non_exhaustive]`,
+  and a Messenger subscription that fails closed now reports `messenger`, so
+  callers routing or alerting on the error see the credential that actually
+  needs attention. Closes #120.
 - **`Registry::get` returns an owned shared adapter.** The registry now stores
   `Arc<dyn Adapter>` and `get` returns `Arc<dyn Adapter>` instead of a borrow
   tied to the registry, so runtime registration or secret rotation can clone

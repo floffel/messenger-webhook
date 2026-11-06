@@ -304,10 +304,10 @@ event arrives: a `GET` carrying `hub.mode`, `hub.challenge` and
 never be saved in the app dashboard:
 
 ```rust
-use messenger_webhook::{subscription::meta_subscription_challenge, Secret};
+use messenger_webhook::{subscription::meta_subscription_challenge, Channel, Secret};
 
 // `query` is everything after `?` in the GET request.
-let challenge = meta_subscription_challenge(&Secret::new(verify_token), query)?;
+let challenge = meta_subscription_challenge(Channel::WhatsApp, &Secret::new(verify_token), query)?;
 // Answer 200 with `challenge` as the body and `text/plain` — nothing else.
 ```
 
