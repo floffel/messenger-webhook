@@ -22,7 +22,7 @@ matrix = []
 # Default-off: a Matrix outbound client drags in an HTTP stack (reqwest) and a
 # runtime (tokio's sync + time primitives). A webhook-only consumer must not
 # inherit either, so the whole `matrix_out` module sits behind this feature.
-matrix-out = ["dep:reqwest", "dep:tokio", "dep:uuid"]
+matrix-out = ["dep:reqwest", "dep:tokio", "dep:url", "dep:uuid"]
 # Default-off: this mirrors a downstream consumer enabling `serde_json`'s
 # `preserve_order` feature. The crate's synthetic ids stay stable either way,
 # but CI must build and test the `IndexMap` implementation too.
@@ -55,6 +55,9 @@ tokio = { version = "1", default-features = false, features = [
 # place this crate reads a query string.
 form_urlencoded = { version = "1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
+# WHATWG URL parsing for the homeserver base URL: an origin plus an optional
+# path prefix, without userinfo, query or fragment.
+url = { version = "2.5.8", optional = true }
 # A provider id of " " or U+200B names nothing, and `char::is_control`
 # misses format characters such as U+200B either way: the general
 # category is the tool that tells a real id from a placeholder.

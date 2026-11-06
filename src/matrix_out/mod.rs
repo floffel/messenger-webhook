@@ -84,6 +84,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
+use url::Url;
 
 pub use error::{OutboundError, OutboundResult};
 pub use http::{ReqwestTransport, DEFAULT_REQUEST_TIMEOUT};
@@ -213,8 +214,9 @@ impl ClientConfig {
     ///
     /// # Errors
     ///
-    /// [`OutboundError::InvalidConfig`] when `homeserver` does not start with
-    /// `http://` or `https://`, or carries whitespace or control characters.
+    /// [`OutboundError::InvalidConfig`] when `homeserver` is not an absolute
+    /// `http://` or `https://` URL without userinfo, query or fragment, or
+    /// carries whitespace or control characters.
     ///
     /// ```
     /// use messenger_webhook::matrix_out::ClientConfig;
@@ -222,31 +224,13 @@ impl ClientConfig {
     /// assert!(ClientConfig::new("https://matrix.example.org").is_ok());
     /// assert!(ClientConfig::new("matrix.example.org").is_err());
     /// assert!(ClientConfig::new("ftp://matrix.example.org").is_err());
+    /// assert!(ClientConfig::new("https://user:secret@matrix.example.org").is_err());
     /// ```
     pub fn new(homeserver: impl Into<String>) -> OutboundResult<Self> {
         let raw = homeserver.into();
-        let trimmed = raw.trim();
-        let lower = trimmed.to_ascii_lowercase();
-        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
-            return Err(OutboundError::InvalidConfig {
-                reason: format!(
-                    "the homeserver URL {trimmed:?} needs an http:// or https:// scheme"
-                ),
-            });
-        }
-        if trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
-            return Err(OutboundError::InvalidConfig {
-                reason: "the homeserver URL contains whitespace or a control character".to_owned(),
-            });
-        }
-        let base = trimmed.trim_end_matches('/');
-        if base.is_empty() || base.ends_with(':') {
-            return Err(OutboundError::InvalidConfig {
-                reason: "the homeserver URL has no host".to_owned(),
-            });
-        }
+        let base = parse_homeserver(raw.as_str())?;
         Ok(Self {
-            homeserver: base.to_owned(),
+            homeserver: base,
             user_id: None,
             retry: RetryPolicy::default(),
             max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES,
@@ -399,6 +383,65 @@ impl ClientConfig {
     pub const fn per_room_ordering(&self) -> bool {
         self.per_room_ordering
     }
+}
+
+/// Parses and normalises a homeserver base URL.
+fn parse_homeserver(homeserver: &str) -> OutboundResult<String> {
+    let trimmed = homeserver.trim();
+    if trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(OutboundError::InvalidConfig {
+            reason: "the homeserver URL contains whitespace or a control character".to_owned(),
+        });
+    }
+
+    let parsed = Url::parse(trimmed).map_err(|error| OutboundError::InvalidConfig {
+        reason: format!("the homeserver URL is not a valid absolute URL: {error}"),
+    })?;
+    let after_scheme = trimmed
+        .get(parsed.scheme().len()..)
+        .filter(|rest| rest.starts_with("://"))
+        .ok_or_else(|| OutboundError::InvalidConfig {
+            reason: "the homeserver URL must be an absolute http:// or https:// URL".to_owned(),
+        })?;
+
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(OutboundError::InvalidConfig {
+            reason: format!(
+                "the homeserver URL scheme `{}` is not http:// or https://",
+                parsed.scheme()
+            ),
+        });
+    }
+    let authority_end = after_scheme[3..]
+        .find(['/', '?', '#'])
+        .map_or(trimmed.len(), |offset| parsed.scheme().len() + 3 + offset);
+    if trimmed[parsed.scheme().len() + 3..authority_end].contains('@') {
+        return Err(OutboundError::InvalidConfig {
+            reason: "the homeserver URL must not include userinfo credentials".to_owned(),
+        });
+    }
+    if parsed.query().is_some() {
+        return Err(OutboundError::InvalidConfig {
+            reason: "the homeserver URL must not include a query string".to_owned(),
+        });
+    }
+    if parsed.fragment().is_some() {
+        return Err(OutboundError::InvalidConfig {
+            reason: "the homeserver URL must not include a fragment".to_owned(),
+        });
+    }
+    if parsed.host_str().is_none() {
+        return Err(OutboundError::InvalidConfig {
+            reason: "the homeserver URL has no host".to_owned(),
+        });
+    }
+
+    let mut base = parsed.origin().ascii_serialization();
+    let path = parsed.path().trim_end_matches('/');
+    if !path.is_empty() {
+        base.push_str(path);
+    }
+    Ok(base)
 }
 
 /// A Matrix account's outbound client: one access token, one homeserver, one
@@ -1704,7 +1747,7 @@ mod tests {
             ClientConfig::new("HTTP://m.example")
                 .expect("valid")
                 .homeserver(),
-            "HTTP://m.example"
+            "http://m.example"
         );
         for bad in [
             "",
@@ -1713,11 +1756,27 @@ mod tests {
             "ftp://m.example",
             "https://",
             "https://m example",
+            "http:m.example",
+            "https://user:secret@m.example",
+            "https://@m.example",
+            "https://m.example?access_token=secret",
+            "https://m.example#fragment",
         ] {
             assert!(ClientConfig::new(bad).is_err(), "{bad:?} should be refused");
         }
         // A URL that is nothing but a scheme and a colon has no host.
         assert!(ClientConfig::new("https://:").is_err());
+    }
+
+    #[test]
+    fn a_homeserver_path_prefix_is_kept_but_credentials_never_reach_debug() {
+        let config = ClientConfig::new("https://m.example/proxy")
+            .expect("path prefixes stay part of the base URL");
+        assert_eq!(config.homeserver(), "https://m.example/proxy");
+
+        let error = ClientConfig::new("https://user:secret@m.example").expect_err("userinfo");
+        assert!(!format!("{error:?}").contains("secret"));
+        assert!(!error.to_string().contains("secret"));
     }
 
     #[test]
