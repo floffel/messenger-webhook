@@ -2,14 +2,18 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use messenger_webhook::Headers;
+use messenger_webhook::{
+    headers::{MAX_HEADER_NAME_BYTES, MAX_HEADER_VALUE_BYTES},
+    Error, Headers,
+};
 use proptest::prelude::*;
 
 fn header_name() -> impl Strategy<Value = String> {
-    prop_oneof![
-        "[a-zA-Z0-9!#$%&'*+.^_`|~-]{0,64}".prop_map(String::from),
-        "\\PC{0,24}".prop_map(String::from),
-    ]
+    "[a-zA-Z0-9!#$%&'*+.^_`|~-]{1,64}".prop_map(String::from)
+}
+
+fn header_value() -> impl Strategy<Value = String> {
+    "[\t -~]{0,128}".prop_map(String::from)
 }
 
 fn insert_model(entries: &mut Vec<(String, String)>, name: &str, value: &str) {
@@ -54,7 +58,9 @@ proptest! {
         let mut expected = Vec::new();
 
         for (name, value) in &pairs {
-            headers.insert(name, value.clone());
+            if headers.insert(name, value.clone()).is_err() {
+                continue;
+            }
             insert_model(&mut expected, name, value);
         }
 
@@ -77,7 +83,7 @@ proptest! {
     /// last-write-wins, including names that only differ by ASCII case.
     #[test]
     fn constructors_preserve_repeated_fields(
-        pairs in prop::collection::vec((header_name(), ".*"), 0..24),
+        pairs in prop::collection::vec((header_name(), header_value()), 0..24),
     ) {
         let mut expected = Vec::new();
         for (name, value) in &pairs {
@@ -110,21 +116,20 @@ proptest! {
 }
 
 #[test]
-fn empty_header_name_is_preserved() {
+fn empty_header_name_is_rejected_before_storage() {
     let mut headers = Headers::new();
-    headers.insert("", "empty-name");
+    let error = headers.insert("", "empty-name").unwrap_err();
 
-    assert_eq!(headers.len(), 1);
-    assert_eq!(headers.get(""), Some("empty-name"));
-    assert!(!headers.is_empty());
+    assert!(matches!(error, Error::InvalidHeader { .. }));
+    assert_eq!(headers.len(), 0);
 }
 
 #[test]
 fn constructors_preserve_duplicates_and_get_returns_the_last_field() {
     let mut headers = Headers::new();
-    headers.insert("First", "1");
-    headers.insert("Second", "2");
-    headers.insert("FIRST", "3");
+    headers.insert("First", "1").unwrap();
+    headers.insert("Second", "2").unwrap();
+    headers.insert("FIRST", "3").unwrap();
 
     assert_eq!(
         headers,
@@ -138,45 +143,69 @@ fn constructors_preserve_duplicates_and_get_returns_the_last_field() {
     assert_eq!(repeated.get_all("first").collect::<Vec<_>>(), ["1", "2"]);
 
     let mut normalised = repeated;
-    normalised.insert("first", "4");
+    normalised.insert("first", "4").unwrap();
     assert_eq!(normalised.len(), 2);
     assert_eq!(normalised.get("first"), Some("4"));
     assert_eq!(normalised.get_all("first").collect::<Vec<_>>(), ["4"]);
 }
 
 #[test]
-fn large_header_name_is_not_truncated() {
-    const NAME_BYTES: usize = 64 * 1024;
-
-    let name = "X".repeat(NAME_BYTES);
+fn header_name_boundary_is_enforced() {
+    let at_limit = "X".repeat(MAX_HEADER_NAME_BYTES);
+    let over_limit = "X".repeat(MAX_HEADER_NAME_BYTES + 1);
     let mut headers = Headers::new();
-    headers.insert(&name, "value");
+    headers.insert(&at_limit, "value").unwrap();
 
     assert_eq!(headers.len(), 1);
-    assert_eq!(headers.get(&name), Some("value"));
-    assert_eq!(headers.get(&name.to_ascii_lowercase()), Some("value"));
+    assert_eq!(headers.get(&at_limit), Some("value"));
+    assert!(matches!(
+        headers.insert(&over_limit, "value"),
+        Err(Error::InvalidHeader { .. })
+    ));
 }
 
 #[test]
-fn unicode_names_follow_ascii_only_case_folding() {
+fn header_name_token_set_is_enforced() {
     let mut headers = Headers::new();
-    headers.insert("Äuthorization", "one");
-
-    assert_eq!(headers.get("Äuthorization"), Some("one"));
-    assert_eq!(headers.get("äuthorization"), None);
-
-    headers.insert("äuthorization", "two");
-    assert_eq!(headers.len(), 2);
-    assert_eq!(headers.get("Äuthorization"), Some("one"));
-    assert_eq!(headers.get("äuthorization"), Some("two"));
+    for name in ["Äuthorization", "bad name", "bad:name", "bad\nname"] {
+        assert!(matches!(
+            headers.insert(name, "one"),
+            Err(Error::InvalidHeader { .. })
+        ));
+    }
+    assert_eq!(headers.len(), 0);
 }
 
 #[test]
-fn unicode_header_values_are_preserved_verbatim() {
-    let value = "Grüße aus Berlin 🌍\0tail";
+fn header_value_boundary_is_enforced() {
+    let at_limit = "v".repeat(MAX_HEADER_VALUE_BYTES);
+    let over_limit = "v".repeat(MAX_HEADER_VALUE_BYTES + 1);
     let mut headers = Headers::new();
-    headers.insert("X-Greeting", value);
+    headers.insert("X-Greeting", &at_limit).unwrap();
 
-    assert_eq!(headers.get("x-greeting"), Some(value));
-    assert_eq!(headers.get("X-GREETING"), Some(value));
+    assert_eq!(headers.get("x-greeting"), Some(at_limit.as_str()));
+    assert!(matches!(
+        headers.insert("X-Greeting", &over_limit),
+        Err(Error::InvalidHeader { .. })
+    ));
+}
+
+#[test]
+fn header_value_byte_range_is_enforced() {
+    let mut headers = Headers::new();
+    for value in [
+        "line\nbreak",
+        "carriage\rreturn",
+        "nul\0byte",
+        "non-ascii Grüße",
+        "emoji 🌍",
+    ] {
+        assert!(matches!(
+            headers.insert("X-Greeting", value),
+            Err(Error::InvalidHeader { .. })
+        ));
+    }
+
+    headers.insert("X-Greeting", "\tvisible ~ ascii").unwrap();
+    assert_eq!(headers.get("x-greeting"), Some("\tvisible ~ ascii"));
 }

@@ -114,9 +114,11 @@ proptest! {
     #[test]
     fn arbitrary_bytes_never_panic(bytes in prop::collection::vec(any::<u8>(), 0..2048)) {
         let mut headers = Headers::new();
-        headers.insert("x-hub-signature-256", "sha256=00");
-        headers.insert("authorization", "Bearer secret");
-        headers.insert("x-telegram-bot-api-secret-token", "secret");
+        headers.insert("x-hub-signature-256", "sha256=00").unwrap();
+        headers.insert("authorization", "Bearer secret").unwrap();
+        headers
+            .insert("x-telegram-bot-api-secret-token", "secret")
+            .unwrap();
 
         for adapter in adapters() {
             let _ = adapter.verify(&headers, &bytes);
@@ -181,11 +183,11 @@ proptest! {
     #[test]
     fn header_lookup_is_case_insensitive(
         name in "[a-zA-Z][a-zA-Z0-9-]{0,24}",
-        value in ".*",
+        value in "[\t -~]{0,64}",
         casing in prop::collection::vec(any::<bool>(), 0..25),
     ) {
         let mut headers = Headers::new();
-        headers.insert(name.as_str(), value.as_str());
+        headers.insert(name.as_str(), value.as_str()).unwrap();
 
         // Flip each character according to the generated casing pattern; the
         // queried spelling is the same header name, only re-cased.

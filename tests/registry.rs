@@ -169,19 +169,23 @@ fn handle_verifies_before_it_parses() {
         registry.register(WhatsAppAdapter::new("app-secret"));
 
         let mut headers = Headers::new();
-        headers.insert(
-            "x-hub-signature-256",
-            meta_signature(&secret, body).unwrap(),
-        );
+        headers
+            .insert(
+                "x-hub-signature-256",
+                meta_signature(&secret, body).unwrap(),
+            )
+            .unwrap();
         let events = registry.handle(&Channel::WhatsApp, &headers, body).unwrap();
         assert_eq!(events[0].text(), Some("Hallo"));
 
         // A signature from another secret is rejected as a signature problem.
         let mut forged = Headers::new();
-        forged.insert(
-            "x-hub-signature-256",
-            meta_signature(&Secret::new("other"), body).unwrap(),
-        );
+        forged
+            .insert(
+                "x-hub-signature-256",
+                meta_signature(&Secret::new("other"), body).unwrap(),
+            )
+            .unwrap();
         assert!(matches!(
             registry.handle(&Channel::WhatsApp, &forged, body),
             Err(Error::BadSignature { .. })
@@ -195,10 +199,12 @@ fn handle_verifies_before_it_parses() {
 
         // Verified but malformed: the parse error surfaces, not a panic.
         let mut broken = Headers::new();
-        broken.insert(
-            "x-hub-signature-256",
-            meta_signature(&secret, b"nope").unwrap(),
-        );
+        broken
+            .insert(
+                "x-hub-signature-256",
+                meta_signature(&secret, b"nope").unwrap(),
+            )
+            .unwrap();
         assert!(matches!(
             registry.handle(&Channel::WhatsApp, &broken, b"nope"),
             Err(Error::Payload(_))
