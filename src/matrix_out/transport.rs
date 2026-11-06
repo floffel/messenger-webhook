@@ -18,6 +18,7 @@
 //! interpret the status code — the client does all three, because the retry
 //! class depends on the operation (see [`crate::matrix_out::Operation`]).
 
+use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -324,24 +325,74 @@ impl<'a> Request<'a> {
     }
 }
 
-/// [`Debug`] redacts the credential: the authorisation header carries the
-/// access token, and a request type is exactly what ends up in a log line.
+const REDACTED: &str = "<redacted>";
+
+pub(super) fn redacted_headers(headers: &[(String, String)]) -> Vec<(&str, &str)> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            if is_credential_header(name) {
+                (name.as_str(), REDACTED)
+            } else {
+                (name.as_str(), value.as_str())
+            }
+        })
+        .collect()
+}
+
+fn is_credential_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "authorization" | "cookie" | "set-cookie" | "x-api-key" | "x-auth-token"
+    ) || lower.ends_with("-authorization")
+}
+
+pub(super) fn redacted_url(url: &str) -> Cow<'_, str> {
+    let Some(query_start) = url.find('?') else {
+        return Cow::Borrowed(url);
+    };
+    let query_end = url[query_start + 1..]
+        .find('#')
+        .map_or(url.len(), |offset| query_start + 1 + offset);
+    let query = &url[query_start + 1..query_end];
+    if !query.split('&').any(|pair| {
+        pair.split_once('=')
+            .map_or(pair, |(key, _)| key)
+            .eq_ignore_ascii_case("access_token")
+    }) {
+        return Cow::Borrowed(url);
+    }
+
+    let mut redacted = String::with_capacity(url.len());
+    redacted.push_str(&url[..=query_start]);
+    for (index, pair) in query.split('&').enumerate() {
+        if index > 0 {
+            redacted.push('&');
+        }
+        let key = pair.split_once('=').map_or(pair, |(key, _)| key);
+        if key.eq_ignore_ascii_case("access_token") {
+            redacted.push_str(key);
+            redacted.push('=');
+            redacted.push_str(REDACTED);
+        } else {
+            redacted.push_str(pair);
+        }
+    }
+    redacted.push_str(&url[query_end..]);
+    Cow::Owned(redacted)
+}
+
+/// [`Debug`] redacts credential-bearing header values and `access_token` query
+/// values, and reports the body length only: a request type is exactly what ends
+/// up in a log line.
 impl fmt::Debug for Request<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let headers: Vec<(&str, &str)> = self
-            .headers
-            .iter()
-            .map(|(name, value)| {
-                if name.eq_ignore_ascii_case("authorization") {
-                    (name.as_str(), "<redacted>")
-                } else {
-                    (name.as_str(), value.as_str())
-                }
-            })
-            .collect();
+        let headers = redacted_headers(&self.headers);
+        let url = redacted_url(&self.url);
         f.debug_struct("Request")
             .field("method", &self.method)
-            .field("url", &self.url)
+            .field("url", &url)
             .field("headers", &headers)
             .field("body", &self.body)
             .finish()
@@ -679,21 +730,81 @@ mod tests {
     }
 
     #[test]
-    fn debug_redacts_the_authorization_header_and_the_body() {
-        let request = Request::new(Method::Put, "https://example.org/send")
-            .with_header("authorization", "Bearer syt_secret")
-            .with_header("content-type", "application/json")
-            .with_body(Body::Json(br#"{"body":"hallo"}"#.to_vec()));
+    fn debug_redacts_credential_headers_url_tokens_and_the_body() {
+        let request = Request::new(
+            Method::Put,
+            "https://example.org/send?access_token=syt_url_secret&filename=cat.png",
+        )
+        .with_header("authorization", "Bearer syt_secret")
+        .with_header("proxy-authorization", "Basic proxy_secret")
+        .with_header("cookie", "session=cookie_secret")
+        .with_header("set-cookie", "session=set_cookie_secret")
+        .with_header("x-api-key", "api_key_secret")
+        .with_header("x-auth-token", "auth_token_secret")
+        .with_header("content-type", "application/json")
+        .with_body(Body::Json(br#"{"body":"hallo"}"#.to_vec()));
         let rendered = format!("{request:?}");
-        assert!(!rendered.contains("syt_secret"), "{rendered}");
-        assert!(
-            rendered.contains("(\"authorization\", \"<redacted>\")"),
-            "{rendered}"
-        );
+        for secret in [
+            "syt_secret",
+            "proxy_secret",
+            "cookie_secret",
+            "set_cookie_secret",
+            "api_key_secret",
+            "auth_token_secret",
+            "syt_url_secret",
+        ] {
+            assert!(!rendered.contains(secret), "{rendered}");
+        }
+        for name in [
+            "authorization",
+            "proxy-authorization",
+            "cookie",
+            "set-cookie",
+            "x-api-key",
+            "x-auth-token",
+            "access_token",
+        ] {
+            assert!(rendered.contains(name), "{rendered}");
+        }
+        assert!(rendered.contains("<redacted>"), "{rendered}");
         assert!(!rendered.contains("hallo"), "{rendered}");
         assert!(rendered.contains("Json(16 bytes)"), "{rendered}");
         // Non-credential headers stay readable, so a debug log is still useful.
         assert!(rendered.contains("application/json"), "{rendered}");
+        assert!(rendered.contains("filename=cat.png"), "{rendered}");
+    }
+
+    #[test]
+    fn debug_header_redaction_matches_the_credential_boundary() {
+        let request = Request::new(Method::Get, "https://example.org/x")
+            .with_header("X-Authorization", "custom_secret")
+            .with_header("authorization-extra", "visible")
+            .with_header("cookie2", "visible");
+        let rendered = format!("{request:?}");
+        assert!(!rendered.contains("custom_secret"), "{rendered}");
+        assert!(
+            rendered.contains("(\"authorization-extra\", \"visible\")"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("(\"cookie2\", \"visible\")"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn debug_url_redaction_matches_the_query_boundary() {
+        let request = Request::new(
+            Method::Get,
+            "https://example.org/x?filename=cat.png&ACCESS_TOKEN=secret#once",
+        );
+        let rendered = format!("{request:?}");
+        assert!(!rendered.contains("secret"), "{rendered}");
+        assert!(rendered.contains("filename=cat.png"), "{rendered}");
+        assert!(
+            rendered.contains("ACCESS_TOKEN=<redacted>#once"),
+            "{rendered}"
+        );
     }
 
     #[test]
