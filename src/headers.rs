@@ -6,10 +6,12 @@
 
 use std::fmt;
 
-/// A case-insensitive set of request headers.
+/// A case-insensitive collection of request headers.
 ///
 /// Header values are redacted in [`Debug`](fmt::Debug) output, so logging a
-/// header set cannot expose credentials.
+/// header set cannot expose credentials. Repeated fields are preserved when
+/// built with [`Headers::from_pairs`], [`Headers::append`] or the iterator and
+/// slice constructors; use [`Headers::insert`] to replace an existing field.
 ///
 /// ```
 /// use messenger_webhook::Headers;
@@ -62,7 +64,7 @@ impl Headers {
         Self::default()
     }
 
-    /// Inserts a header, lower-casing its name and replacing an existing entry.
+    /// Inserts a header, lower-casing its name and replacing existing entries.
     ///
     /// ```
     /// use messenger_webhook::Headers;
@@ -75,21 +77,65 @@ impl Headers {
     pub fn insert(&mut self, name: impl AsRef<str>, value: impl Into<String>) -> &mut Self {
         let name = name.as_ref().to_ascii_lowercase();
         let value = value.into();
-        if let Some(entry) = self.entries.iter_mut().find(|(n, _)| *n == name) {
-            entry.1 = value;
-        } else {
-            self.entries.push((name, value));
+        if let Some(index) = self.entries.iter().position(|(stored, _)| *stored == name) {
+            self.entries[index].1 = value;
+            let mut seen = false;
+            self.entries.retain(|(stored, _)| {
+                if *stored == name {
+                    let keep = !seen;
+                    seen = true;
+                    keep
+                } else {
+                    true
+                }
+            });
+            return self;
         }
+        self.entries.push((name, value));
+        self
+    }
+
+    /// Appends a header, lower-casing its name and preserving repeated fields.
+    ///
+    /// Use this when mapping a framework's header container into [`Headers`]:
+    /// HTTP allows a field to repeat, and the verification path has to see each
+    /// occurrence to enforce headers such as `X-Hub-Signature-256` exactly.
+    ///
+    /// ```
+    /// use messenger_webhook::Headers;
+    ///
+    /// let mut headers = Headers::new();
+    /// headers.append("X-Hub-Signature-256", "sha256=one");
+    /// headers.append("x-hub-signature-256", "sha256=two");
+    /// assert_eq!(headers.len(), 2);
+    /// assert_eq!(
+    ///     headers.get_all("X-HUB-SIGNATURE-256").collect::<Vec<_>>(),
+    ///     ["sha256=one", "sha256=two"]
+    /// );
+    /// ```
+    pub fn append(&mut self, name: impl AsRef<str>, value: impl Into<String>) -> &mut Self {
+        self.entries
+            .push((name.as_ref().to_ascii_lowercase(), value.into()));
         self
     }
 
     /// Builds a header set from pairs whose values may be owned or borrowed.
     ///
+    /// Repeated names are preserved. Use [`Headers::insert`] if you need
+    /// last-write-wins normalisation instead.
+    ///
     /// ```
     /// use messenger_webhook::Headers;
     ///
-    /// let headers = Headers::from_pairs([("Authorization", "Bearer t".to_owned())]);
-    /// assert_eq!(headers.get("Authorization"), Some("Bearer t"));
+    /// let headers = Headers::from_pairs([
+    ///     ("Authorization", "Bearer t".to_owned()),
+    ///     ("authorization", "Bearer u".to_owned()),
+    /// ]);
+    /// assert_eq!(headers.len(), 2);
+    /// assert_eq!(
+    ///     headers.get_all("Authorization").collect::<Vec<_>>(),
+    ///     ["Bearer t", "Bearer u"]
+    /// );
     /// ```
     #[must_use]
     pub fn from_pairs<I, K, V>(pairs: I) -> Self
@@ -100,7 +146,7 @@ impl Headers {
     {
         let mut headers = Self::new();
         for (name, value) in pairs {
-            headers.insert(name.into(), value);
+            headers.append(name.into(), value);
         }
         headers
     }
@@ -117,13 +163,64 @@ impl Headers {
         self.lookup(name)
     }
 
-    /// Number of distinct headers.
+    /// Looks up every value stored for `name`, case-insensitively.
+    ///
+    /// Values are returned in insertion order. A name that was never inserted
+    /// yields an empty iterator. This is the accessor verification uses when a
+    /// header has to appear exactly once.
     ///
     /// ```
     /// use messenger_webhook::Headers;
     ///
-    /// let headers = Headers::from_iter([("a", "1"), ("b", "2")]);
-    /// assert_eq!(headers.len(), 2);
+    /// let headers = Headers::from_iter([("X-Test", "one"), ("x-test", "two")]);
+    ///
+    /// assert_eq!(headers.get("X-Test"), Some("two"));
+    /// assert_eq!(
+    ///     headers.get_all("x-TEST").collect::<Vec<_>>(),
+    ///     ["one", "two"]
+    /// );
+    /// assert_eq!(headers.get_all("missing").count(), 0);
+    /// ```
+    pub fn get_all<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.entries.iter().filter_map(move |(stored, value)| {
+            stored.eq_ignore_ascii_case(name).then_some(value.as_str())
+        })
+    }
+
+    #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+    pub(crate) fn exactly_one(
+        &self,
+        channel: crate::Channel,
+        name: &'static str,
+    ) -> crate::Result<&str> {
+        let mut values = self.get_all(name);
+        let Some(value) = values.next() else {
+            return Err(crate::Error::MissingVerificationHeader {
+                channel,
+                header: name,
+            });
+        };
+        let count = 1 + values.count();
+        if count > 1 {
+            return Err(crate::Error::DuplicateVerificationHeader {
+                channel,
+                header: name,
+                count,
+            });
+        }
+        Ok(value)
+    }
+
+    /// Number of stored header fields.
+    ///
+    /// Repeated names count once per stored value.
+    ///
+    /// ```
+    /// use messenger_webhook::Headers;
+    ///
+    /// let headers = Headers::from_iter([("a", "1"), ("b", "2"), ("a", "3")]);
+    /// assert_eq!(headers.len(), 3);
+    /// assert_eq!(headers.get_all("a").count(), 2);
     /// ```
     #[must_use]
     pub fn len(&self) -> usize {
@@ -145,6 +242,7 @@ impl Headers {
     fn lookup(&self, name: &str) -> Option<&str> {
         self.entries
             .iter()
+            .rev()
             .find(|(stored, _)| stored.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
     }
@@ -154,7 +252,7 @@ impl<'a> FromIterator<(&'a str, &'a str)> for Headers {
     fn from_iter<T: IntoIterator<Item = (&'a str, &'a str)>>(iter: T) -> Self {
         let mut headers = Self::new();
         for (name, value) in iter {
-            headers.insert(name, value);
+            headers.append(name, value);
         }
         headers
     }

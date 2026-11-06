@@ -253,8 +253,25 @@ fn headers_api() {
     assert_eq!(headers.len(), 1, "same header, case-insensitively");
     assert_eq!(headers.get("X-Hub-Signature-256"), Some("two"));
     assert_eq!(headers.get("x-hub-signature-256"), Some("two"));
+    assert_eq!(
+        headers.get_all("x-hub-signature-256").collect::<Vec<_>>(),
+        ["two"]
+    );
     assert_eq!(headers.get("missing"), None);
     assert_ne!(headers.len(), 0);
+
+    headers.append("X-Hub-Signature-256", "three");
+    headers.append("x-hub-signature-256", "four");
+    assert_eq!(headers.len(), 3);
+    assert_eq!(headers.get("X-Hub-Signature-256"), Some("four"));
+    assert_eq!(
+        headers.get_all("X-Hub-Signature-256").collect::<Vec<_>>(),
+        ["two", "three", "four"]
+    );
+
+    headers.insert("X-Hub-Signature-256", "five");
+    assert_eq!(headers.len(), 1);
+    assert_eq!(headers.get("X-Hub-Signature-256"), Some("five"));
 
     let owned = Headers::from_pairs([("Authorization", "Bearer t".to_owned())]);
     assert_eq!(owned.get("authorization"), Some("Bearer t"));
@@ -358,6 +375,11 @@ fn every_error_variant_renders_without_panicking() {
         Error::MissingVerificationHeader {
             channel: Channel::Matrix,
             header: "authorization",
+        },
+        Error::DuplicateVerificationHeader {
+            channel: Channel::Telegram,
+            header: "x-telegram-bot-api-secret-token",
+            count: 2,
         },
         Error::MalformedVerificationHeader {
             channel: Channel::WhatsApp,

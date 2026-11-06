@@ -92,13 +92,14 @@ fn handle_event(message: &NormalizedMessage) {
     );
 }
 
-/// Copies the request headers into the crate's case-insensitive set, skipping
-/// values that are not valid UTF-8 (a signature header never is anything else).
+/// Copies the request headers into the crate's case-insensitive collection,
+/// preserving repeated fields and skipping values that are not valid UTF-8 (a
+/// signature header never is anything else).
 fn neutral_headers(map: &HeaderMap) -> Headers {
     let mut headers = Headers::new();
     for (name, value) in map {
         if let Ok(value) = value.to_str() {
-            headers.insert(name.as_str(), value);
+            headers.append(name.as_str(), value);
         }
     }
     headers

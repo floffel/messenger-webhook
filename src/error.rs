@@ -58,6 +58,21 @@ pub enum Error {
         header: &'static str,
     },
 
+    /// The verification header appears more than once.
+    ///
+    /// HTTP allows a field to repeat, so a proxy or attacker can forward two
+    /// copies of a security header. Picking one would make the authentication
+    /// result depend on insertion order; this crate fails closed instead.
+    #[error("{channel} request carries {count} {header:?} headers; expected exactly one")]
+    DuplicateVerificationHeader {
+        /// Channel whose header is duplicated.
+        channel: Channel,
+        /// Header name that was looked for, lower-case.
+        header: &'static str,
+        /// Number of matching header fields.
+        count: usize,
+    },
+
     /// The verification header is present but not shaped as the provider
     /// documents it.
     #[error("{channel} verification header is malformed: {reason}")]
