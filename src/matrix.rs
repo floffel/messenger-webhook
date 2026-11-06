@@ -124,8 +124,20 @@ impl Adapter for MatrixAdapter {
             return Err(Error::Payload("expected a JSON object".to_owned()));
         }
 
-        let events: Vec<&Value> = match json::child(&root, "events").and_then(Value::as_array) {
-            Some(transaction) => transaction.iter().collect(),
+        let events: Vec<&Value> = match root.get("events") {
+            Some(events) => {
+                if is_event(&root) {
+                    return Err(Error::Payload(
+                        "expected either a Matrix event or a transaction, not both".to_owned(),
+                    ));
+                }
+                let Some(transaction) = events.as_array() else {
+                    return Err(Error::Payload(
+                        "expected matrix transaction `events` to be an array".to_owned(),
+                    ));
+                };
+                transaction.iter().collect()
+            }
             None => vec![&root],
         };
         events
