@@ -24,8 +24,8 @@ fn outbound_text_has_no_provider_event_id_field() {
 mod whatsapp {
     use messenger_webhook::{
         whatsapp::{MAX_CAPTION_BYTES, MAX_TEXT_BYTES},
-        Adapter, Attachment, AttachmentKind, Channel, Error, OutboundMessage, RetryPolicy,
-        WhatsAppAdapter,
+        Adapter, Attachment, AttachmentKind, Channel, Error, LimitUnit, OutboundMessage,
+        RetryPolicy, WhatsAppAdapter,
     };
 
     fn adapter() -> WhatsAppAdapter {
@@ -64,7 +64,7 @@ mod whatsapp {
                 Error::MessageTooLong {
                     limit: MAX_TEXT_BYTES,
                     actual,
-                    unit: "bytes",
+                    unit: LimitUnit::Bytes,
                     ..
                 } if actual == MAX_TEXT_BYTES + 1
             ),
@@ -78,7 +78,13 @@ mod whatsapp {
         // … and 2049 of them are 4098 bytes, even though it is only 2049 chars.
         let message = super::text(Channel::WhatsApp, "49", &"ä".repeat(2049));
         let error = adapter().encode(&message).unwrap_err();
-        assert!(matches!(error, Error::MessageTooLong { unit: "bytes", .. }));
+        assert!(matches!(
+            error,
+            Error::MessageTooLong {
+                unit: LimitUnit::Bytes,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -192,8 +198,8 @@ mod whatsapp {
 mod telegram {
     use messenger_webhook::{
         telegram::{MAX_CAPTION_UTF16, MAX_TEXT_UTF16},
-        Adapter, Attachment, AttachmentKind, Channel, Error, OutboundMessage, RetryPolicy,
-        TelegramAdapter,
+        Adapter, Attachment, AttachmentKind, Channel, Error, LimitUnit, OutboundMessage,
+        RetryPolicy, TelegramAdapter,
     };
 
     fn adapter() -> TelegramAdapter {
@@ -222,7 +228,7 @@ mod telegram {
             adapter().encode(&message).unwrap_err(),
             Error::MessageTooLong {
                 limit: MAX_TEXT_UTF16,
-                unit: "UTF-16 units",
+                unit: LimitUnit::Utf16Units,
                 ..
             }
         ));

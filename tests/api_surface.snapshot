@@ -1,4 +1,5 @@
 src/error.rs:enum Error
+src/error.rs:enum LimitUnit
 src/error.rs:impl Error:fn is_retryable
 src/headers.rs:impl Headers:fn append
 src/headers.rs:impl Headers:fn from_pairs
@@ -25,7 +26,7 @@ src/lib.rs:mod subscription
 src/lib.rs:mod telegram
 src/lib.rs:mod whatsapp
 src/lib.rs:trait Adapter
-src/lib.rs:use error::{Error,Result}
+src/lib.rs:use error::{Error,LimitUnit,Result}
 src/lib.rs:use headers::Headers
 src/lib.rs:use matrix::MatrixAdapter
 src/lib.rs:use model::SYNTHETIC_ID_PREFIX

@@ -9,6 +9,32 @@ use thiserror::Error;
 
 use crate::model::Channel;
 
+/// Unit a provider message limit is expressed in.
+///
+/// ```
+/// use messenger_webhook::LimitUnit;
+///
+/// assert_eq!(LimitUnit::Bytes.to_string(), "bytes");
+/// assert_eq!(LimitUnit::Utf16Units.to_string(), "UTF-16 units");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LimitUnit {
+    /// A byte count.
+    Bytes,
+    /// A count of UTF-16 code units.
+    Utf16Units,
+}
+
+impl std::fmt::Display for LimitUnit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Bytes => "bytes",
+            Self::Utf16Units => "UTF-16 units",
+        })
+    }
+}
+
 /// Everything that can go wrong while verifying, normalising or encoding.
 ///
 /// ```
@@ -146,8 +172,8 @@ pub enum Error {
         limit: usize,
         /// Measured length of the message.
         actual: usize,
-        /// Unit the limit is expressed in: `UTF-16 units` or `bytes`.
-        unit: &'static str,
+        /// Unit the limit is expressed in.
+        unit: LimitUnit,
     },
 
     /// An idempotency key is empty or longer than the crate carries.

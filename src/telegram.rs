@@ -195,7 +195,7 @@ impl Adapter for TelegramAdapter {
                         channel: Channel::Telegram,
                         limit: MAX_CAPTION_UTF16,
                         actual: length,
-                        unit: "UTF-16 units",
+                        unit: crate::LimitUnit::Utf16Units,
                     });
                 }
                 body.insert("caption".to_owned(), Value::String(text.to_owned()));
@@ -214,7 +214,7 @@ impl Adapter for TelegramAdapter {
                     channel: Channel::Telegram,
                     limit: MAX_TEXT_UTF16,
                     actual: length,
-                    unit: "UTF-16 units",
+                    unit: crate::LimitUnit::Utf16Units,
                 });
             }
             body.insert("text".to_owned(), Value::String(text.to_owned()));
