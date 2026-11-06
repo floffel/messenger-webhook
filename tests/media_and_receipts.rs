@@ -285,8 +285,8 @@ mod telegram {
 #[cfg(feature = "matrix")]
 mod matrix {
     use messenger_webhook::{
-        Adapter, Attachment, AttachmentKind, Channel, MatrixAdapter, NormalizedMessage,
-        OutboundMessage,
+        Adapter, Attachment, AttachmentKind, Channel, DeliveryStatus, MatrixAdapter,
+        NormalizedMessage, OutboundMessage,
     };
 
     fn adapter() -> MatrixAdapter {
@@ -369,6 +369,52 @@ mod matrix {
         let events = adapter().adapt(payload).unwrap();
         assert!(events[0].reaction.is_none());
         assert_eq!(events[0].provider_type.as_deref(), Some("m.reaction"));
+    }
+
+    #[test]
+    fn annotations_with_a_non_empty_key_are_reactions() {
+        let payload = br#"{"type":"m.reaction","event_id":"$2","room_id":"!r:s","sender":"@a:s",
+          "content":{"m.relates_to":{"rel_type":"m.annotation","event_id":"$1","key":"\ud83d\udc4d"}}}"#;
+        let events = adapter().adapt(payload).unwrap();
+        let reaction = events[0].reaction.as_ref().unwrap();
+        assert_eq!(reaction.message_id, "$1");
+        assert_eq!(reaction.emoji, "👍");
+        assert!(!reaction.removed);
+    }
+
+    #[test]
+    fn annotations_without_a_non_empty_key_are_carried_without_a_reaction() {
+        for content in [
+            r#"{"m.relates_to":{"rel_type":"m.annotation","event_id":"$1"}}"#,
+            r#"{"m.relates_to":{"rel_type":"m.annotation","event_id":"$1","key":""}}"#,
+        ] {
+            let payload = format!(
+                r#"{{"type":"m.reaction","event_id":"$2","room_id":"!r:s","sender":"@a:s","content":{content}}}"#
+            );
+            let events = adapter().adapt(payload.as_bytes()).unwrap();
+            assert!(events[0].reaction.is_none(), "{content}");
+            assert_eq!(events[0].provider_type.as_deref(), Some("m.reaction"));
+        }
+    }
+
+    #[test]
+    fn redactions_are_deleted_status_events_for_the_redacted_event() {
+        let payload = br#"{"type":"m.room.redaction","event_id":"$3","room_id":"!r:s",
+          "sender":"@a:s","content":{"redacts":"$1","reason":"cleanup"}}"#;
+        let events = adapter().adapt(payload).unwrap();
+        assert_eq!(events[0].external_id, "$1");
+        assert_eq!(events[0].status, Some(DeliveryStatus::Deleted));
+        assert_eq!(events[0].provider_type.as_deref(), Some("m.room.redaction"));
+    }
+
+    #[test]
+    fn redactions_without_a_target_are_carried_without_a_status() {
+        let payload = br#"{"type":"m.room.redaction","event_id":"$3","room_id":"!r:s",
+          "sender":"@a:s","content":{"redacts":""}}"#;
+        let events = adapter().adapt(payload).unwrap();
+        assert_eq!(events[0].external_id, "$3");
+        assert!(events[0].status.is_none());
+        assert_eq!(events[0].provider_type.as_deref(), Some("m.room.redaction"));
     }
 
     #[test]
