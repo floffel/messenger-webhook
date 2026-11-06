@@ -359,7 +359,7 @@ explicit.
 | doctests on every public item | the documented examples really run |
 | `tests/properties.rs` | arbitrary JSON (any depth/types) and arbitrary bytes never panic; encode → provider echo → normalise round-trips on all three channels; unknown fields survive; limits hold exactly at N and N+1 |
 | `tests/edge_cases.rs` | empty body, 1 MiB boundary, missing/ malformed signature headers, signature bound to the exact body, duplicate keys, unknown types, 20 recipients, unicode/NUL, numeric-vs-string ids, wrong JSON types, deep nesting |
-| `tests/subscription.rs` | the Meta handshake: the documented sample request, wrong/prefix/short token, empty secret, each missing parameter, identical and conflicting duplicate parameters, mode casing, the PHP underscore spellings, percent-decoded values, `+`-as-space, challenge ceiling at N/N+1, non-printable and empty challenge, no received token in the error message; plus two proptest properties |
+| `tests/subscription.rs` | the Meta handshake: the documented sample request, wrong/prefix/short token, empty secret, each missing parameter, identical and conflicting duplicate parameters, mode casing, the PHP underscore spellings, percent-decoded values, `+`-as-space, challenge ceiling at N-1/N/N+1, decoded control bytes and empty challenge, no received token in the error message; plus three proptest properties |
 | `tests/synthetic_ids.rs` | an event the provider sent without an id is carried with a stable synthesised key: same body, same id across replays; different body, different id; per adapter |
 | `tests/media_and_receipts.rs` | every media kind, reaction and receipt shape in both directions |
 | `tests/concurrency.rs` | 32 threads over one `Registry`, 32 threads over a borrowed `&dyn Adapter`, forged signatures under load |
@@ -377,10 +377,10 @@ explicit.
 is ≥94 % per file and 100 % in `ordering.rs`; the misses are `reqwest`'s own error arms,
 `serde_json` failure paths and the `is_empty()` helpers no test calls directly.
 The gate is `--fail-under-lines 95`, so a regression fails CI rather than
-quietly eroding the number. Fuzz target: `normalize`
-(`cargo fuzz run normalize`), seeded with `fuzz/corpus/normalize/`; the outbound
-validators are covered by the property suite instead, because the response
-decoders are private and `StubTransport` already feeds them arbitrary bodies.
+quietly eroding the number. Fuzz targets: `normalize`
+(`cargo fuzz run normalize`), seeded with `fuzz/corpus/normalize/`;
+`outbound_ids`, which covers the public outbound validators; and `subscription`,
+which checks accepted handshake challenges stay bounded decimal.
 
 ## Versioning and semver policy
 
