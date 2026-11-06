@@ -123,8 +123,12 @@ src/matrix_out/testing.rs:impl StubTransport:fn last_request
 src/matrix_out/testing.rs:impl StubTransport:fn new
 src/matrix_out/testing.rs:impl StubTransport:fn push
 src/matrix_out/testing.rs:impl StubTransport:fn push_failure
+src/matrix_out/testing.rs:impl StubTransport:fn push_failure_for
+src/matrix_out/testing.rs:impl StubTransport:fn push_for
 src/matrix_out/testing.rs:impl StubTransport:fn push_json
+src/matrix_out/testing.rs:impl StubTransport:fn push_json_for
 src/matrix_out/testing.rs:impl StubTransport:fn push_status
+src/matrix_out/testing.rs:impl StubTransport:fn push_status_for
 src/matrix_out/testing.rs:impl StubTransport:fn remaining
 src/matrix_out/testing.rs:impl StubTransport:fn requests
 src/matrix_out/testing.rs:struct RecordedRequest

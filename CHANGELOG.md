@@ -23,6 +23,13 @@ carry a `!` in the conventional-commit subject.
   transaction id a second time, so an exhausted transaction-keyed `5xx` cannot
   be reported as an ambiguous write with an unresolvable outcome after being
   retried idempotently. Closes #73.
+- `StubTransport` can route scripted outcomes to the request they were written
+  for instead of popping whichever answer is first in the FIFO queue. The new
+  `push_for`/`push_json_for`/`push_status_for`/`push_failure_for` methods select
+  an outcome by HTTP method and URL fragment before falling back to the queue,
+  so a concurrent test can express "this send fails, that send succeeds"
+  without order dependence, and `RecordedRequest` now carries a 1-based
+  `attempt` index so a retried transaction is directly assertable. Closes #78.
 - `OutboundError::DecodeAfterWrite` now marks a `2xx` whose write response body cannot be decoded as ambiguous and carries the transaction id when there is one; unreadable read responses remain terminal `DecodeRead`. Closes #48.
 
 ### Changed
