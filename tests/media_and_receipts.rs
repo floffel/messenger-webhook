@@ -476,6 +476,21 @@ mod matrix {
     }
 
     #[test]
+    fn reaction_relations_must_be_annotations() {
+        for content in [
+            r#"{"m.relates_to":{"event_id":"$1","key":"\ud83d\udc4d"}}"#,
+            r#"{"m.relates_to":{"rel_type":"m.replace","event_id":"$1","key":"\ud83d\udc4d"}}"#,
+        ] {
+            let payload = format!(
+                r#"{{"type":"m.reaction","event_id":"$2","room_id":"!r:s","sender":"@a:s","content":{content}}}"#
+            );
+            let events = adapter().adapt(payload.as_bytes()).unwrap();
+            assert!(events[0].reaction.is_none(), "{content}");
+            assert_eq!(events[0].provider_type.as_deref(), Some("m.reaction"));
+        }
+    }
+
+    #[test]
     fn annotations_without_a_non_empty_key_are_carried_without_a_reaction() {
         for content in [
             r#"{"m.relates_to":{"rel_type":"m.annotation","event_id":"$1"}}"#,
@@ -488,6 +503,25 @@ mod matrix {
             assert!(events[0].reaction.is_none(), "{content}");
             assert_eq!(events[0].provider_type.as_deref(), Some("m.reaction"));
         }
+    }
+
+    #[test]
+    fn edits_normalise_the_replacement_content() {
+        let payload =
+            br#"{"type":"m.room.message","event_id":"$2","room_id":"!r:s","sender":"@a:s",
+          "content":{"msgtype":"m.text","body":"* cat.jpg",
+                     "m.new_content":{"msgtype":"m.image","body":"cat.jpg","url":"mxc://s/cat"},
+                     "m.relates_to":{"rel_type":"m.replace","event_id":"$1"}}}"#;
+        let events = adapter().adapt(payload).unwrap();
+        assert_eq!(events[0].edit_of.as_deref(), Some("$1"));
+        assert_eq!(events[0].text(), None);
+        assert_eq!(events[0].attachments.len(), 1);
+        assert_eq!(events[0].attachments[0].kind, AttachmentKind::Image);
+        assert_eq!(
+            events[0].attachments[0].filename.as_deref(),
+            Some("cat.jpg")
+        );
+        assert_eq!(events[0].attachments[0].url.as_deref(), Some("mxc://s/cat"));
     }
 
     #[test]
