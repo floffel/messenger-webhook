@@ -25,9 +25,14 @@
 //! Verification is part of the adapter contract, not an afterthought: an
 //! adapter cannot be constructed without a secret, and [`Adapter::verify`]
 //! fails closed on an empty secret, a missing header or an oversized body.
-//! Every provider publishes its own ceiling on a webhook body, so the limit is
-//! a property of the adapter: [`Adapter::max_body_bytes`] returns it, the
-//! shipped adapters report their provider's number, and [`Registry`] enforces
+//! [`Adapter::verify_request`] carries that verification result forward as a
+//! [`VerifiedBody`] proof, and [`Adapter::adapt_verified`] and [`Adapter::handle`]
+//! are the ergonomic paths that keep the proof in the type system. The old
+//! [`Adapter::adapt`] method remains for compatibility, but parsing raw input
+//! with it is only safe after [`Adapter::verify`] has succeeded. Every provider
+//! publishes its own ceiling on a webhook body, so the limit is a property of
+//! the adapter: [`Adapter::max_body_bytes`] returns it, the shipped adapters
+//! report their provider's number, and [`Registry`] enforces
 //! the registered adapter's limit before dispatching to it.
 //!
 //! The size check cannot protect the step that happens before it: the caller
@@ -245,6 +250,64 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
     }
 }
 
+/// A body that an [`Adapter`] has already proven authentic.
+///
+/// The field is private so callers cannot manufacture this proof by wrapping
+/// arbitrary bytes. Obtain it from [`Adapter::verify_request`] or by using
+/// [`Adapter::handle`] when parsing should happen immediately; pass it to
+/// [`Adapter::adapt_verified`] to reach the parser through the safe path.
+///
+/// ```
+/// use messenger_webhook::{
+///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderMethod,
+///     ProviderPayload, Result, VerifiedBody,
+/// };
+///
+/// #[derive(Debug)]
+/// struct Echo;
+///
+/// impl Adapter for Echo {
+///     fn channel(&self) -> Channel {
+///         Channel::WhatsApp
+///     }
+///
+///     fn verify(&self, _headers: &Headers, body: &[u8]) -> Result<()> {
+///         if body.is_empty() {
+///             return Err(Error::Payload("empty body".into()));
+///         }
+///         Ok(())
+///     }
+///
+///     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
+///         Ok(vec![NormalizedMessage::inbound_text(
+///             Channel::WhatsApp,
+///             "event-1",
+///             "self",
+///             String::from_utf8_lossy(payload).into_owned(),
+///         )])
+///     }
+///
+///     fn encode(&self, _message: &OutboundMessage) -> Result<ProviderPayload> {
+///         ProviderPayload::new(
+///             Channel::WhatsApp,
+///             ProviderMethod::Post,
+///             "application/json",
+///             b"{}".to_vec(),
+///         )
+///     }
+/// }
+///
+/// let verified: VerifiedBody<'_> = Echo.verify_request(&Headers::new(), b"ping")?;
+/// let events = Echo.adapt_verified(verified)?;
+/// assert_eq!(events[0].text(), Some("ping"));
+/// # Ok::<(), messenger_webhook::Error>(())
+/// ```
+#[derive(Clone, Copy)]
+#[must_use = "a VerifiedBody only has value when passed to Adapter::adapt_verified"]
+pub struct VerifiedBody<'a> {
+    body: &'a [u8],
+}
+
 /// Turns provider payloads into normalised messages.
 ///
 /// Implementations are `Send + Sync + Debug` (with redacted secrets), hold no
@@ -294,7 +357,7 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 ///     }
 /// }
 ///
-/// let events = Echo.adapt(b"ping")?;
+/// let events = Echo.handle(&Headers::new(), b"ping")?;
 /// assert_eq!(events[0].text(), Some("ping"));
 ///
 /// let payload = Echo.encode(&OutboundMessage::text(
@@ -357,6 +420,47 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     /// `Read::take(MAX_BODY_READ_BYTES)` guard) before calling this method.
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()>;
 
+    /// Verifies `body` and returns proof that the parser may consume it.
+    ///
+    /// Prefer this over a bare [`Adapter::verify`] call when the same request
+    /// will be parsed: the returned [`VerifiedBody`] can only be used with
+    /// [`Adapter::adapt_verified`], so the verify-before-parse ordering is
+    /// carried by the type rather than by a convention.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Adapter::verify`].
+    ///
+    /// ```
+    /// use messenger_webhook::{
+    ///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderMethod,
+    ///     ProviderPayload, Result,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct Auth;
+    ///
+    /// impl Adapter for Auth {
+    ///     fn channel(&self) -> Channel { Channel::WhatsApp }
+    ///     fn verify(&self, _: &Headers, body: &[u8]) -> Result<()> {
+    ///         if body == b"secret" { Ok(()) } else { Err(Error::BadSignature { channel: Channel::WhatsApp }) }
+    ///     }
+    ///     fn adapt(&self, _: &[u8]) -> Result<Vec<NormalizedMessage>> { Ok(Vec::new()) }
+    ///     fn encode(&self, _: &OutboundMessage) -> Result<ProviderPayload> {
+    ///         ProviderPayload::new(Channel::WhatsApp, ProviderMethod::Post, "application/json", b"{}".to_vec())
+    ///     }
+    /// }
+    ///
+    /// assert!(Auth.verify_request(&Headers::new(), b"secret").is_ok());
+    /// assert!(Auth.verify_request(&Headers::new(), b"forged").is_err());
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    fn verify_request<'a>(&self, headers: &Headers, body: &'a [u8]) -> Result<VerifiedBody<'a>> {
+        check_body(body.len(), self.max_body_bytes())?;
+        self.verify(headers, body)?;
+        Ok(VerifiedBody { body })
+    }
+
     /// Parses `body` and returns every event it contains.
     ///
     /// Unknown fields and unknown event types are carried, not rejected. An
@@ -368,6 +472,12 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     /// a body forwarded from another provider — is skipped rather than turned
     /// into an invented event.
     ///
+    /// This method parses the raw input and does not authenticate it. Webhook
+    /// handlers should prefer [`Adapter::handle`] or
+    /// [`Adapter::verify_request`] plus [`Adapter::adapt_verified`]. Callers
+    /// that use this method directly must call [`Adapter::verify`] first and
+    /// treat a failed verification as terminal.
+    ///
     /// The [`Adapter::max_body_bytes`] ceiling is checked before JSON parsing.
     /// [`Registry`] enforces it before dispatching to a custom adapter.
     ///
@@ -377,6 +487,98 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     /// [`Error::Payload`] when it is valid JSON but not the provider's shape,
     /// and [`Error::BodyTooLarge`] for oversized bodies.
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>>;
+
+    /// Parses a [`VerifiedBody`] and returns every event it contains.
+    ///
+    /// This is the parser side of the type-enforced path: callers cannot call
+    /// it with raw bytes, only with proof returned by
+    /// [`Adapter::verify_request`] or produced inside [`Adapter::handle`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Adapter::adapt`].
+    ///
+    /// ```
+    /// use messenger_webhook::{
+    ///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderMethod,
+    ///     ProviderPayload, Result,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct Echo;
+    ///
+    /// impl Adapter for Echo {
+    ///     fn channel(&self) -> Channel { Channel::WhatsApp }
+    ///     fn verify(&self, _: &Headers, _: &[u8]) -> Result<()> { Ok(()) }
+    ///     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
+    ///         Ok(vec![NormalizedMessage::inbound_text(
+    ///             Channel::WhatsApp,
+    ///             "event-1",
+    ///             "self",
+    ///             String::from_utf8_lossy(payload).into_owned(),
+    ///         )])
+    ///     }
+    ///     fn encode(&self, _: &OutboundMessage) -> Result<ProviderPayload> {
+    ///         ProviderPayload::new(Channel::WhatsApp, ProviderMethod::Post, "application/json", b"{}".to_vec())
+    ///     }
+    /// }
+    ///
+    /// let verified = Echo.verify_request(&Headers::new(), b"ping")?;
+    /// let events = Echo.adapt_verified(verified)?;
+    /// assert_eq!(events[0].text(), Some("ping"));
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    fn adapt_verified(&self, body: VerifiedBody<'_>) -> Result<Vec<NormalizedMessage>> {
+        check_body(body.body.len(), self.max_body_bytes())?;
+        self.adapt(body.body)
+    }
+
+    /// Verifies and parses `body` in one call.
+    ///
+    /// This is the safe default for an inbound webhook: the parser cannot run
+    /// before the verifier succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors from [`Adapter::verify_request`] or
+    /// [`Adapter::adapt_verified`].
+    ///
+    /// ```
+    /// use messenger_webhook::{
+    ///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderMethod,
+    ///     ProviderPayload, Result,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct Auth;
+    ///
+    /// impl Adapter for Auth {
+    ///     fn channel(&self) -> Channel { Channel::WhatsApp }
+    ///     fn verify(&self, _: &Headers, body: &[u8]) -> Result<()> {
+    ///         if body == b"secret" { Ok(()) } else { Err(Error::BadSignature { channel: Channel::WhatsApp }) }
+    ///     }
+    ///     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
+    ///         Ok(vec![NormalizedMessage::inbound_text(
+    ///             Channel::WhatsApp,
+    ///             "event-1",
+    ///             "self",
+    ///             String::from_utf8_lossy(payload).into_owned(),
+    ///         )])
+    ///     }
+    ///     fn encode(&self, _: &OutboundMessage) -> Result<ProviderPayload> {
+    ///         ProviderPayload::new(Channel::WhatsApp, ProviderMethod::Post, "application/json", b"{}".to_vec())
+    ///     }
+    /// }
+    ///
+    /// let events = Auth.handle(&Headers::new(), b"secret")?;
+    /// assert_eq!(events[0].text(), Some("secret"));
+    /// assert!(Auth.handle(&Headers::new(), b"forged").is_err());
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    fn handle(&self, headers: &Headers, body: &[u8]) -> Result<Vec<NormalizedMessage>> {
+        let body = self.verify_request(headers, body)?;
+        self.adapt_verified(body)
+    }
 
     /// Encodes `message` into the provider's outbound schema.
     ///
@@ -583,10 +785,78 @@ pub(crate) fn check_body(actual: usize, limit: usize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_body, Error, MAX_BODY_BYTES};
+    use super::{
+        check_body, Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage,
+        ProviderPayload, MAX_BODY_BYTES,
+    };
+
+    #[derive(Debug)]
+    struct ProofAdapter;
+
+    impl Adapter for ProofAdapter {
+        fn channel(&self) -> Channel {
+            Channel::WhatsApp
+        }
+
+        fn verify(&self, _headers: &Headers, body: &[u8]) -> super::Result<()> {
+            if body == b"authentic" {
+                Ok(())
+            } else {
+                Err(Error::BadSignature {
+                    channel: Channel::WhatsApp,
+                })
+            }
+        }
+
+        fn adapt(&self, payload: &[u8]) -> super::Result<Vec<NormalizedMessage>> {
+            Ok(vec![NormalizedMessage::inbound_text(
+                Channel::WhatsApp,
+                "event-1",
+                "self",
+                String::from_utf8_lossy(payload).into_owned(),
+            )])
+        }
+
+        fn encode(&self, _message: &OutboundMessage) -> super::Result<ProviderPayload> {
+            ProviderPayload::new(
+                Channel::WhatsApp,
+                super::ProviderMethod::Post,
+                "application/json",
+                b"{}".to_vec(),
+            )
+        }
+    }
+
+    #[derive(Debug)]
+    struct SmallProofAdapter;
+
+    impl Adapter for SmallProofAdapter {
+        fn channel(&self) -> Channel {
+            Channel::other("small-proof").expect("small-proof is a valid channel")
+        }
+
+        fn max_body_bytes(&self) -> usize {
+            8
+        }
+
+        fn verify(&self, _headers: &Headers, _body: &[u8]) -> super::Result<()> {
+            Ok(())
+        }
+
+        fn adapt(&self, _payload: &[u8]) -> super::Result<Vec<NormalizedMessage>> {
+            Ok(Vec::new())
+        }
+
+        fn encode(&self, _message: &OutboundMessage) -> super::Result<ProviderPayload> {
+            Err(Error::InvalidMessage {
+                channel: self.channel(),
+                reason: "not used in this test".to_owned(),
+            })
+        }
+    }
 
     #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
-    use super::{is_graphic, recipient, utf16_len, Channel, OutboundMessage, MAX_RECIPIENT_BYTES};
+    use super::{is_graphic, recipient, utf16_len, MAX_RECIPIENT_BYTES};
 
     #[test]
     fn check_body_accepts_at_limit_and_rejects_above_it() {
@@ -607,6 +877,66 @@ mod tests {
             Err(Error::BodyTooLarge {
                 limit: 10,
                 actual: 11,
+            })
+        ));
+    }
+
+    #[test]
+    fn verified_body_path_requires_verification_before_parsing() {
+        let adapter = ProofAdapter;
+        let verified = adapter
+            .verify_request(&Headers::new(), b"authentic")
+            .expect("authentic body verifies");
+        let events = adapter
+            .adapt_verified(verified)
+            .expect("verified body parses");
+        assert_eq!(events[0].text(), Some("authentic"));
+
+        assert!(matches!(
+            adapter.verify_request(&Headers::new(), b"forged"),
+            Err(Error::BadSignature {
+                channel: Channel::WhatsApp,
+            })
+        ));
+        assert!(matches!(
+            adapter.handle(&Headers::new(), b"forged"),
+            Err(Error::BadSignature {
+                channel: Channel::WhatsApp,
+            })
+        ));
+        assert_eq!(
+            adapter
+                .handle(&Headers::new(), b"authentic")
+                .expect("handle verifies then parses")[0]
+                .text(),
+            Some("authentic")
+        );
+    }
+
+    #[test]
+    fn verified_body_path_enforces_the_adapter_ceiling() {
+        let adapter = SmallProofAdapter;
+        let at_limit = b"12345678";
+        let over_limit = b"123456789";
+
+        assert!(adapter.verify_request(&Headers::new(), at_limit).is_ok());
+        assert!(matches!(
+            adapter.verify_request(&Headers::new(), over_limit),
+            Err(Error::BodyTooLarge {
+                limit: 8,
+                actual: 9,
+            })
+        ));
+
+        let verified = adapter
+            .verify_request(&Headers::new(), at_limit)
+            .expect("at-limit body verifies");
+        assert!(adapter.adapt_verified(verified).is_ok());
+        assert!(matches!(
+            adapter.handle(&Headers::new(), over_limit),
+            Err(Error::BodyTooLarge {
+                limit: 8,
+                actual: 9,
             })
         ));
     }

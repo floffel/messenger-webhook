@@ -2,8 +2,12 @@
 //!
 //! Most failures reported by the shipped adapters are **terminal**: the caller
 //! has to fix the payload, the headers or the configuration before retrying.
-//! Signature and size failures fail closed, so a request that cannot be proven
-//! authentic never reaches a parser.
+//! Signature and size failures fail closed when callers use the type-enforced
+//! path ([`crate::Adapter::handle`] or [`crate::Adapter::verify_request`] plus
+//! [`crate::Adapter::adapt_verified`]); a request that cannot be proven
+//! authentic never reaches a parser there. The legacy [`crate::Adapter::verify`]
+//! and [`crate::Adapter::adapt`] methods are separate calls, so callers using
+//! them directly must call `verify` first and treat a failure as terminal.
 //!
 //! Third-party [`crate::Adapter`] implementations can also report transport and
 //! delivery outcomes through [`Error::Transport`] and [`Error::Ambiguous`].

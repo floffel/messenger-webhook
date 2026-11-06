@@ -30,6 +30,7 @@ src/lib.rs:mod signature
 src/lib.rs:mod subscription
 src/lib.rs:mod telegram
 src/lib.rs:mod whatsapp
+src/lib.rs:struct VerifiedBody
 src/lib.rs:trait Adapter
 src/lib.rs:use error::{Error,LimitUnit,Result}
 src/lib.rs:use headers::Headers
