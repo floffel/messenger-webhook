@@ -349,8 +349,11 @@ explicit.
   exactly; payloads tolerate unknown fields, unknown types, numeric-or-string
   ids, missing optionals and reordered keys.
 - `#![forbid(unsafe_code)]`, `#![deny(missing_docs)]`, no `unwrap`/`panic!` in
-  library code, `#[non_exhaustive]` error enum, every error terminal (so
-  `is_retryable()` is honestly `false`).
+  library code, `#[non_exhaustive]` error enum, and retry safety explicit:
+  shipped adapter errors are terminal, `Error::Transport` is retryable only
+  when nothing was applied, and `Error::Ambiguous` says the provider may have
+  applied the write and carries the idempotency key to repeat with when one
+  exists.
 
 ## Tests
 

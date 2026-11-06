@@ -41,6 +41,11 @@ carry a `!` in the conventional-commit subject.
 
 ### Added
 
+- **Ambiguous adapter outcomes are explicit.** `Error` now has
+  `Transport` and `Ambiguous` variants for adapter implementations with their
+  own transports. `Error::is_retryable()` is true only for `Transport`, while
+  `Error::is_ambiguous()` marks a request that may have been applied and
+  `Error::idempotency_key()` exposes the key to repeat with. Closes #21.
 - **Meta app-secret rotation windows.** `signature::verify_meta_any` verifies a
   Meta webhook signature against every configured candidate secret, and
   `WhatsAppAdapter::with_secret_rotation` lets a caller hold the previous and

@@ -484,7 +484,40 @@ fn bounded_body_read_api() {
 
 #[test]
 fn every_error_variant_renders_without_panicking() {
-    let errors = [
+    let errors = terminal_error_variants()
+        .into_iter()
+        .map(|error| (error, false, false))
+        .chain([
+            (
+                Error::Transport {
+                    channel: Channel::Messenger,
+                    reason: "dns failure".to_owned(),
+                },
+                true,
+                false,
+            ),
+            (
+                Error::Ambiguous {
+                    channel: Channel::Messenger,
+                    idempotency_key: Some(IdempotencyKey::new("txn-1").unwrap()),
+                    reason: "read timeout".to_owned(),
+                },
+                false,
+                true,
+            ),
+        ]);
+    for (error, retryable, ambiguous) in errors {
+        let rendered = error.to_string();
+        assert_ne!(rendered.len(), 0);
+        assert_eq!(error.is_retryable(), retryable, "{error:?}");
+        assert_eq!(error.is_ambiguous(), ambiguous, "{error:?}");
+        assert!(!(error.is_retryable() && error.is_ambiguous()), "{error:?}");
+        assert!(format!("{error:?}").contains(char::is_alphabetic));
+    }
+}
+
+fn terminal_error_variants() -> Vec<Error> {
+    vec![
         Error::Payload("not json".to_owned()),
         Error::Json {
             source: serde_json::from_slice::<serde_json::Value>(b"not json").unwrap_err(),
@@ -500,6 +533,10 @@ fn every_error_variant_renders_without_panicking() {
         Error::MissingSecret {
             channel: Channel::Telegram,
         },
+        Error::WeakSecret {
+            actual: 15,
+            minimum: 16,
+        },
         Error::MissingVerificationHeader {
             channel: Channel::Matrix,
             header: "authorization",
@@ -512,6 +549,10 @@ fn every_error_variant_renders_without_panicking() {
         Error::MalformedVerificationHeader {
             channel: Channel::WhatsApp,
             reason: "expected sha256=<hex>".to_owned(),
+        },
+        Error::MalformedVerificationRequest {
+            channel: Channel::WhatsApp,
+            reason: "hub.mode is not subscribe".to_owned(),
         },
         Error::BadSignature {
             channel: Channel::WhatsApp,
@@ -532,18 +573,36 @@ fn every_error_variant_renders_without_panicking() {
         Error::InvalidIdempotencyKey {
             reason: "empty".to_owned(),
         },
+        Error::InvalidHeader {
+            reason: "header name is empty".to_owned(),
+        },
         Error::InvalidChannelName {
+            reason: "empty".to_owned(),
+        },
+        Error::InvalidReactionKey {
             reason: "empty".to_owned(),
         },
         Error::UnknownChannel(Channel::other("signal").unwrap()),
         Error::ChannelAlreadyRegistered(Channel::Telegram),
-    ];
-    for error in errors {
-        let rendered = error.to_string();
-        assert_ne!(rendered.len(), 0);
-        assert!(!error.is_retryable(), "every error here is terminal");
-        assert!(format!("{error:?}").contains(char::is_alphabetic));
-    }
+    ]
+}
+
+#[test]
+fn ambiguous_error_exposes_its_idempotency_key() {
+    let key = IdempotencyKey::new("txn-1").unwrap();
+    let ambiguous = Error::Ambiguous {
+        channel: Channel::Matrix,
+        idempotency_key: Some(key.clone()),
+        reason: "timeout".to_owned(),
+    };
+    let transport = Error::Transport {
+        channel: Channel::Matrix,
+        reason: "dns failure".to_owned(),
+    };
+
+    assert_eq!(ambiguous.idempotency_key(), Some(&key));
+    assert!(ambiguous.to_string().contains("txn-1"));
+    assert!(transport.idempotency_key().is_none());
 }
 
 #[test]
