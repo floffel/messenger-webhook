@@ -60,6 +60,54 @@ pub enum Error {
     /// any hashing or deserialisation happens. When the body is read through
     /// [`crate::read_body`], `actual` is at least the limit and is capped at
     /// [`crate::MAX_BODY_READ_BYTES`].
+    ///
+    /// ```
+    /// use messenger_webhook::{
+    ///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderMethod,
+    ///     ProviderPayload, Registry, Result, MAX_BODY_BYTES,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct AcceptAll;
+    ///
+    /// impl Adapter for AcceptAll {
+    ///     fn channel(&self) -> Channel { Channel::WhatsApp }
+    ///     fn verify(&self, _: &Headers, _: &[u8]) -> Result<()> { Ok(()) }
+    ///     fn adapt(&self, _: &[u8]) -> Result<Vec<NormalizedMessage>> { Ok(Vec::new()) }
+    ///     fn encode(&self, _: &OutboundMessage) -> Result<ProviderPayload> {
+    ///         ProviderPayload::new(
+    ///             Channel::WhatsApp,
+    ///             ProviderMethod::Post,
+    ///             "application/json",
+    ///             b"{}".to_vec(),
+    ///         )
+    ///     }
+    /// }
+    ///
+    /// let mut registry = Registry::new();
+    /// registry.register(AcceptAll);
+    ///
+    /// let at_limit = vec![b' '; MAX_BODY_BYTES];
+    /// assert!(registry.verify(&Channel::WhatsApp, &Headers::new(), &at_limit).is_ok());
+    /// assert!(registry.adapt(&Channel::WhatsApp, &at_limit).is_ok());
+    ///
+    /// let over_limit = vec![b' '; MAX_BODY_BYTES + 1];
+    /// assert!(matches!(
+    ///     registry.verify(&Channel::WhatsApp, &Headers::new(), &over_limit),
+    ///     Err(Error::BodyTooLarge {
+    ///         limit: MAX_BODY_BYTES,
+    ///         actual,
+    ///     }) if actual == MAX_BODY_BYTES + 1
+    /// ));
+    /// assert!(matches!(
+    ///     registry.adapt(&Channel::WhatsApp, &over_limit),
+    ///     Err(Error::BodyTooLarge {
+    ///         limit: MAX_BODY_BYTES,
+    ///         actual,
+    ///     }) if actual == MAX_BODY_BYTES + 1
+    /// ));
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
     #[error("payload is {actual} bytes, over the {limit} byte limit")]
     BodyTooLarge {
         /// Configured ceiling in bytes.
@@ -186,6 +234,41 @@ pub enum Error {
     },
 
     /// The message is longer than the provider accepts.
+    ///
+    /// ```
+    /// # #[cfg(feature = "telegram")]
+    /// # fn demo() -> Result<(), messenger_webhook::Error> {
+    /// use messenger_webhook::{
+    ///     telegram::MAX_TEXT_UTF16, Adapter, Channel, Error, LimitUnit, OutboundMessage,
+    ///     TelegramAdapter,
+    /// };
+    ///
+    /// let adapter = TelegramAdapter::new("bot-secret-bot-secret")?;
+    /// let at_limit = OutboundMessage::text(
+    ///     Channel::Telegram,
+    ///     "-1001",
+    ///     "a".repeat(MAX_TEXT_UTF16),
+    /// );
+    /// assert!(adapter.encode(&at_limit).is_ok());
+    ///
+    /// let over_limit = OutboundMessage::text(
+    ///     Channel::Telegram,
+    ///     "-1001",
+    ///     "a".repeat(MAX_TEXT_UTF16 + 1),
+    /// );
+    /// assert!(matches!(
+    ///     adapter.encode(&over_limit),
+    ///     Err(Error::MessageTooLong {
+    ///         channel: Channel::Telegram,
+    ///         limit: MAX_TEXT_UTF16,
+    ///         actual,
+    ///         unit: LimitUnit::Utf16Units,
+    ///     }) if actual == MAX_TEXT_UTF16 + 1
+    /// ));
+    /// # Ok(())
+    /// # }
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
     #[error("{channel} message is {actual} {unit} long, the limit is {limit}")]
     MessageTooLong {
         /// Target channel.
@@ -270,3 +353,22 @@ impl From<hmac::digest::InvalidLength> for Error {
 
 /// Convenience alias for the crate's [`enum@Error`].
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+    use crate::{check_body, MAX_BODY_BYTES};
+
+    #[test]
+    fn body_too_large_boundary_matches_the_variant_contract() {
+        assert!(check_body(MAX_BODY_BYTES - 1).is_ok());
+        assert!(check_body(MAX_BODY_BYTES).is_ok());
+        assert!(matches!(
+            check_body(MAX_BODY_BYTES + 1),
+            Err(Error::BodyTooLarge {
+                limit: MAX_BODY_BYTES,
+                actual,
+            }) if actual == MAX_BODY_BYTES + 1
+        ));
+    }
+}
