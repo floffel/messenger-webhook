@@ -1,5 +1,14 @@
+[graph]
+# Always audit optional dependencies too. Without this block cargo-deny
+# resolves default features only, so default-off features such as
+# `matrix-out` never enter the advisory graph.
+all-features = true
+
 [advisories]
 version = 2
+# An ignore that matches no crate is the shape of the blind spot this config
+# exists to prevent, so make unused advisory ignores fatal.
+unused-ignored-advisory = "deny"
 yanked = "deny"
 
 [licenses]

@@ -378,6 +378,7 @@ explicit.
 | `tests/matrix_out_properties.rs` | proptest: txn-id grammar and uniqueness, total retry classification, "no non-idempotent request retried after 5xx", backoff bounds, `mxc://` grammar, every attempt of one send sharing one txn id |
 | `tests/matrix_out_concurrency.rs` | 32 tasks over one client: unique txn ids, one in-flight send per room, two rooms in parallel, retries not holding the gate |
 | `tests/matrix_out_http.rs` | the `reqwest` transport against a loopback server: token header, JSON body, media bytes, `5xx`, closed port (connect) and timeout (ambiguous) |
+| `tests/deny_config.rs` | the cargo-deny config keeps advisory checks on the all-features graph and rejects stale ignores |
 | `tests/changelog.rs` | the newest changelog heading equals `Cargo.toml`, sections are newest-first, no duplicates and none empty — a version bump without an entry fails the build |
 
 **Coverage: 98.5 % of lines** (`cargo llvm-cov --all-features`, 3941 lines,
