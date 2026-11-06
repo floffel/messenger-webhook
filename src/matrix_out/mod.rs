@@ -79,10 +79,11 @@ pub mod testing;
 pub mod transport;
 pub mod types;
 
-use std::fmt::{self, Write as _};
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde_json::{json, Value};
 use url::Url;
 
@@ -1379,7 +1380,7 @@ impl MatrixClient {
                 let mut url = format!("{base}/_matrix/media/v3/upload");
                 if let Some(filename) = media.filename {
                     url.push_str("?filename=");
-                    url.push_str(&encode_path_segment(filename));
+                    url.push_str(&encode_query_value(filename));
                 }
                 self.authorized(Method::Post, url)
                     .with_header("content-type", media.content_type)
@@ -1446,21 +1447,49 @@ fn check_content(content: &Value) -> OutboundResult<Vec<u8>> {
 /// RFC 3986 unreserved set is escaped, which is what the Matrix URL grammar
 /// expects of a path segment.
 fn encode_path_segment(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for byte in raw.as_bytes() {
-        match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(char::from(*byte));
-            }
-            _ => {
-                // Writing into the existing buffer avoids one allocation per
-                // escaped byte; the write to a `String` cannot fail.
-                let _ = write!(out, "%{byte:02X}");
-            }
-        }
-    }
-    out
+    utf8_percent_encode(raw, URL_COMPONENT).to_string()
 }
+
+/// Percent-encodes one URL query value.
+///
+/// Query values use the same unreserved-only set as path segments, so query
+/// delimiters such as `&` and `=` in a filename cannot reshape the URL.
+fn encode_query_value(raw: &str) -> String {
+    utf8_percent_encode(raw, URL_COMPONENT).to_string()
+}
+
+/// The RFC 3986 unreserved bytes a URL path segment or query value may carry
+/// unchanged.
+const URL_COMPONENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'!')
+    .add(b'"')
+    .add(b'#')
+    .add(b'$')
+    .add(b'%')
+    .add(b'&')
+    .add(b'\'')
+    .add(b'(')
+    .add(b')')
+    .add(b'*')
+    .add(b'+')
+    .add(b',')
+    .add(b'/')
+    .add(b':')
+    .add(b';')
+    .add(b'<')
+    .add(b'=')
+    .add(b'>')
+    .add(b'?')
+    .add(b'@')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}');
 
 /// The `errcode` and `error` of a Matrix error body, with the raw body as the
 /// fallback and a bound on how much of it is echoed.
@@ -1635,6 +1664,8 @@ fn decode_whoami(response: &Response) -> OutboundResult<String> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     #[test]
@@ -1651,6 +1682,7 @@ mod tests {
         assert_eq!(encode_path_segment("plain-1_2.3~"), "plain-1_2.3~");
         assert_eq!(encode_path_segment("ä"), "%C3%A4");
         assert_eq!(encode_path_segment(""), "");
+        assert_eq!(encode_path_segment("a/b?c=d&e+f"), "a%2Fb%3Fc%3Dd%26e%2Bf");
         // Everything printable survives a round trip through the encoder as
         // unreserved bytes only.
         let encoded = encode_path_segment("a b/c?d#e%f");
@@ -1658,6 +1690,35 @@ mod tests {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric()
                 || matches!(byte, b'%' | b'-' | b'_' | b'.' | b'~')));
+    }
+
+    #[test]
+    fn query_values_escape_query_delimiters_but_keep_the_path_unreserved_set() {
+        assert_eq!(
+            encode_query_value("Bild München & plan.png"),
+            "Bild%20M%C3%BCnchen%20%26%20plan.png"
+        );
+        assert_eq!(
+            encode_query_value("a/b?c=d&e+f#g%h"),
+            "a%2Fb%3Fc%3Dd%26e%2Bf%23g%25h"
+        );
+        assert_eq!(
+            encode_query_value("name=green&body=hello"),
+            "name%3Dgreen%26body%3Dhello"
+        );
+        assert_eq!(encode_query_value("100% done"), "100%25%20done");
+        assert_eq!(encode_query_value("plain-1_2.3~"), "plain-1_2.3~");
+    }
+
+    proptest! {
+        #[test]
+        fn encoded_url_values_round_trip(raw in "\\PC{0,200}") {
+            let encoded = encode_query_value(raw.as_str());
+            let decoded = percent_encoding::percent_decode_str(&encoded)
+                .decode_utf8()
+                .expect("encoded input is UTF-8");
+            prop_assert_eq!(decoded.as_ref(), raw.as_str());
+        }
     }
 
     #[test]

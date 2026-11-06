@@ -22,7 +22,14 @@ matrix = []
 # Default-off: a Matrix outbound client drags in an HTTP stack (reqwest) and a
 # runtime (tokio's sync + time primitives). A webhook-only consumer must not
 # inherit either, so the whole `matrix_out` module sits behind this feature.
-matrix-out = ["dep:reqwest", "dep:tokio", "dep:url", "dep:uuid", "dep:exponential-backoff"]
+matrix-out = [
+    "dep:exponential-backoff",
+    "dep:percent-encoding",
+    "dep:reqwest",
+    "dep:tokio",
+    "dep:url",
+    "dep:uuid",
+]
 # Default-off: this mirrors a downstream consumer enabling `serde_json`'s
 # `preserve_order` feature. The crate's synthetic ids stay stable either way,
 # but CI must build and test the `IndexMap` implementation too.
@@ -69,6 +76,11 @@ exponential-backoff = { version = "2.1.1", optional = true }
 # `char::is_whitespace` alone cannot (`Cf` code points are not
 # whitespace). Pure data table, no code, `no_std`, Apache-2.0.
 unicode-general-category = "1.1.0"
+# Percent-encodes Matrix URL path segments and query values. Already in the
+# tree through reqwest/form_urlencoded; direct because rustc needs the path.
+percent-encoding = { version = "2.3.2", default-features = false, features = [
+    "alloc",
+], optional = true }
 
 [dev-dependencies]
 proptest = "1"
