@@ -107,9 +107,12 @@ proptest! {
                     }
                 }
                 Err(error) => {
-                    // Only these two shapes are legitimate rejections.
+                    // Only these three shapes are legitimate rejections.
                     prop_assert!(
-                        matches!(error, Error::Payload(_) | Error::BodyTooLarge { .. }),
+                        matches!(
+                            error,
+                            Error::Payload(_) | Error::Json { .. } | Error::BodyTooLarge { .. }
+                        ),
                         "unexpected error: {error:?}"
                     );
                 }
@@ -136,7 +139,7 @@ proptest! {
                         let _ = adapter.encode(&OutboundMessage::text(event.channel.clone(), event.conversation_id.clone(), event.text().unwrap_or_default()));
                     }
                 }
-                Err(Error::Payload(_)) => {}
+                Err(Error::Payload(_) | Error::Json { .. }) => {}
                 Err(other) => prop_assert!(false, "unexpected error: {other:?}"),
             }
         }

@@ -261,7 +261,7 @@ fn handle_verifies_before_it_parses() {
             .unwrap();
         assert!(matches!(
             registry.handle(&Channel::WhatsApp, &broken, b"nope"),
-            Err(Error::Payload(_))
+            Err(Error::Json { .. })
         ));
     }
 }

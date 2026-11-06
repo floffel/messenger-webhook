@@ -48,9 +48,30 @@ impl std::fmt::Display for LimitUnit {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// The body is not JSON, or not the JSON shape the provider sends.
+    /// The body is valid JSON, but not the JSON shape the provider sends.
     #[error("invalid payload: {0}")]
     Payload(String),
+
+    /// The body is not valid JSON.
+    ///
+    /// The underlying [`serde_json::Error`] is preserved as the source, so a
+    /// caller can inspect its category, line and column instead of having to
+    /// parse the error message.
+    ///
+    /// ```
+    /// use messenger_webhook::Error;
+    ///
+    /// let error = serde_json::from_slice::<serde_json::Value>(b"not json").unwrap_err();
+    /// let error = Error::from(error);
+    /// assert!(matches!(error, Error::Json { .. }));
+    /// assert!(std::error::Error::source(&error).is_some());
+    /// ```
+    #[error("invalid JSON: {source}")]
+    Json {
+        /// The underlying parser or serializer failure.
+        #[from]
+        source: serde_json::Error,
+    },
 
     /// Reading the request body failed before it could be verified.
     #[error("could not read request body: {0}")]
@@ -389,7 +410,7 @@ impl Error {
     /// ```
     /// use messenger_webhook::Error;
     ///
-    /// assert!(!Error::Payload("not json".into()).is_retryable());
+    /// assert!(!Error::Payload("not a JSON object".into()).is_retryable());
     /// ```
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
