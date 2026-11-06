@@ -192,7 +192,12 @@ What the crate does with it:
   canonical decimal digits can therefore be reflected, so markup, quotes, angle
   brackets, backslashes or CR/LF never reach the caller's response body.
 - An empty dashboard token fails closed (`Error::MissingSecret`) before the query
-  is even parsed, because comparing against an unset token accepts anyone.
+  is even parsed, because comparing against an unset token accepts anyone. This
+  case is server misconfiguration and should be answered with `500`, not `403`,
+  so Meta keeps retrying while the operator fixes the deployment;
+  `Error::is_misconfiguration()` exposes that classification. Malformed
+  verification requests and bad signatures remain client rejections and should
+  be answered with `403`.
 
 Pinned by `tests/subscription.rs` (29 tests, two of them proptest properties:
 "challenge returned exactly when the token matches" and "arbitrary query strings

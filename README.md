@@ -315,7 +315,10 @@ A wrong token, a missing parameter, a parameter that appears with conflicting
 values or a challenge that is not printable ASCII is a typed error, and the
 answer is `403`. Repeated parameters with the same decoded value are accepted,
 including the dotted/PHP spellings. The token is compared in constant time, and
-an unset token fails closed before the query is parsed.
+an unset token fails closed before the query is parsed; that case is server
+misconfiguration and should be answered with `500` so Meta keeps retrying while
+the deployment is fixed. `Error::is_misconfiguration()` makes that split
+explicit.
 
 ## Security model
 

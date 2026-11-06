@@ -118,6 +118,10 @@ pub enum Error {
 
     /// The adapter has no verification secret and therefore refuses to accept
     /// anything (fail closed).
+    ///
+    /// This is server misconfiguration, not a rejection of the request: an HTTP
+    /// handler answering a provider subscription handshake should return `500`
+    /// so the provider keeps retrying while the operator fixes the deployment.
     #[error("{channel} adapter has no verification secret configured (failing closed)")]
     MissingSecret {
         /// Channel whose adapter is misconfigured.
@@ -348,6 +352,35 @@ pub enum Error {
 }
 
 impl Error {
+    /// Whether the failure is a server-side misconfiguration.
+    ///
+    /// Webhook HTTP handlers usually split verification failures into two
+    /// buckets: a request that cannot be authenticated from the provider is a
+    /// client rejection, while a missing credential is the endpoint operator's
+    /// fault. Return `500` for `true`, so the provider keeps retrying while the
+    /// configuration is fixed; return `403` for a subscription request when
+    /// this is `false`.
+    ///
+    /// Currently true only for [`Error::MissingSecret`].
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, Error};
+    ///
+    /// let error = Error::MissingSecret {
+    ///     channel: Channel::WhatsApp,
+    /// };
+    /// assert!(error.is_misconfiguration());
+    ///
+    /// let error = Error::BadSignature {
+    ///     channel: Channel::WhatsApp,
+    /// };
+    /// assert!(!error.is_misconfiguration());
+    /// ```
+    #[must_use]
+    pub const fn is_misconfiguration(&self) -> bool {
+        matches!(self, Self::MissingSecret { .. })
+    }
+
     /// Whether the same request could succeed if it were retried unchanged.
     ///
     /// Always `false`: every error here is terminal and needs a fix in the
