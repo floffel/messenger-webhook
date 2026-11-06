@@ -963,8 +963,8 @@ pub struct NormalizedMessage {
     pub interactive_reply: Option<InteractiveReply>,
     /// Formatted runs inside [`Self::text`], in provider order.
     ///
-    /// Offsets are UTF-8 byte offsets into `text`, so `text[start..end]` is the
-    /// run the span describes. A provider entity whose offsets cannot be
+    /// Offsets are UTF-8 byte offsets into `text`, so `text[start()..end()]` is
+    /// the run the span describes. A provider entity whose offsets cannot be
     /// expressed that way is dropped rather than repaired — see
     /// [`TextSpan::new`](crate::TextSpan::new).
     spans: Vec<TextSpan>,
@@ -1417,7 +1417,7 @@ impl OutboundMessage {
     /// let span = TextSpan::new("Hallo Welt", 0, 5, TextFormat::Italic)?;
     /// let message = OutboundMessage::text(Channel::Telegram, "-1001", "Hallo Welt")
     ///     .with_spans([span]);
-    /// assert_eq!(message.spans()[0].format, TextFormat::Italic);
+    /// assert_eq!(message.spans()[0].format(), &TextFormat::Italic);
     /// # Ok::<(), messenger_webhook::SpanError>(())
     /// ```
     #[must_use]
@@ -1435,7 +1435,7 @@ impl OutboundMessage {
     /// let message = OutboundMessage::text(Channel::Telegram, "-1001", "")
     ///     .with_text_and_spans("Hallo Welt", [span]);
     /// assert_eq!(message.text.as_deref(), Some("Hallo Welt"));
-    /// assert_eq!(message.spans()[0].end, 10);
+    /// assert_eq!(message.spans()[0].end(), 10);
     /// # Ok::<(), messenger_webhook::SpanError>(())
     /// ```
     #[must_use]

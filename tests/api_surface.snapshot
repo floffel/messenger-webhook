@@ -284,8 +284,11 @@ src/rich.rs:enum SpanError
 src/rich.rs:enum TextFormat
 src/rich.rs:impl TextFormat:fn as_str
 src/rich.rs:impl TextSpan:fn covers
+src/rich.rs:impl TextSpan:fn end
+src/rich.rs:impl TextSpan:fn format
 src/rich.rs:impl TextSpan:fn new
 src/rich.rs:impl TextSpan:fn slice
+src/rich.rs:impl TextSpan:fn start
 src/rich.rs:struct TextSpan
 src/secret.rs:const MIN_SECRET_BYTES
 src/secret.rs:impl Secret:fn expose_secret

@@ -70,6 +70,10 @@ carry a `!` in the conventional-commit subject.
 
 ### Breaking
 
+- **`TextSpan` now enforces its constructor-only invariant in the type.** The
+  span fields are private and exposed through `start()`, `end()` and `format()`
+  accessors, so downstream crates cannot build impossible ranges or formats by
+  struct literal. Closes #101.
 - **`subscription::meta_subscription_challenge` takes the channel.** The
   helper now takes the channel whose subscription is being answered as its
   first argument instead of hard-coding `Channel::WhatsApp` in `MissingSecret`,

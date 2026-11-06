@@ -10,8 +10,8 @@
 //!
 //! * offsets are **UTF-8 byte offsets** into [`NormalizedMessage::text`](crate::NormalizedMessage::text)
 //!   (`start` inclusive, `end` exclusive), never UTF-16 code units and never
-//!   character indices, so `&text[span.start..span.end]` is always the run the
-//!   span describes;
+//!   character indices, so `&text[span.start()..span.end()]` is always the run
+//!   the span describes;
 //! * a span can only be built through [`TextSpan::new`], which rejects empty,
 //!   inverted, out-of-bounds and non-`char`-boundary ranges. A provider entity
 //!   that cannot be expressed that way is dropped rather than clamped, so no
@@ -188,19 +188,30 @@ impl TextFormat {
 ///
 /// let text = "plain italic plain";
 /// let span = TextSpan::new(text, 6, 12, TextFormat::Italic)?;
-/// assert_eq!(span.start, 6);
-/// assert_eq!(span.end, 12);
+/// assert_eq!(span.start(), 6);
+/// assert_eq!(span.end(), 12);
+/// assert_eq!(span.format(), &TextFormat::Italic);
 /// assert_eq!(span.slice(text), Some("italic"));
 /// # Ok::<(), messenger_webhook::SpanError>(())
 /// ```
+///
+/// Spans cannot be built with a struct literal outside this crate:
+///
+/// ```compile_fail
+/// use messenger_webhook::{TextFormat, TextSpan};
+///
+/// let _ = TextSpan {
+///     start: 0,
+///     end: 1,
+///     format: TextFormat::Bold,
+/// };
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TextSpan {
-    /// Byte offset of the first byte of the run, inclusive.
-    pub start: usize,
-    /// Byte offset one past the last byte of the run, exclusive.
-    pub end: usize,
-    /// Attribute that applies to the run.
-    pub format: TextFormat,
+    start: usize,
+    end: usize,
+    format: TextFormat,
 }
 
 impl TextSpan {
@@ -219,7 +230,7 @@ impl TextSpan {
     ///
     /// let text = "ä";  // two bytes
     /// assert!(TextSpan::new(text, 0, 1, TextFormat::Bold).is_err());
-    /// assert_eq!(TextSpan::new(text, 0, 2, TextFormat::Bold)?.end, 2);
+    /// assert_eq!(TextSpan::new(text, 0, 2, TextFormat::Bold)?.end(), 2);
     /// # Ok::<(), SpanError>(())
     /// ```
     pub fn new(
@@ -247,6 +258,48 @@ impl TextSpan {
             return Err(SpanError::NotCharBoundary { offset: end });
         }
         Ok(Self { start, end, format })
+    }
+
+    /// Byte offset of the first byte of the run, inclusive.
+    ///
+    /// ```
+    /// use messenger_webhook::{TextFormat, TextSpan};
+    ///
+    /// let span = TextSpan::new("Hallo Welt", 6, 10, TextFormat::Bold)?;
+    /// assert_eq!(span.start(), 6);
+    /// # Ok::<(), messenger_webhook::SpanError>(())
+    /// ```
+    #[must_use]
+    pub const fn start(&self) -> usize {
+        self.start
+    }
+
+    /// Byte offset one past the last byte of the run, exclusive.
+    ///
+    /// ```
+    /// use messenger_webhook::{TextFormat, TextSpan};
+    ///
+    /// let span = TextSpan::new("Hallo Welt", 6, 10, TextFormat::Bold)?;
+    /// assert_eq!(span.end(), 10);
+    /// # Ok::<(), messenger_webhook::SpanError>(())
+    /// ```
+    #[must_use]
+    pub const fn end(&self) -> usize {
+        self.end
+    }
+
+    /// Attribute that applies to the run.
+    ///
+    /// ```
+    /// use messenger_webhook::{TextFormat, TextSpan};
+    ///
+    /// let span = TextSpan::new("Hallo Welt", 6, 10, TextFormat::Bold)?;
+    /// assert_eq!(span.format(), &TextFormat::Bold);
+    /// # Ok::<(), messenger_webhook::SpanError>(())
+    /// ```
+    #[must_use]
+    pub const fn format(&self) -> &TextFormat {
+        &self.format
     }
 
     /// The run this span describes, borrowed from the text it was built for.

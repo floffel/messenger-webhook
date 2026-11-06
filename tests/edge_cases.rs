@@ -1099,7 +1099,7 @@ mod matrix_edges {
 
         assert_eq!(message.text(), Some("This is an example text message"));
         assert_eq!(message.spans().len(), 1);
-        assert_eq!(message.spans()[0].format, TextFormat::Bold);
+        assert_eq!(message.spans()[0].format(), &TextFormat::Bold);
         assert_eq!(
             message.span_text(0),
             Some("This is an example text message")
@@ -1117,8 +1117,8 @@ mod matrix_edges {
         let message = &events[0];
 
         assert_eq!(message.spans().len(), 1);
-        assert_eq!(message.spans()[0].start, 7);
-        assert_eq!(message.spans()[0].end, 11);
+        assert_eq!(message.spans()[0].start(), 7);
+        assert_eq!(message.spans()[0].end(), 11);
         assert_eq!(message.span_text(0), Some("bold"));
     }
 
@@ -1135,7 +1135,7 @@ mod matrix_edges {
         assert_eq!(message.text(), Some("Tom & Jerry are <friends>"));
         assert_eq!(message.spans().len(), 1);
         assert_eq!(message.span_text(0), Some("<friends>"));
-        assert_eq!(message.spans()[0].format, TextFormat::Italic);
+        assert_eq!(message.spans()[0].format(), &TextFormat::Italic);
     }
 
     #[test]
@@ -1151,8 +1151,14 @@ mod matrix_edges {
         assert_eq!(message.spans().len(), 2);
         assert_eq!(message.span_text(0), Some("plain"));
         assert_eq!(message.span_text(1), Some("link"));
-        assert_eq!(message.spans()[0].format, TextFormat::Other("span".into()));
-        assert_eq!(message.spans()[1].format, TextFormat::Other("mark".into()));
+        assert_eq!(
+            message.spans()[0].format(),
+            &TextFormat::Other("span".into())
+        );
+        assert_eq!(
+            message.spans()[1].format(),
+            &TextFormat::Other("mark".into())
+        );
     }
 
     #[test]
@@ -1168,8 +1174,8 @@ mod matrix_edges {
         assert_eq!(message.spans().len(), 1);
         assert_eq!(message.span_text(0), Some("docs"));
         assert_eq!(
-            message.spans()[0].format,
-            TextFormat::Link {
+            message.spans()[0].format(),
+            &TextFormat::Link {
                 url: "https://docs.rs".to_owned()
             }
         );
