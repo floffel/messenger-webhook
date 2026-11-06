@@ -4,8 +4,8 @@
 //! (`hub.mode=subscribe&hub.challenge=1158201444&hub.verify_token=meatyhamhock`),
 //! quoted in `docs/contracts.md`. Every case below is one side of a boundary:
 //! a matching token and a token that differs in one byte, a challenge of exactly
-//! the integer boundary and one past it, a parameter that appears once and one
-//! that appears twice.
+//! the integer boundary and one past it, a parameter that appears once, one
+//! whose repeated value is identical, and one whose repeated values conflict.
 
 #![cfg(feature = "whatsapp")]
 
@@ -164,7 +164,7 @@ fn the_mode_is_compared_case_insensitively() {
 }
 
 #[test]
-fn a_duplicate_parameter_is_rejected_even_when_one_value_matches() {
+fn a_conflicting_duplicate_parameter_is_rejected_even_when_one_value_matches() {
     // Two tokens would be ambiguous: one of them is the attacker's.
     let query = format!(
         "hub.mode=subscribe&hub.challenge=1&hub.verify_token={TOKEN}&hub.verify_token=other"
@@ -175,6 +175,57 @@ fn a_duplicate_parameter_is_rejected_even_when_one_value_matches() {
         matches!(error, Error::MalformedVerificationRequest { .. }),
         "unexpected error: {error}"
     );
+}
+
+#[test]
+fn identical_duplicate_parameters_are_accepted() {
+    // Repeating the same decoded value for one logical parameter is
+    // unambiguous, including the issue's `hub.mode=subscribe` twice.
+    let query = query(&[
+        (META_MODE_PARAM, META_SUBSCRIBE_MODE),
+        (META_MODE_PARAM, META_SUBSCRIBE_MODE),
+        (META_CHALLENGE_PARAM, "42"),
+        (META_CHALLENGE_PARAM, "42"),
+        (META_VERIFY_TOKEN_PARAM, TOKEN),
+        (META_VERIFY_TOKEN_PARAM, TOKEN),
+    ]);
+    assert_eq!(
+        meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
+            .expect("identical duplicates are accepted"),
+        "42"
+    );
+}
+
+#[test]
+fn equal_php_aliases_are_accepted_as_one_parameter() {
+    // A request that passes through a layer that rewrites `.` to `_` may carry
+    // both spellings; equal decoded values are one logical parameter.
+    let query = format!(
+        "hub.mode=subscribe&hub_mode=subscribe&hub.challenge=42&hub_challenge=42&hub.verify_token={TOKEN}&hub_verify_token={TOKEN}"
+    );
+    assert_eq!(
+        meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
+            .expect("equal aliases are accepted"),
+        "42"
+    );
+}
+
+#[test]
+fn conflicting_php_aliases_are_rejected() {
+    for query in [
+        "hub.mode=subscribe&hub_mode=unsubscribe&hub.challenge=42".to_owned(),
+        format!("hub.mode=subscribe&hub.challenge=42&hub_challenge=43&hub.verify_token={TOKEN}"),
+        format!(
+            "hub.mode=subscribe&hub.challenge=42&hub.verify_token={TOKEN}&hub_verify_token=other"
+        ),
+    ] {
+        let error = meta_subscription_challenge(&Secret::new(TOKEN).expect("secret"), &query)
+            .expect_err("conflicting aliases are rejected");
+        assert!(
+            matches!(error, Error::MalformedVerificationRequest { .. }),
+            "unexpected error for {query}: {error}"
+        );
+    }
 }
 
 #[test]

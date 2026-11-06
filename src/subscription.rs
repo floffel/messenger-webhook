@@ -135,11 +135,12 @@ const PHP_VERIFY_TOKEN_PARAM: &str = "hub_verify_token";
 /// - [`Error::MissingSecret`] when `secret` is empty: comparing against an
 ///   unset token would make the handshake succeed for anyone, so the adapter
 ///   fails closed instead of accepting the request.
-/// - [`Error::MalformedVerificationRequest`] when a parameter is missing, is
-///   present twice, is not a single `subscribe` in `hub.mode`, or when the
-///   challenge is empty, longer than [`MAX_CHALLENGE_BYTES`] or not an
-///   unsigned 64-bit integer — it is reflected into the response, so only the
-///   canonical decimal rendering of a parsed integer is returned.
+/// - [`Error::MalformedVerificationRequest`] when a parameter is missing,
+///   appears with conflicting values, is not a single `subscribe` in
+///   `hub.mode`, or when the challenge is empty, longer than
+///   [`MAX_CHALLENGE_BYTES`] or not an unsigned 64-bit integer — it is
+///   reflected into the response, so only the canonical decimal rendering of a
+///   parsed integer is returned.
 /// - [`Error::BadSignature`] when the token does not match. The comparison is
 ///   constant time, and the raw value never reaches the error message.
 pub fn meta_subscription_challenge(secret: &Secret, query: &str) -> Result<String> {
@@ -162,10 +163,16 @@ pub fn meta_subscription_challenge(secret: &Secret, query: &str) -> Result<Strin
             // without warning, and an extra one is not evidence of forgery.
             _ => continue,
         };
-        if slot.replace(value.into_owned()).is_some() {
-            // Two values for one parameter is ambiguous: which of them was
-            // meant to be verified? Reject instead of picking one.
-            return Err(malformed("a parameter appears more than once"));
+        let value = value.into_owned();
+        if let Some(existing) = slot {
+            if existing != &value {
+                // Two different values for one logical parameter are
+                // ambiguous: which of them was meant to be verified? Reject
+                // instead of picking one.
+                return Err(malformed("a parameter appears with conflicting values"));
+            }
+        } else {
+            *slot = Some(value);
         }
     }
 

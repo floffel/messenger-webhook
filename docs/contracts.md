@@ -181,9 +181,12 @@ What the crate does with it:
 - Both spellings of every parameter are accepted (`hub.mode` and `hub_mode`),
   because the underscore note above means an endpoint behind a PHP layer sees the
   second one.
-- A parameter that appears twice is rejected instead of resolved: the request
-  would otherwise carry two candidate tokens and the endpoint would have to pick
-  one. Unknown parameters are ignored.
+- A parameter may appear more than once only when every occurrence has the same
+  decoded value. Conflicting values are rejected instead of resolved: the
+  request would otherwise carry two candidate tokens and the endpoint would have
+  to pick one. The dotted and PHP alias spellings share one logical parameter,
+  so equal values across spellings are accepted together. Unknown parameters are
+  ignored.
 - The challenge is reflected into the caller's response, so it is bounded
   (`MAX_CHALLENGE_BYTES`) and parsed as an integer before it is returned. Only
   canonical decimal digits can therefore be reflected, so markup, quotes, angle
@@ -191,7 +194,7 @@ What the crate does with it:
 - An empty dashboard token fails closed (`Error::MissingSecret`) before the query
   is even parsed, because comparing against an unset token accepts anyone.
 
-Pinned by `tests/subscription.rs` (26 tests, two of them proptest properties:
+Pinned by `tests/subscription.rs` (29 tests, two of them proptest properties:
 "challenge returned exactly when the token matches" and "arbitrary query strings
 never panic"). The sample request above is the first test case, byte for byte.
 

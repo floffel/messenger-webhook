@@ -311,10 +311,11 @@ let challenge = meta_subscription_challenge(&Secret::new(verify_token), query)?;
 // Answer 200 with `challenge` as the body and `text/plain` — nothing else.
 ```
 
-A wrong token, a missing parameter, a parameter that appears twice or a
-challenge that is not printable ASCII is a typed error, and the answer is `403`.
-The token is compared in constant time, and an unset token fails closed before
-the query is parsed.
+A wrong token, a missing parameter, a parameter that appears with conflicting
+values or a challenge that is not printable ASCII is a typed error, and the
+answer is `403`. Repeated parameters with the same decoded value are accepted,
+including the dotted/PHP spellings. The token is compared in constant time, and
+an unset token fails closed before the query is parsed.
 
 ## Security model
 
@@ -355,7 +356,7 @@ the query is parsed.
 | doctests on every public item | the documented examples really run |
 | `tests/properties.rs` | arbitrary JSON (any depth/types) and arbitrary bytes never panic; encode → provider echo → normalise round-trips on all three channels; unknown fields survive; limits hold exactly at N and N+1 |
 | `tests/edge_cases.rs` | empty body, 1 MiB boundary, missing/ malformed signature headers, signature bound to the exact body, duplicate keys, unknown types, 20 recipients, unicode/NUL, numeric-vs-string ids, wrong JSON types, deep nesting |
-| `tests/subscription.rs` | the Meta handshake: the documented sample request, wrong/prefix/short token, empty secret, each missing parameter, duplicate parameters, mode casing, the PHP underscore spellings, percent-decoded values, `+`-as-space, challenge ceiling at N/N+1, non-printable and empty challenge, no received token in the error message; plus two proptest properties |
+| `tests/subscription.rs` | the Meta handshake: the documented sample request, wrong/prefix/short token, empty secret, each missing parameter, identical and conflicting duplicate parameters, mode casing, the PHP underscore spellings, percent-decoded values, `+`-as-space, challenge ceiling at N/N+1, non-printable and empty challenge, no received token in the error message; plus two proptest properties |
 | `tests/synthetic_ids.rs` | an event the provider sent without an id is carried with a stable synthesised key: same body, same id across replays; different body, different id; per adapter |
 | `tests/media_and_receipts.rs` | every media kind, reaction and receipt shape in both directions |
 | `tests/concurrency.rs` | 32 threads over one `Registry`, 32 threads over a borrowed `&dyn Adapter`, forged signatures under load |
