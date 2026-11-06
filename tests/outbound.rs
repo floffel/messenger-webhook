@@ -139,6 +139,73 @@ mod whatsapp {
     }
 
     #[test]
+    fn interactive_reply_button_round_trips_the_option_id_and_title() {
+        use messenger_webhook::InteractiveReply;
+
+        // The whole path is in-process: `encode` builds the Cloud API body
+        // without opening a socket, so a mock transport is just the payload.
+        let reply = InteractiveReply::new("confirm-yes", "Yes, please").unwrap();
+        let mut message = OutboundMessage::text(Channel::WhatsApp, "4915112345678", "Confirm?");
+        message.interactive_reply = Some(reply);
+
+        let body = adapter().encode(&message).unwrap().json().unwrap();
+        assert_eq!(body["type"], "interactive");
+        assert_eq!(body["interactive"]["type"], "button");
+        assert_eq!(body["interactive"]["body"]["text"], "Confirm?");
+        assert_eq!(body["interactive"]["action"]["buttons"][0]["type"], "reply");
+        assert_eq!(
+            body["interactive"]["action"]["buttons"][0]["reply"]["id"],
+            "confirm-yes"
+        );
+        assert_eq!(
+            body["interactive"]["action"]["buttons"][0]["reply"]["title"],
+            "Yes, please"
+        );
+
+        // Feeding the encoded option id back through a provider-shaped inbound
+        // envelope carries the same id, proving the round trip.
+        let inbound = br#"{"entry":[{"changes":[{"value":{"messages":[
+            {"id":"wamid.1","from":"4915112345678","type":"interactive",
+             "interactive":{"type":"button_reply","button_reply":{"id":"confirm-yes","title":"Yes, please"}}}]}}]}]}"#;
+        let events = adapter().adapt(inbound).unwrap();
+        let carried = events[0].interactive_reply().unwrap();
+        assert_eq!(carried.id(), "confirm-yes");
+        assert_eq!(carried.title(), "Yes, please");
+        assert_eq!(events[0].text(), Some("Yes, please"));
+    }
+
+    #[test]
+    fn interactive_reply_needs_body_text_and_no_attachment() {
+        use messenger_webhook::InteractiveReply;
+
+        let reply = InteractiveReply::new("confirm", "Confirm").unwrap();
+
+        // A reply button with no body text is refused before the wire.
+        let mut empty = OutboundMessage::text(Channel::WhatsApp, "49", "");
+        empty.interactive_reply = Some(reply.clone());
+        assert!(
+            matches!(
+                adapter().encode(&empty).unwrap_err(),
+                Error::InvalidMessage { .. }
+            ),
+            "an interactive reply without body text must be rejected"
+        );
+
+        // A reply button cannot share a message with media.
+        let mut with_media = OutboundMessage::text(Channel::WhatsApp, "49", "Confirm?");
+        with_media.interactive_reply = Some(reply);
+        with_media.attachments.push(Attachment {
+            kind: AttachmentKind::Image,
+            url: Some("https://example.org/a.jpg".to_owned()),
+            ..Attachment::default()
+        });
+        assert!(matches!(
+            adapter().encode(&with_media).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
+    }
+
+    #[test]
     fn invalid_messages_are_rejected_not_sent() {
         // Empty recipient.
         assert!(matches!(

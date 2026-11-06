@@ -41,6 +41,13 @@ carry a `!` in the conventional-commit subject.
 
 ### Added
 
+- **`WhatsApp` interactive replies carry the chosen option.** `NormalizedMessage`
+  gains a typed `interactive_reply` field holding an `InteractiveReply` with the
+  option `id` and `title`, populated from `interactive.button_reply`,
+  `interactive.list_reply` and template `button` quick replies instead of being
+  flattened into `text` or dropped into `raw`. `OutboundMessage` can carry the
+  same value and `WhatsAppAdapter::encode` sends it as a Cloud API reply button,
+  so a tap can be echoed back end to end. Closes #12.
 - **Ambiguous adapter outcomes are explicit.** `Error` now has
   `Transport` and `Ambiguous` variants for adapter implementations with their
   own transports. `Error::is_retryable()` is true only for `Transport`, while

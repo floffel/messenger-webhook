@@ -422,6 +422,86 @@ mod whatsapp_edges {
     }
 
     #[test]
+    fn interactive_replies_carry_the_chosen_option_id_and_title() {
+        let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
+            {"id":"wamid.1","from":"49","type":"interactive",
+             "interactive":{"type":"button_reply","button_reply":{"id":"yes","title":"Yes"}}},
+            {"id":"wamid.2","from":"49","type":"interactive",
+             "interactive":{"type":"list_reply","list_reply":{"id":"row-2","title":"Second"}}},
+            {"id":"wamid.3","from":"49","type":"button",
+             "button":{"payload":"quick-yes","text":"Quick yes"}}]}}]}]}"#;
+        let events = whatsapp().adapt(payload).unwrap();
+        assert_eq!(events.len(), 3);
+
+        let button = events[0].interactive_reply().unwrap();
+        assert_eq!(button.id(), "yes");
+        assert_eq!(button.title(), "Yes");
+        assert_eq!(events[0].text(), Some("Yes"));
+        assert_eq!(events[0].provider_type.as_deref(), Some("interactive"));
+
+        let list = events[1].interactive_reply().unwrap();
+        assert_eq!(list.id(), "row-2");
+        assert_eq!(list.title(), "Second");
+        assert_eq!(events[1].text(), Some("Second"));
+
+        let quick = events[2].interactive_reply().unwrap();
+        assert_eq!(quick.id(), "quick-yes");
+        assert_eq!(quick.title(), "Quick yes");
+        assert_eq!(events[2].text(), Some("Quick yes"));
+        assert_eq!(events[2].provider_type.as_deref(), Some("button"));
+    }
+
+    #[test]
+    fn nfm_reply_stays_in_raw_without_a_typed_option() {
+        let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
+            {"id":"wamid.1","from":"49","type":"interactive",
+             "interactive":{"type":"nfm_reply","nfm_reply":{"response_json":"{\"x\":1}"}}}]}}]}]}"#;
+        let events = whatsapp().adapt(payload).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].interactive_reply().is_none());
+        assert!(events[0].raw.is_some());
+    }
+
+    #[test]
+    fn interactive_reply_title_length_is_bounded() {
+        use messenger_webhook::MAX_INTERACTIVE_TITLE_CHARS;
+
+        let at_limit = "a".repeat(MAX_INTERACTIVE_TITLE_CHARS);
+        let over_limit = "a".repeat(MAX_INTERACTIVE_TITLE_CHARS + 1);
+
+        // At the limit: the typed option is carried.
+        let payload = format!(
+            r#"{{"entry":[{{"changes":[{{"value":{{"messages":[
+                {{"id":"wamid.1","from":"49","type":"interactive",
+                 "interactive":{{"type":"button_reply","button_reply":{{"id":"opt","title":"{at_limit}"}}}}}}]}}}}]}}]}}"#
+        );
+        let events = whatsapp().adapt(payload.as_bytes()).unwrap();
+        assert_eq!(events[0].interactive_reply().unwrap().title(), at_limit);
+
+        // One past the limit: the typed option is dropped, the event survives.
+        let payload = format!(
+            r#"{{"entry":[{{"changes":[{{"value":{{"messages":[
+                {{"id":"wamid.1","from":"49","type":"interactive",
+                 "interactive":{{"type":"button_reply","button_reply":{{"id":"opt","title":"{over_limit}"}}}}}}]}}}}]}}]}}"#
+        );
+        let events = whatsapp().adapt(payload.as_bytes()).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].interactive_reply().is_none());
+        assert!(events[0].raw.is_some());
+    }
+
+    #[test]
+    fn interactive_reply_with_an_empty_id_is_not_carried() {
+        let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
+            {"id":"wamid.1","from":"49","type":"interactive",
+             "interactive":{"type":"button_reply","button_reply":{"id":"","title":"Yes"}}}]}}]}]}"#;
+        let events = whatsapp().adapt(payload).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].interactive_reply().is_none());
+        assert!(events[0].raw.is_some());
+    }
+
+    #[test]
     fn unknown_message_types_keep_readable_text() {
         let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
             {"id":"wamid.1","from":"49","type":"com.example.poll","com.example.poll":{"body":"Which day?"}},
