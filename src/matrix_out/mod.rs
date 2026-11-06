@@ -89,7 +89,7 @@ use url::Url;
 
 pub use error::{OutboundError, OutboundResult};
 pub use http::{ReqwestTransport, DEFAULT_REQUEST_TIMEOUT, MAX_RESPONSE_BODY_BYTES};
-pub use ordering::{GATE_CAPACITY, GATE_WAITERS_PER_ROOM, GATE_WAIT_TIMEOUT};
+pub use ordering::{OrderingSaturation, GATE_CAPACITY, GATE_WAITERS_PER_ROOM, GATE_WAIT_TIMEOUT};
 pub use retry::{
     Operation, RetryPolicy, RetryPolicyError, Verdict, DEFAULT_BASE_DELAY_MS, DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_DELAY_MS, DEFAULT_MAX_RATE_LIMIT_WAIT_MS,
@@ -103,7 +103,7 @@ pub use types::{
 };
 // `MAX_TXN_ID_BYTES` and friends are declared in `types` and re-exported above.
 
-use crate::matrix_out::ordering::{RoomGates, RoomKey};
+use crate::matrix_out::ordering::{GateOutcome, RoomGates, RoomKey};
 use crate::matrix_out::transport::{
     Body, BoxFuture, Method, Request, Response, TransportError, TransportErrorKind,
 };
@@ -172,6 +172,7 @@ impl Sleeper for TokioSleeper {
 ///     .with_user_id("@bot:example.org")
 ///     .with_max_upload_bytes(10_000_000)
 ///     .with_per_room_ordering(false)
+///     .with_ordering_saturation(messenger_webhook::matrix_out::OrderingSaturation::Unordered)
 ///     .with_retry(RetryPolicy::default().with_max_attempts(2).expect("valid"));
 ///
 /// // The trailing slash is normalised away, so paths never double up.
@@ -179,6 +180,10 @@ impl Sleeper for TokioSleeper {
 /// assert_eq!(config.user_id(), Some("@bot:example.org"));
 /// assert_eq!(config.max_upload_bytes(), 10_000_000);
 /// assert!(!config.per_room_ordering());
+/// assert_eq!(
+///     config.ordering_saturation(),
+///     messenger_webhook::matrix_out::OrderingSaturation::Unordered
+/// );
 /// assert_eq!(config.retry().max_attempts(), 2);
 /// assert_eq!(Duration::from_millis(500), RetryPolicy::default().base_delay());
 /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
@@ -190,6 +195,7 @@ pub struct ClientConfig {
     retry: RetryPolicy,
     max_upload_bytes: u64,
     per_room_ordering: bool,
+    ordering_saturation: OrderingSaturation,
     sleeper: Arc<dyn Sleeper>,
 }
 
@@ -201,6 +207,7 @@ impl fmt::Debug for ClientConfig {
             .field("retry", &self.retry)
             .field("max_upload_bytes", &self.max_upload_bytes)
             .field("per_room_ordering", &self.per_room_ordering)
+            .field("ordering_saturation", &self.ordering_saturation)
             .field("sleeper", &self.sleeper)
             .finish()
     }
@@ -233,6 +240,7 @@ impl ClientConfig {
             retry: RetryPolicy::default(),
             max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES,
             per_room_ordering: true,
+            ordering_saturation: OrderingSaturation::Backpressure,
             sleeper: Arc::new(TokioSleeper),
         })
     }
@@ -297,6 +305,22 @@ impl ClientConfig {
     #[must_use]
     pub fn with_per_room_ordering(mut self, ordered: bool) -> Self {
         self.per_room_ordering = ordered;
+        self
+    }
+
+    /// Chooses what happens when all per-room ordering gates are in use.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::{ClientConfig, OrderingSaturation};
+    ///
+    /// let config = ClientConfig::new("https://m.example")?
+    ///     .with_ordering_saturation(OrderingSaturation::Error);
+    /// assert_eq!(config.ordering_saturation(), OrderingSaturation::Error);
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub fn with_ordering_saturation(mut self, saturation: OrderingSaturation) -> Self {
+        self.ordering_saturation = saturation;
         self
     }
 
@@ -380,6 +404,22 @@ impl ClientConfig {
     #[must_use]
     pub const fn per_room_ordering(&self) -> bool {
         self.per_room_ordering
+    }
+
+    /// What happens when all per-room ordering gates are in use.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::{ClientConfig, OrderingSaturation};
+    ///
+    /// assert_eq!(
+    ///     ClientConfig::new("https://m.example")?.ordering_saturation(),
+    ///     OrderingSaturation::Backpressure,
+    /// );
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub const fn ordering_saturation(&self) -> OrderingSaturation {
+        self.ordering_saturation
     }
 }
 
@@ -489,6 +529,8 @@ impl fmt::Debug for MatrixClient {
             .field("config", &self.config)
             .field("token", &self.token)
             .field("gated_rooms", &self.gates.len())
+            .field("gate_saturation_waits", &self.gates.saturation_waits())
+            .field("unordered_sends", &self.gates.unordered_sends())
             .finish()
     }
 }
@@ -601,11 +643,12 @@ impl MatrixClient {
                 reason: error.to_string(),
             })?;
         }
+        let saturation = config.ordering_saturation;
         Ok(Self {
             transport,
             config,
             token,
-            gates: RoomGates::new(GATE_CAPACITY)?,
+            gates: RoomGates::new(GATE_CAPACITY, saturation)?,
         })
     }
 
@@ -1261,7 +1304,10 @@ impl MatrixClient {
             let request = self.build(&call);
             let response = match room_key {
                 Some(room_key) => {
-                    let _gate = self.gates.acquire(room_key).await?;
+                    let _gate = match self.gates.acquire(room_key).await? {
+                        GateOutcome::Ordered(guard) => Some(guard),
+                        GateOutcome::Unordered => None,
+                    };
                     self.transport.send(request).await
                 }
                 None => self.transport.send(request).await,
@@ -1968,6 +2014,94 @@ mod tests {
         )
         .expect("valid");
         assert!(!format!("{client:?}").contains("matrix-access-token"));
+    }
+
+    #[test]
+    fn strict_saturation_is_observable_on_the_send_path() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a current-thread runtime");
+        runtime.block_on(async {
+            let transport = Arc::new(StubTransport::new());
+            let config = ClientConfig::new("https://m.example")
+                .expect("valid")
+                .with_ordering_saturation(OrderingSaturation::Error);
+            let client = MatrixClient {
+                transport: transport.clone(),
+                config,
+                token: Secret::new("syt_token_123456").expect("valid token"),
+                gates: RoomGates::new(1, OrderingSaturation::Error).expect("valid capacity"),
+            };
+            let held = client
+                .gates
+                .acquire(RoomKey::new("!a:x").expect("valid room"))
+                .await
+                .expect("the first room fits");
+            let held = match held {
+                GateOutcome::Ordered(guard) => guard,
+                GateOutcome::Unordered => {
+                    unreachable!("strict mode must not return an unordered outcome")
+                }
+            };
+
+            let error = client
+                .send_text("!b:x", "Hallo")
+                .await
+                .expect_err("the second room exceeds capacity");
+            assert!(matches!(
+                error,
+                OutboundError::OrderingLost {
+                    room_id,
+                    capacity: 1,
+                } if room_id == "!b:x"
+            ));
+            assert_eq!(transport.call_count(), 0, "nothing may be sent unordered");
+            drop(held);
+        });
+    }
+
+    #[test]
+    fn explicit_unordered_saturation_is_reported_by_debug() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a current-thread runtime");
+        runtime.block_on(async {
+            let transport = Arc::new(StubTransport::new());
+            transport.push_json(200, r#"{"event_id":"$ok"}"#);
+            let config = ClientConfig::new("https://m.example")
+                .expect("valid")
+                .with_ordering_saturation(OrderingSaturation::Unordered);
+            let client = MatrixClient {
+                transport: transport.clone(),
+                config,
+                token: Secret::new("syt_token_123456").expect("valid token"),
+                gates: RoomGates::new(1, OrderingSaturation::Unordered).expect("valid capacity"),
+            };
+            let held = client
+                .gates
+                .acquire(RoomKey::new("!a:x").expect("valid room"))
+                .await
+                .expect("the first room fits");
+            let held = match held {
+                GateOutcome::Ordered(guard) => guard,
+                GateOutcome::Unordered => {
+                    unreachable!("the first room must be ordered")
+                }
+            };
+
+            let outcome = client
+                .send_text("!b:x", "Hallo")
+                .await
+                .expect("unordered mode sends explicitly");
+            assert_eq!(outcome.event_id, "$ok");
+            assert_eq!(transport.call_count(), 1);
+            let debug = format!("{client:?}");
+            assert!(debug.contains("unordered_sends: 1"), "{debug}");
+            assert!(debug.contains("gate_saturation_waits: 0"), "{debug}");
+            drop(held);
+        });
     }
 
     #[test]

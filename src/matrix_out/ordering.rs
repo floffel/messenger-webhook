@@ -3,31 +3,34 @@
 //! Matrix does not *require* a client to serialise its sends: the homeserver
 //! stamps every event with an arrival time and the room is a DAG. But two sends
 //! fired concurrently into one room can be ordered by whichever finished first,
-//! and for a bot writing a sequence ("your contract is attached" → the PDF) that
-//! is a visible defect. The client therefore takes a per-room gate — one
-//! in-flight request per room, any number across rooms — and releases it between
+//! and for a bot writing a sequence ("your contract is attached" -> the PDF) that
+//! is a visible defect. The client therefore takes a per-room gate -- one
+//! in-flight request per room, any number across rooms -- and releases it between
 //! attempts, so one rate-limited send does not block the room through its retry
 //! sleeps.
 //!
-//! The gate cache is bounded by count ([`GATE_CAPACITY`] rooms/keys), not bytes.
-//! Moka's eviction policy keeps the cache near that bound, so one room's sends
-//! never cause a full-map scan or block a Tokio worker while another room is
-//! acquiring a gate.
+//! The gate registry is bounded by count ([`GATE_CAPACITY`] active rooms). A
+//! gate entry is removed only when its last holder or waiter drops, so a room
+//! cannot be silently recreated while an earlier send for that room is still
+//! queued. When every slot is in use, [`OrderingSaturation`] decides whether a
+//! new room waits for capacity (the default), receives
+//! [`OutboundError::OrderingLost`], or explicitly opts into unordered delivery.
 //!
 //! Per-room waits are bounded too. At most [`GATE_WAITERS_PER_ROOM`] callers may
 //! queue behind the in-flight holder, and a waiter that cannot acquire the room
 //! within [`GATE_WAIT_TIMEOUT`] gets a typed [`OutboundError::GateTimeout`]
 //! instead of awaiting forever.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use moka::future::Cache;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
 use crate::matrix_out::{types, OutboundError};
 
-/// How many room gates the client keeps before moka evicts old entries.
+/// How many room gates the client keeps before saturation policy applies.
 ///
 /// ```
 /// use messenger_webhook::matrix_out::GATE_CAPACITY;
@@ -59,6 +62,54 @@ pub const GATE_WAITERS_PER_ROOM: usize = 64;
 /// ```
 pub const GATE_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// What to do when all [`GATE_CAPACITY`] gates are held by active rooms.
+///
+/// The default is [`OrderingSaturation::Backpressure`]: a send to a new room
+/// waits until another room finishes instead of silently losing its ordering
+/// guarantee. Deployments that prefer an explicit failure can use
+/// [`OrderingSaturation::Error`], and callers that intentionally accept
+/// unordered delivery under pressure can choose [`OrderingSaturation::Unordered`].
+///
+/// ```
+/// use messenger_webhook::matrix_out::OrderingSaturation;
+///
+/// assert_eq!(OrderingSaturation::default(), OrderingSaturation::Backpressure);
+/// assert_eq!(OrderingSaturation::Backpressure.as_str(), "backpressure");
+/// assert_eq!(OrderingSaturation::Error.as_str(), "error");
+/// assert_eq!(OrderingSaturation::Unordered.as_str(), "unordered");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum OrderingSaturation {
+    /// Wait until another room's gate is released, then acquire the new room's
+    /// gate. This preserves the ordering contract under load.
+    #[default]
+    Backpressure,
+    /// Fail the send with [`OutboundError::OrderingLost`] instead of waiting.
+    Error,
+    /// Proceed without a gate for the new room. This is an explicit opt-in to
+    /// degraded ordering, not a silent fallback.
+    Unordered,
+}
+
+impl OrderingSaturation {
+    /// Stable lower-case name, used in logs and `Debug` output.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::OrderingSaturation;
+    ///
+    /// assert_eq!(OrderingSaturation::Backpressure.as_str(), "backpressure");
+    /// ```
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Backpressure => "backpressure",
+            Self::Error => "error",
+            Self::Unordered => "unordered",
+        }
+    }
+}
+
 /// A room address that has passed the id checks the send endpoints require.
 ///
 /// The gate map never sees the caller's raw string: constructing this key is
@@ -85,13 +136,17 @@ impl<'a> RoomKey<'a> {
 struct Gate {
     mutex: Arc<AsyncMutex<()>>,
     waiters: Arc<Semaphore>,
+    active: AtomicUsize,
+    _capacity: OwnedSemaphorePermit,
 }
 
 impl Gate {
-    fn new(waiters_per_room: usize) -> Self {
+    fn new(capacity: OwnedSemaphorePermit, waiters_per_room: usize) -> Self {
         Self {
             mutex: Arc::new(AsyncMutex::new(())),
             waiters: Arc::new(Semaphore::new(waiters_per_room.saturating_add(1))),
+            active: AtomicUsize::new(0),
+            _capacity: capacity,
         }
     }
 }
@@ -100,17 +155,45 @@ impl Gate {
 #[derive(Debug)]
 struct GateLease {
     _permit: OwnedSemaphorePermit,
+    gate: Arc<Gate>,
+    room_id: String,
+    registry: Arc<GateRegistry>,
 }
 
 impl GateLease {
-    fn new(gate: &Gate, waiters_per_room: usize, room_id: &str) -> Result<Self, OutboundError> {
+    fn new(
+        gate: Arc<Gate>,
+        waiters_per_room: usize,
+        room_id: &str,
+        registry: Arc<GateRegistry>,
+    ) -> Result<Self, OutboundError> {
         let permit = Arc::clone(&gate.waiters).try_acquire_owned().map_err(|_| {
             OutboundError::GateOverflow {
                 room_id: room_id.to_owned(),
                 limit: waiters_per_room,
             }
         })?;
-        Ok(Self { _permit: permit })
+        gate.active.fetch_add(1, Ordering::AcqRel);
+        Ok(Self {
+            _permit: permit,
+            gate,
+            room_id: room_id.to_owned(),
+            registry,
+        })
+    }
+}
+
+impl Drop for GateLease {
+    fn drop(&mut self) {
+        if self.gate.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+            let mut gates = self.registry.lock();
+            let removable = gates.get(&self.room_id).is_some_and(|gate| {
+                Arc::ptr_eq(gate, &self.gate) && gate.active.load(Ordering::Acquire) == 0
+            });
+            if removable {
+                gates.remove(&self.room_id);
+            }
+        }
     }
 }
 
@@ -121,77 +204,236 @@ pub(crate) struct GateGuard {
     _lease: GateLease,
 }
 
-/// One async mutex per room, created on demand.
+/// Whether an acquire produced a gate or was allowed to proceed unordered.
 #[derive(Debug)]
-pub(crate) struct RoomGates {
-    gates: Cache<String, Arc<Gate>>,
+pub(crate) enum GateOutcome {
+    /// The send acquired the room gate and must hold it for the request.
+    Ordered(GateGuard),
+    /// Saturation policy allowed the send to proceed without a gate.
+    Unordered,
+}
+
+/// The shared bounded gate registry.
+#[derive(Debug)]
+struct GateRegistry {
+    gates: Mutex<HashMap<String, Arc<Gate>>>,
+    capacity: Arc<Semaphore>,
+    capacity_limit: usize,
+    saturation: OrderingSaturation,
     waiters_per_room: usize,
     wait_timeout: Duration,
+    saturation_waits: AtomicUsize,
+    unordered_sends: AtomicUsize,
+}
+
+impl GateRegistry {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Arc<Gate>>> {
+        self.gates.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// One async mutex per room, created on demand and bounded by capacity.
+#[derive(Debug)]
+pub(crate) struct RoomGates {
+    registry: Arc<GateRegistry>,
 }
 
 impl RoomGates {
-    /// An empty gate cache with `capacity` slots.
-    pub(crate) fn new(capacity: usize) -> Result<Self, OutboundError> {
+    /// An empty gate registry with `capacity` slots.
+    pub(crate) fn new(
+        capacity: usize,
+        saturation: OrderingSaturation,
+    ) -> Result<Self, OutboundError> {
         if capacity == 0 {
             return Err(OutboundError::InvalidConfig {
                 reason: "per-room gate capacity is 0, which refuses every gate".to_owned(),
             });
         }
         Ok(Self {
-            gates: Cache::new(capacity as u64),
-            waiters_per_room: GATE_WAITERS_PER_ROOM,
-            wait_timeout: GATE_WAIT_TIMEOUT,
+            registry: Arc::new(GateRegistry {
+                gates: Mutex::new(HashMap::new()),
+                capacity: Arc::new(Semaphore::new(capacity)),
+                capacity_limit: capacity,
+                saturation,
+                waiters_per_room: GATE_WAITERS_PER_ROOM,
+                wait_timeout: GATE_WAIT_TIMEOUT,
+                saturation_waits: AtomicUsize::new(0),
+                unordered_sends: AtomicUsize::new(0),
+            }),
         })
     }
 
     #[cfg(test)]
     fn with_wait_limits(
         capacity: usize,
+        saturation: OrderingSaturation,
         waiters_per_room: usize,
         wait_timeout: Duration,
     ) -> Result<Self, OutboundError> {
-        let mut gates = Self::new(capacity)?;
-        gates.waiters_per_room = waiters_per_room;
-        gates.wait_timeout = wait_timeout;
-        Ok(gates)
+        if capacity == 0 {
+            return Err(OutboundError::InvalidConfig {
+                reason: "per-room gate capacity is 0, which refuses every gate".to_owned(),
+            });
+        }
+        Ok(Self {
+            registry: Arc::new(GateRegistry {
+                gates: Mutex::new(HashMap::new()),
+                capacity: Arc::new(Semaphore::new(capacity)),
+                capacity_limit: capacity,
+                saturation,
+                waiters_per_room,
+                wait_timeout,
+                saturation_waits: AtomicUsize::new(0),
+                unordered_sends: AtomicUsize::new(0),
+            }),
+        })
     }
 
-    /// Number of gates currently cached, for tests and `Debug`.
+    /// Number of active room gates, for tests and `Debug`.
     pub(crate) fn len(&self) -> usize {
-        usize::try_from(self.gates.entry_count()).unwrap_or(usize::MAX)
+        self.registry.lock().len()
+    }
+
+    /// How many sends waited because the gate map was saturated.
+    pub(crate) fn saturation_waits(&self) -> usize {
+        self.registry.saturation_waits.load(Ordering::Relaxed)
+    }
+
+    /// How many sends proceeded under explicit unordered saturation.
+    pub(crate) fn unordered_sends(&self) -> usize {
+        self.registry.unordered_sends.load(Ordering::Relaxed)
     }
 
     /// Waits until no other send is in flight for `room_id` and returns the
-    /// guard that keeps it that way.
+    /// guard that keeps it that way, or applies the configured saturation
+    /// policy when the bounded registry is full.
     ///
-    /// Moka's cache lock is internal and policy-driven; no map lock is held
-    /// across the room gate's `.await`.
-    pub(crate) async fn acquire(&self, room_id: RoomKey<'_>) -> Result<GateGuard, OutboundError> {
-        let gate = self
-            .gates
-            .get_with(room_id.as_str().to_owned(), async {
-                Arc::new(Gate::new(self.waiters_per_room))
-            })
-            .await;
-        let lease = GateLease::new(&gate, self.waiters_per_room, room_id.as_str())?;
-        // If this acquire is cancelled while waiting, `lease` drops and the
-        // gate may be evicted. While it is held, the caller's lease and tokio
-        // guard keep the room serialised.
-        match tokio::time::timeout(self.wait_timeout, Arc::clone(&gate.mutex).lock_owned()).await {
-            Ok(guard) => Ok(GateGuard {
-                _guard: guard,
-                _lease: lease,
-            }),
-            Err(_) => Err(OutboundError::GateTimeout {
-                room_id: room_id.as_str().to_owned(),
-                waited: self.wait_timeout,
-            }),
+    /// The registry lock is only held for lookup/insert/remove; no map lock is
+    /// held across the room gate's `.await`.
+    pub(crate) async fn acquire(&self, room_id: RoomKey<'_>) -> Result<GateOutcome, OutboundError> {
+        match self.registry.saturation {
+            OrderingSaturation::Backpressure => {
+                let immediate = {
+                    let mut gates = self.registry.lock();
+                    if let Some(existing) = gates.get(room_id.as_str()) {
+                        Some(Ok(Arc::clone(existing)))
+                    } else if let Ok(permit) =
+                        Arc::clone(&self.registry.capacity).try_acquire_owned()
+                    {
+                        let gate = Arc::new(Gate::new(permit, self.registry.waiters_per_room));
+                        gates.insert(room_id.as_str().to_owned(), Arc::clone(&gate));
+                        Some(Ok(gate))
+                    } else {
+                        None
+                    }
+                };
+                if let Some(gate) = immediate {
+                    return self.order(room_id, gate?).await;
+                }
+
+                self.registry
+                    .saturation_waits
+                    .fetch_add(1, Ordering::Relaxed);
+                let permit = Arc::clone(&self.registry.capacity)
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| OutboundError::InvalidConfig {
+                        reason: "per-room gate capacity was closed".to_owned(),
+                    })?;
+                let gate = {
+                    let mut gates = self.registry.lock();
+                    if let Some(existing) = gates.get(room_id.as_str()) {
+                        Arc::clone(existing)
+                    } else {
+                        let gate = Arc::new(Gate::new(permit, self.registry.waiters_per_room));
+                        gates.insert(room_id.as_str().to_owned(), Arc::clone(&gate));
+                        gate
+                    }
+                };
+                self.order(room_id, gate).await
+            }
+            OrderingSaturation::Error => {
+                let gate = {
+                    let mut gates = self.registry.lock();
+                    if let Some(existing) = gates.get(room_id.as_str()) {
+                        Some(Arc::clone(existing))
+                    } else {
+                        match Arc::clone(&self.registry.capacity).try_acquire_owned() {
+                            Ok(permit) => {
+                                let gate =
+                                    Arc::new(Gate::new(permit, self.registry.waiters_per_room));
+                                gates.insert(room_id.as_str().to_owned(), Arc::clone(&gate));
+                                Some(gate)
+                            }
+                            Err(_) => None,
+                        }
+                    }
+                };
+                let Some(gate) = gate else {
+                    return Err(OutboundError::OrderingLost {
+                        room_id: room_id.as_str().to_owned(),
+                        capacity: self.registry.capacity_limit,
+                    });
+                };
+                self.order(room_id, gate).await
+            }
+            OrderingSaturation::Unordered => {
+                let gate = {
+                    let mut gates = self.registry.lock();
+                    if let Some(existing) = gates.get(room_id.as_str()) {
+                        Some(Arc::clone(existing))
+                    } else {
+                        match Arc::clone(&self.registry.capacity).try_acquire_owned() {
+                            Ok(permit) => {
+                                let gate =
+                                    Arc::new(Gate::new(permit, self.registry.waiters_per_room));
+                                gates.insert(room_id.as_str().to_owned(), Arc::clone(&gate));
+                                Some(gate)
+                            }
+                            Err(_) => None,
+                        }
+                    }
+                };
+                if let Some(gate) = gate {
+                    return self.order(room_id, gate).await;
+                }
+                self.registry
+                    .unordered_sends
+                    .fetch_add(1, Ordering::Relaxed);
+                Ok(GateOutcome::Unordered)
+            }
         }
     }
 
-    #[cfg(test)]
-    async fn run_pending_tasks(&self) {
-        self.gates.run_pending_tasks().await;
+    async fn order(
+        &self,
+        room_id: RoomKey<'_>,
+        gate: Arc<Gate>,
+    ) -> Result<GateOutcome, OutboundError> {
+        let lease = GateLease::new(
+            Arc::clone(&gate),
+            self.registry.waiters_per_room,
+            room_id.as_str(),
+            Arc::clone(&self.registry),
+        )?;
+        // If this acquire is cancelled while waiting, `lease` drops and the
+        // room may be removed from the map. While it is held, the caller's lease
+        // and tokio guard keep the room serialised.
+        match tokio::time::timeout(
+            self.registry.wait_timeout,
+            Arc::clone(&gate.mutex).lock_owned(),
+        )
+        .await
+        {
+            Ok(guard) => Ok(GateOutcome::Ordered(GateGuard {
+                _guard: guard,
+                _lease: lease,
+            })),
+            Err(_) => Err(OutboundError::GateTimeout {
+                room_id: room_id.as_str().to_owned(),
+                waited: self.registry.wait_timeout,
+            }),
+        }
     }
 }
 
@@ -217,7 +459,11 @@ mod tests {
     }
 
     fn gates(capacity: usize) -> RoomGates {
-        RoomGates::new(capacity).expect("a non-zero capacity")
+        RoomGates::new(capacity, OrderingSaturation::Backpressure).expect("a non-zero capacity")
+    }
+
+    fn gates_with(capacity: usize, saturation: OrderingSaturation) -> RoomGates {
+        RoomGates::new(capacity, saturation).expect("a non-zero capacity")
     }
 
     fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
@@ -225,25 +471,28 @@ mod tests {
         future.poll(&mut context)
     }
 
+    async fn acquire_ordered(gates: &RoomGates, room: &str) -> GateGuard {
+        match gates.acquire(key(room)).await.expect("a gate") {
+            GateOutcome::Ordered(guard) => guard,
+            GateOutcome::Unordered => panic!("expected an ordered gate"),
+        }
+    }
+
     #[test]
     fn gates_are_created_per_room_and_reused() {
         runtime().block_on(async {
             let gates = gates(GATE_CAPACITY);
             assert_eq!(gates.len(), 0);
-            let first = gates.acquire(key("!a:x")).await;
-            assert!(first.is_ok());
-            gates.run_pending_tasks().await;
+            let first = acquire_ordered(&gates, "!a:x").await;
             assert_eq!(gates.len(), 1);
             drop(first);
-            let second = gates.acquire(key("!a:x")).await;
-            assert!(second.is_ok());
-            gates.run_pending_tasks().await;
-            // Same room, same gate: no second entry.
+            assert_eq!(gates.len(), 0);
+            let second = acquire_ordered(&gates, "!a:x").await;
             assert_eq!(gates.len(), 1);
-            let other = gates.acquire(key("!b:x")).await;
-            assert!(other.is_ok());
-            gates.run_pending_tasks().await;
+            let other = acquire_ordered(&gates, "!b:x").await;
             assert_eq!(gates.len(), 2);
+            drop((second, other));
+            assert_eq!(gates.len(), 0);
         });
     }
 
@@ -251,120 +500,97 @@ mod tests {
     fn one_room_serialises_and_two_rooms_do_not() {
         runtime().block_on(async {
             let gates = Arc::new(gates(GATE_CAPACITY));
-            // A gate held for room A must block a second acquire of room A but
-            // not of room B.
-            let held = gates.acquire(key("!a:x")).await.expect("a free gate");
+            let held = acquire_ordered(&gates, "!a:x").await;
             let blocked = {
                 let gates = Arc::clone(&gates);
-                tokio::spawn(async move { gates.acquire(key("!a:x")).await })
+                tokio::spawn(async move { acquire_ordered(&gates, "!a:x").await })
             };
             let free = gates.acquire(key("!b:x")).await;
-            assert!(free.is_ok(), "a different room must not block");
+            assert!(matches!(free, Ok(GateOutcome::Ordered(_))));
             tokio::time::sleep(Duration::from_millis(10)).await;
             assert!(!blocked.is_finished(), "the same room must block");
             drop(held);
-            assert!(blocked.await.expect("task").is_ok());
+            let blocked = blocked.await.expect("task");
+            drop(blocked);
         });
     }
 
     #[test]
-    fn a_full_cache_admits_new_rooms_by_evicting_old_ones() {
+    fn a_full_registry_backpressures_new_rooms_until_a_gate_is_released() {
         runtime().block_on(async {
-            let gates = gates(2);
-            let first = gates.acquire(key("!a:x")).await;
-            let second = gates.acquire(key("!b:x")).await;
-            assert!(first.is_ok() && second.is_ok());
-            gates.run_pending_tasks().await;
-            assert_eq!(gates.len(), 2);
+            let gates = Arc::new(gates(1));
+            let held = acquire_ordered(&gates, "!a:x").await;
+            let mut waiter = Box::pin(gates.acquire(key("!b:x")));
 
-            let third = gates.acquire(key("!c:x")).await;
-            assert!(third.is_ok());
-            gates.run_pending_tasks().await;
-            assert_eq!(gates.len(), 2);
+            assert!(poll_once(waiter.as_mut()).is_pending());
+            assert_eq!(gates.len(), 1);
+            assert_eq!(gates.saturation_waits(), 1);
 
-            drop((first, second, third));
+            drop(held);
+            let outcome = match poll_once(waiter.as_mut()) {
+                Poll::Ready(outcome) => outcome,
+                Poll::Pending => panic!("the released gate must admit the waiter"),
+            };
+            assert!(matches!(outcome, Ok(GateOutcome::Ordered(_))));
+            assert_eq!(gates.len(), 1);
+            drop(outcome);
+            assert_eq!(gates.len(), 0);
         });
     }
 
     #[test]
     fn zero_capacity_is_rejected() {
-        let error = RoomGates::new(0).expect_err("capacity 0 is unusable");
+        let error = RoomGates::new(0, OrderingSaturation::Backpressure)
+            .expect_err("capacity 0 is unusable");
 
         assert!(matches!(error, OutboundError::InvalidConfig { .. }));
         assert!(error.to_string().contains("capacity is 0"), "{error}");
     }
 
     #[test]
-    fn capacity_one_keeps_the_cache_bounded() {
+    fn capacity_one_keeps_the_map_bounded_and_serialises_the_room() {
         runtime().block_on(async {
             let gates = gates(1);
-            let first = gates.acquire(key("!a:x")).await;
-            assert!(first.is_ok());
-            gates.run_pending_tasks().await;
+            let first = acquire_ordered(&gates, "!a:x").await;
             assert_eq!(gates.len(), 1);
 
-            let second = gates.acquire(key("!b:x")).await;
-            assert!(second.is_ok());
-            gates.run_pending_tasks().await;
+            let mut waiter = Box::pin(gates.acquire(key("!a:x")));
+            assert!(poll_once(waiter.as_mut()).is_pending());
             assert_eq!(gates.len(), 1);
 
-            drop((first, second));
+            drop(first);
+            let outcome = match poll_once(waiter.as_mut()) {
+                Poll::Ready(outcome) => outcome,
+                Poll::Pending => panic!("the released gate must admit the waiter"),
+            };
+            assert!(matches!(outcome, Ok(GateOutcome::Ordered(_))));
+            assert_eq!(gates.len(), 1);
+            drop(outcome);
+            assert_eq!(gates.len(), 0);
         });
     }
 
     #[test]
     fn capacity_is_an_exact_boundary_not_an_exclusive_one() {
         runtime().block_on(async {
-            let gates = gates(3);
-            let first = gates.acquire(key("!a:x")).await;
-            let second = gates.acquire(key("!b:x")).await;
-            let third = gates.acquire(key("!c:x")).await;
-            assert!(first.is_ok() && second.is_ok() && third.is_ok());
-            gates.run_pending_tasks().await;
-            assert_eq!(gates.len(), 3);
+            let gates = gates(2);
+            let first = acquire_ordered(&gates, "!a:x").await;
+            let second = acquire_ordered(&gates, "!b:x").await;
+            assert_eq!(gates.len(), 2);
 
-            let fourth = gates.acquire(key("!d:x")).await;
-            assert!(fourth.is_ok());
-            gates.run_pending_tasks().await;
-            assert_eq!(gates.len(), 3);
+            let mut third = Box::pin(gates.acquire(key("!c:x")));
+            assert!(poll_once(third.as_mut()).is_pending());
+            assert_eq!(gates.len(), 2);
 
-            drop((first, second, third, fourth));
-        });
-    }
-
-    #[test]
-    fn eviction_does_not_lose_tokio_serialization_for_a_live_room() {
-        runtime().block_on(async {
-            let gates = Arc::new(gates(1));
-            let held = gates.acquire(key("!live:x")).await.expect("a gate");
-
-            let blocked = {
-                let gates = Arc::clone(&gates);
-                tokio::spawn(async move { gates.acquire(key("!live:x")).await })
+            drop(first);
+            let outcome = match poll_once(third.as_mut()) {
+                Poll::Ready(outcome) => outcome,
+                Poll::Pending => panic!("the released gate must admit the waiter"),
             };
-            gates.run_pending_tasks().await;
-            assert_eq!(gates.len(), 1);
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            assert!(!blocked.is_finished(), "the held room must still block");
-
-            drop(held);
-            assert!(blocked.await.expect("task").is_ok());
-        });
-    }
-
-    #[test]
-    fn a_cache_miss_for_the_same_room_blocks_until_the_previous_guard_drops() {
-        runtime().block_on(async {
-            let gates = Arc::new(gates(1));
-            let held = gates.acquire(key("!queued:x")).await.expect("a gate");
-            let mut waiter = Box::pin(gates.acquire(key("!queued:x")));
-
-            assert!(poll_once(waiter.as_mut()).is_pending());
-            gates.run_pending_tasks().await;
-            assert_eq!(gates.len(), 1);
-
-            drop(held);
-            assert!(poll_once(waiter.as_mut()).is_ready());
+            assert!(matches!(outcome, Ok(GateOutcome::Ordered(_))));
+            assert_eq!(gates.len(), 2);
+            drop((second, outcome));
+            assert_eq!(gates.len(), 0);
         });
     }
 
@@ -372,7 +598,7 @@ mod tests {
     fn a_cancelled_waiter_does_not_block_the_room() {
         runtime().block_on(async {
             let gates = gates(1);
-            let held = gates.acquire(key("!queued:x")).await.expect("a gate");
+            let held = acquire_ordered(&gates, "!queued:x").await;
             let mut waiter = Box::pin(gates.acquire(key("!queued:x")));
 
             assert!(poll_once(waiter.as_mut()).is_pending());
@@ -380,8 +606,7 @@ mod tests {
 
             drop(held);
             let new = gates.acquire(key("!queued:x")).await;
-            assert!(new.is_ok(), "the cancelled waiter must not leak the room");
-            gates.run_pending_tasks().await;
+            assert!(matches!(new, Ok(GateOutcome::Ordered(_))));
             assert_eq!(gates.len(), 1);
         });
     }
@@ -389,7 +614,13 @@ mod tests {
     #[test]
     fn one_room_queue_admits_the_limit_and_rejects_the_next_waiter() {
         runtime().block_on(async {
-            let gates = RoomGates::with_wait_limits(1, 2, GATE_WAIT_TIMEOUT).expect("valid limits");
+            let gates = RoomGates::with_wait_limits(
+                1,
+                OrderingSaturation::Backpressure,
+                2,
+                GATE_WAIT_TIMEOUT,
+            )
+            .expect("valid limits");
             let held = gates.acquire(key("!queued:x")).await.expect("a gate");
             let mut first = Box::pin(gates.acquire(key("!queued:x")));
             let mut second = Box::pin(gates.acquire(key("!queued:x")));
@@ -413,8 +644,13 @@ mod tests {
     #[test]
     fn a_waiter_times_out_instead_of_waiting_forever() {
         runtime().block_on(async {
-            let gates =
-                RoomGates::with_wait_limits(1, 1, Duration::from_millis(5)).expect("valid limits");
+            let gates = RoomGates::with_wait_limits(
+                1,
+                OrderingSaturation::Backpressure,
+                1,
+                Duration::from_millis(5),
+            )
+            .expect("valid limits");
             let held = gates.acquire(key("!queued:x")).await.expect("a gate");
 
             let error = gates
@@ -433,8 +669,13 @@ mod tests {
     #[test]
     fn a_timed_out_waiter_releases_its_queue_slot() {
         runtime().block_on(async {
-            let gates =
-                RoomGates::with_wait_limits(1, 1, Duration::from_millis(5)).expect("valid limits");
+            let gates = RoomGates::with_wait_limits(
+                1,
+                OrderingSaturation::Backpressure,
+                1,
+                Duration::from_millis(5),
+            )
+            .expect("valid limits");
             let held = gates.acquire(key("!queued:x")).await.expect("a gate");
 
             let error = gates
@@ -447,6 +688,42 @@ mod tests {
             assert!(poll_once(waiter.as_mut()).is_pending());
             drop(held);
             assert!(poll_once(waiter.as_mut()).is_ready());
+        });
+    }
+
+    #[test]
+    fn strict_saturation_returns_ordering_lost_at_the_boundary() {
+        runtime().block_on(async {
+            let gates = gates_with(1, OrderingSaturation::Error);
+            let held = acquire_ordered(&gates, "!a:x").await;
+            let error = gates
+                .acquire(key("!b:x"))
+                .await
+                .expect_err("the second room is beyond capacity");
+
+            assert!(matches!(error, OutboundError::OrderingLost { .. }));
+            assert_eq!(
+                error,
+                OutboundError::OrderingLost {
+                    room_id: "!b:x".to_owned(),
+                    capacity: 1,
+                }
+            );
+            drop(held);
+        });
+    }
+
+    #[test]
+    fn explicit_unordered_saturation_is_observable() {
+        runtime().block_on(async {
+            let gates = gates_with(1, OrderingSaturation::Unordered);
+            let held = acquire_ordered(&gates, "!a:x").await;
+            let outcome = gates.acquire(key("!b:x")).await.expect("explicit fallback");
+
+            assert!(matches!(outcome, GateOutcome::Unordered));
+            assert_eq!(gates.unordered_sends(), 1);
+            assert_eq!(gates.saturation_waits(), 0);
+            drop(held);
         });
     }
 
@@ -473,16 +750,17 @@ mod tests {
 
     proptest! {
         #[test]
-        fn gate_count_never_exceeds_capacity(capacity in 1usize..8, rooms in 1usize..24) {
-            let result = runtime().block_on(async {
-                let gates = gates(capacity);
+        fn unordered_gate_count_never_exceeds_capacity(capacity in 1usize..8, rooms in 1usize..24) {
+            let result: Result<(), TestCaseError> = runtime().block_on(async {
+                let gates = gates_with(capacity, OrderingSaturation::Unordered);
                 let mut held = Vec::new();
                 for index in 0..rooms {
                     let room = format!("!{index}:x");
-                    if let Ok(gate) = gates.acquire(key(&room)).await {
-                        held.push(gate);
+                    match gates.acquire(key(&room)).await {
+                        Ok(GateOutcome::Ordered(gate)) => held.push(gate),
+                        Ok(GateOutcome::Unordered) => {}
+                        Err(error) => return Err(TestCaseError::fail(error.to_string())),
                     }
-                    gates.run_pending_tasks().await;
                     prop_assert!(gates.len() <= capacity);
                 }
                 Ok(())
@@ -514,12 +792,11 @@ mod tests {
 
                 for index in 0..extra {
                     let room = format!("!extra-{index}:x");
-                    prop_assert!(gates.acquire(key(&room)).await.is_ok());
-                    gates.run_pending_tasks().await;
+                    let mut extra_waiter = Box::pin(gates.acquire(key(&room)));
+                    prop_assert!(poll_once(extra_waiter.as_mut()).is_pending());
                     prop_assert!(gates.len() <= capacity);
                 }
 
-                gates.run_pending_tasks().await;
                 prop_assert!(gates.len() <= capacity);
                 Ok(())
             });

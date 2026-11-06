@@ -181,13 +181,18 @@ write carries the transaction id, and repeating that send with it
 Sends into one room are serialised (one request in flight, any number across
 rooms) so a bot's two-part reply cannot arrive out of order; turn it off with
 `ClientConfig::with_per_room_ordering(false)`. `GATE_CAPACITY` bounds the
-number of room keys cached, not bytes, and each room accepts at most
+number of active room keys, not bytes, and each room accepts at most
 `GATE_WAITERS_PER_ROOM` queued callers; a queue wait longer than
-`GATE_WAIT_TIMEOUT` fails with `GateTimeout` instead of awaiting forever.
-Limits are checked before a request exists: content against the 65 536-byte
-event ceiling, media against the configured `max_upload_bytes` (read the
-homeserver's real value from `m.upload.size` in `/capabilities`). The wire
-shapes and their sources are quoted in [docs/contracts.md](docs/contracts.md).
+`GATE_WAIT_TIMEOUT` fails with `GateTimeout` instead of awaiting forever. When
+all 4 096 active-room gate slots are in use, the default
+`OrderingSaturation::Backpressure` waits instead of silently losing the
+ordering guarantee; `OrderingSaturation::Error` returns
+`OutboundError::OrderingLost`, and `OrderingSaturation::Unordered` is the
+explicit opt-in to degraded ordering. Limits are checked before a request
+exists: content against the 65 536-byte event ceiling, media against the
+configured `max_upload_bytes` (read the homeserver's real value from
+`m.upload.size` in `/capabilities`). The wire shapes and their sources are
+quoted in [docs/contracts.md](docs/contracts.md).
 
 ### How this crate absorbed `channel-core` and `matrix-out`
 
@@ -412,12 +417,11 @@ explicit.
 | `tests/deny_config.rs` | the cargo-deny config keeps advisory checks on the all-features graph and rejects stale ignores |
 | `tests/changelog.rs` | the newest changelog heading equals `Cargo.toml`, sections are newest-first, no duplicates and none empty — a version bump without an entry fails the build |
 
-**Coverage: 98.5 % of lines** (`cargo llvm-cov --all-features`, 3941 lines,
-59 missed; `src/id.rs` and `model.rs` at 100 %, `rich.rs` at 99 %). The outbound module alone
-is ≥94 % per file and 100 % in `ordering.rs`; the misses are `reqwest`'s own error arms,
-`serde_json` failure paths and the `is_empty()` helpers no test calls directly.
-The gate is `--fail-under-lines 95`, so a regression fails CI rather than
-quietly eroding the number. Fuzz targets: `normalize`
+**Coverage: 96.5 % of lines** (`cargo llvm-cov --all-features`, 7751 lines,
+268 missed). The misses are `reqwest`'s own error arms, `serde_json` failure
+paths, provider error branches and the `is_empty()` helpers no test calls
+directly. The gate is `--fail-under-lines 95`, so a regression fails CI rather
+than quietly eroding the number. Fuzz targets: `normalize`
 (`cargo fuzz run normalize`), seeded with `fuzz/corpus/normalize/`;
 `outbound_ids`, which covers the public outbound validators; and `subscription`,
 which checks accepted handshake challenges stay bounded decimal.

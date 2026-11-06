@@ -61,10 +61,12 @@ src/matrix_out/http.rs:struct ReqwestTransport
 src/matrix_out/mod.rs:impl ClientConfig:fn homeserver
 src/matrix_out/mod.rs:impl ClientConfig:fn max_upload_bytes
 src/matrix_out/mod.rs:impl ClientConfig:fn new
+src/matrix_out/mod.rs:impl ClientConfig:fn ordering_saturation
 src/matrix_out/mod.rs:impl ClientConfig:fn per_room_ordering
 src/matrix_out/mod.rs:impl ClientConfig:fn retry
 src/matrix_out/mod.rs:impl ClientConfig:fn user_id
 src/matrix_out/mod.rs:impl ClientConfig:fn with_max_upload_bytes
+src/matrix_out/mod.rs:impl ClientConfig:fn with_ordering_saturation
 src/matrix_out/mod.rs:impl ClientConfig:fn with_per_room_ordering
 src/matrix_out/mod.rs:impl ClientConfig:fn with_retry
 src/matrix_out/mod.rs:impl ClientConfig:fn with_sleeper
@@ -82,7 +84,7 @@ src/matrix_out/mod.rs:struct TokioSleeper
 src/matrix_out/mod.rs:trait Sleeper
 src/matrix_out/mod.rs:use error::{OutboundError,OutboundResult}
 src/matrix_out/mod.rs:use http::{ReqwestTransport,DEFAULT_REQUEST_TIMEOUT,MAX_RESPONSE_BODY_BYTES}
-src/matrix_out/mod.rs:use ordering::{GATE_CAPACITY,GATE_WAITERS_PER_ROOM,GATE_WAIT_TIMEOUT}
+src/matrix_out/mod.rs:use ordering::{OrderingSaturation,GATE_CAPACITY,GATE_WAITERS_PER_ROOM,GATE_WAIT_TIMEOUT}
 src/matrix_out/mod.rs:use retry::{Operation,RetryPolicy,RetryPolicyError,Verdict,DEFAULT_BASE_DELAY_MS,DEFAULT_MAX_ATTEMPTS,DEFAULT_MAX_DELAY_MS,DEFAULT_MAX_RATE_LIMIT_WAIT_MS,}
 src/matrix_out/mod.rs:use testing::{RecordedRequest,RecordingSleeper,StubCounters,StubTransport}
 src/matrix_out/mod.rs:use transport::Transport
@@ -90,6 +92,8 @@ src/matrix_out/mod.rs:use types::{MediaKind,MediaUpload,MxcUri,SendOutcome,TxnId
 src/matrix_out/ordering.rs:const GATE_CAPACITY
 src/matrix_out/ordering.rs:const GATE_WAITERS_PER_ROOM
 src/matrix_out/ordering.rs:const GATE_WAIT_TIMEOUT
+src/matrix_out/ordering.rs:enum OrderingSaturation
+src/matrix_out/ordering.rs:impl OrderingSaturation:fn as_str
 src/matrix_out/retry.rs:const DEFAULT_BASE_DELAY_MS
 src/matrix_out/retry.rs:const DEFAULT_MAX_ATTEMPTS
 src/matrix_out/retry.rs:const DEFAULT_MAX_DELAY_MS

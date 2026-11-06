@@ -89,6 +89,24 @@ pub enum OutboundError {
         waited: Duration,
     },
 
+    /// Per-room ordering could not be preserved because the gate map was full
+    /// and [`OrderingSaturation::Error`] was configured.
+    ///
+    /// Nothing was sent. Retry after another room has finished and released its
+    /// gate, or choose [`OrderingSaturation::Backpressure`] to wait instead.
+    ///
+    /// [`OrderingSaturation::Error`]: crate::matrix_out::OrderingSaturation::Error
+    /// [`OrderingSaturation::Backpressure`]: crate::matrix_out::OrderingSaturation::Backpressure
+    #[error(
+        "per-room ordering is saturated at {capacity} active rooms; refusing unordered send to {room_id}"
+    )]
+    OrderingLost {
+        /// The validated room id whose ordering guarantee was requested.
+        room_id: String,
+        /// The configured per-room gate capacity.
+        capacity: usize,
+    },
+
     /// The serialised content is larger than the event ceiling.
     #[error("the message content is {actual} bytes, the Matrix event ceiling leaves {limit}")]
     MessageTooLong {
@@ -232,10 +250,11 @@ impl OutboundError {
     /// Whether the same request could succeed if it were retried unchanged.
     ///
     /// `true` for [`OutboundError::RateLimited`], [`OutboundError::Transport`],
-    /// [`OutboundError::GateOverflow`] and [`OutboundError::GateTimeout`], and
-    /// [`OutboundError::Server`] only when the server error belongs to a
-    /// repeatable operation with no transaction id. `false` for an ambiguous
-    /// write: retrying it blindly is how a message gets posted twice.
+    /// [`OutboundError::GateOverflow`], [`OutboundError::GateTimeout`] and
+    /// [`OutboundError::OrderingLost`], and [`OutboundError::Server`] only when
+    /// the server error belongs to a repeatable operation with no transaction
+    /// id. `false` for an ambiguous write: retrying it blindly is how a message
+    /// gets posted twice.
     ///
     /// ```
     /// use std::time::Duration;
@@ -276,7 +295,8 @@ impl OutboundError {
             Self::RateLimited { .. }
             | Self::Transport { .. }
             | Self::GateOverflow { .. }
-            | Self::GateTimeout { .. } => true,
+            | Self::GateTimeout { .. }
+            | Self::OrderingLost { .. } => true,
             Self::Server {
                 operation, txn_id, ..
             } => txn_id.is_none() && operation.is_repeatable(),
@@ -609,6 +629,16 @@ mod tests {
                 false,
                 "the transport failed for all 2 attempts: dns".into(),
             ),
+            (
+                OutboundError::OrderingLost {
+                    room_id: "!busy:m.example".into(),
+                    capacity: 2,
+                },
+                true,
+                false,
+                false,
+                "per-room ordering is saturated at 2 active rooms; refusing unordered send to !busy:m.example".into(),
+            ),
         ];
 
         for (error, retryable, ambiguous, client_error, text) in cases {
@@ -782,7 +812,8 @@ mod tests {
             OutboundError::RateLimited { .. }
             | OutboundError::Transport { .. }
             | OutboundError::GateOverflow { .. }
-            | OutboundError::GateTimeout { .. } => ExpectedClassification {
+            | OutboundError::GateTimeout { .. }
+            | OutboundError::OrderingLost { .. } => ExpectedClassification {
                 classification: Retryable,
                 client_error: false,
             },
@@ -865,6 +896,10 @@ mod tests {
                 attempts: 1,
                 reason: "x".into(),
             },
+            OutboundError::OrderingLost {
+                room_id: "!busy:m.example".into(),
+                capacity: 1,
+            },
             OutboundError::TestHarness { reason: "x".into() },
             OutboundError::DecodeAfterWrite {
                 what: "event send",
@@ -884,7 +919,7 @@ mod tests {
     #[test]
     fn every_error_variant_has_one_explicit_classification() {
         let errors = every_outbound_error();
-        assert_eq!(errors.len(), 16, "the table must cover every variant");
+        assert_eq!(errors.len(), 17, "the table must cover every variant");
 
         for error in errors {
             let expected = expected_classification(&error);
