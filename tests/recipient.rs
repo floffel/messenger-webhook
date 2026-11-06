@@ -98,6 +98,7 @@ fn matrix_recipient_boundaries() {
     assert!(!accepts(&adapter, "   "));
 
     assert!(accepts(&adapter, "!r:s"));
+    assert!(accepts(&adapter, "!a:b"));
     // Matrix has no documented room-id ceiling, but the crate-wide cap still
     // applies so an unbounded id cannot be embedded in a request body.
     let room_at_limit = format!("!{}:s", "a".repeat(MAX_RECIPIENT_BYTES - 3));
@@ -106,7 +107,10 @@ fn matrix_recipient_boundaries() {
     let room_over_limit = format!("!{}:s", "a".repeat(MAX_RECIPIENT_BYTES - 2));
     assert!(!accepts(&adapter, &room_over_limit));
 
-    // Matrix room ids start with `!`.
+    // Matrix room ids are `!localpart:server`, not merely a `!` prefix.
+    assert!(!accepts(&adapter, "!"));
+    assert!(!accepts(&adapter, "!:s"));
+    assert!(!accepts(&adapter, "!r:"));
     assert!(!accepts(&adapter, "r:example.org"));
     assert!(!accepts(&adapter, "!r:ex\nample.org"));
     assert!(!accepts(&adapter, "!r:ex\u{0}ample.org"));

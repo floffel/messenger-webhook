@@ -211,7 +211,13 @@ impl Adapter for MatrixAdapter {
         // The room id lives in the URL, not the content, but it is still the
         // recipient, so it goes through the shared validator before anything is
         // built.
-        recipient(Channel::Matrix, message)?;
+        let room_id = recipient(Channel::Matrix, message)?;
+        if !is_matrix_room_id(room_id) {
+            return Err(Error::InvalidMessage {
+                channel: Channel::Matrix,
+                reason: format!("Matrix room ids must be `!localpart:server`, got {room_id:?}"),
+            });
+        }
 
         let text = message.text.as_deref().unwrap_or_default();
         let mut content = if let Some(attachment) = message.first_attachment() {
@@ -273,10 +279,10 @@ fn media_content(attachment: &Attachment, text: &str) -> Result<serde_json::Map<
             channel: Channel::Matrix,
             reason: "attachment has neither a url nor an id".to_owned(),
         })?;
-    if !url.starts_with("mxc://") {
+    if !is_matrix_content_uri(url) {
         return Err(Error::InvalidMessage {
             channel: Channel::Matrix,
-            reason: format!("Matrix media urls must be mxc://, got {url:?}"),
+            reason: format!("Matrix media urls must be mxc://server/media, got {url:?}"),
         });
     }
 
@@ -371,6 +377,41 @@ fn is_media_replacement_without_url(replacement: &serde_json::Map<String, Value>
     media && replacement.get("url").is_none()
 }
 
+/// Whether `room_id` has the Matrix room-id shape `!localpart:server`.
+///
+/// `matrix_out` has its own outbound-client validator, but the webhook adapter
+/// only has `recipient`'s shared "starts with `!`" check. The maintained parser
+/// (`ruma_common::RoomId::parse`) is unavailable here for the same license
+/// reason documented at [`normalize_event`], so this small check keeps a bare
+/// `"!"` and a room with an empty localpart or server from reaching a request.
+fn is_matrix_room_id(room_id: &str) -> bool {
+    let Some((localpart, server_name)) = room_id
+        .strip_prefix('!')
+        .and_then(|rest| rest.split_once(':'))
+    else {
+        return false;
+    };
+    !localpart.is_empty() && !server_name.is_empty()
+}
+
+/// Whether `uri` has the Matrix content-URI shape `mxc://server/media`.
+///
+/// `ruma_common::OwnedMxcUri::parse` is the maintained parser, but
+/// `ruma-common` depends on `as_variant` (MPL-2.0), which this repository's
+/// `deny.toml` intentionally rejects. Local checks therefore have to reject the
+/// old `starts_with("mxc://")` false positives instead of trusting a prefix.
+fn is_matrix_content_uri(uri: &str) -> bool {
+    let Some(rest) = uri.strip_prefix("mxc://") else {
+        return false;
+    };
+    let Some((server_name, media_id)) = rest.split_once('/') else {
+        return false;
+    };
+    !server_name.is_empty()
+        && !media_id.is_empty()
+        && !uri.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 /// Maps one Matrix event of any type.
 fn normalize_event(event: &Value, envelope_path: &str) -> Result<Vec<NormalizedMessage>> {
     let event_type = json::string(event, "type").unwrap_or("unknown");
@@ -387,14 +428,25 @@ fn normalize_event(event: &Value, envelope_path: &str) -> Result<Vec<NormalizedM
     normalized.provider_type = Some(event_type.to_owned());
     normalized.raw = Some(event.clone());
 
+    // `ruma-events`/`ruma-common` model this match, but adding `ruma-common`
+    // fails `cargo deny check`: it depends on `as_variant` (MPL-2.0), and this
+    // repository intentionally does not allow that license or add ignore
+    // entries for it. Keep the unavoidable raw-string mapping localized here
+    // and cover each branch with tests instead.
     match event_type {
         "m.room.message" | "m.sticker" => apply_content(&mut normalized, event_type, &content),
         "m.reaction" => {
             let relates = json::child(&content, "m.relates_to");
             let target = relates.and_then(|relates| json::id(relates, "event_id"));
             let emoji = relates.and_then(|relates| json::string(relates, "key"));
-            if let (Some(message_id), Some(emoji)) = (target, emoji.filter(|key| !key.is_empty())) {
-                normalized.reaction = Some(Reaction::add(message_id, emoji)?);
+            let annotation = relates.and_then(|relates| json::string(relates, "rel_type"))
+                == Some("m.annotation");
+            if annotation {
+                if let (Some(message_id), Some(emoji)) =
+                    (target, emoji.filter(|key| !key.is_empty()))
+                {
+                    normalized.reaction = Some(Reaction::add(message_id, emoji)?);
+                }
             }
         }
         "m.room.redaction" => {
@@ -419,13 +471,16 @@ fn apply_content(normalized: &mut NormalizedMessage, event_type: &str, content: 
         .and_then(|relates| json::child(relates, "m.in_reply_to"))
         .and_then(|reply| json::id(reply, "event_id"));
 
+    let mut message_content = content;
     if let Some(relates) = relates {
         match json::string(relates, "rel_type") {
             Some("m.replace") => {
                 normalized.edit_of = json::id(relates, "event_id");
-                // A replacement carries the new content in `m.new_content`.
+                // A replacement carries the new content in `m.new_content`; the
+                // top-level message is only a fallback for clients that do not
+                // understand replacements.
                 if let Some(replacement) = json::child(content, "m.new_content") {
-                    normalized.set_text(json::string(replacement, "body").map(str::to_owned));
+                    message_content = replacement;
                 }
             }
             Some("m.thread") => normalized.thread_id = json::id(relates, "event_id"),
@@ -433,18 +488,16 @@ fn apply_content(normalized: &mut NormalizedMessage, event_type: &str, content: 
         }
     }
 
-    if normalized.text().is_none() {
-        normalized.set_text(json::string(content, "body").map(str::to_owned));
-    }
+    normalized.set_text(json::string(message_content, "body").map(str::to_owned));
 
-    if json::string(content, "format") == Some("org.matrix.custom.html") {
+    if json::string(message_content, "format") == Some("org.matrix.custom.html") {
         let body = normalized.text().unwrap_or_default();
-        if let Some(formatted_body) = json::string(content, "formatted_body") {
+        if let Some(formatted_body) = json::string(message_content, "formatted_body") {
             normalized.set_spans(matrix_html_spans(body, formatted_body));
         }
     }
 
-    let msgtype = json::string(content, "msgtype").unwrap_or("m.text");
+    let msgtype = json::string(message_content, "msgtype").unwrap_or("m.text");
     let kind = match (event_type, msgtype) {
         ("m.sticker", _) => Some(AttachmentKind::Sticker),
         (_, "m.image") => Some(AttachmentKind::Image),
@@ -458,10 +511,11 @@ fn apply_content(normalized: &mut NormalizedMessage, event_type: &str, content: 
 
     if let Some(kind) = kind {
         let is_location = kind == AttachmentKind::Location;
-        let info = json::child(content, "info");
+        let info = json::child(message_content, "info");
         let mut attachment = Attachment::new(kind);
-        attachment.id = json::id(content, "url")
-            .or_else(|| json::child(content, "file").and_then(|file| json::id(file, "url")));
+        attachment.id = json::id(message_content, "url").or_else(|| {
+            json::child(message_content, "file").and_then(|file| json::id(file, "url"))
+        });
         attachment.url.clone_from(&attachment.id);
         attachment.mime_type = info
             .and_then(|info| json::string(info, "mimetype"))
@@ -472,13 +526,13 @@ fn apply_content(normalized: &mut NormalizedMessage, event_type: &str, content: 
         attachment.duration_seconds =
             info.and_then(|info| json::narrow(json::unsigned(info, "duration")));
 
-        let body = json::string(content, "body");
-        attachment.filename = json::string(content, "filename")
+        let body = json::string(message_content, "body");
+        attachment.filename = json::string(message_content, "filename")
             .or(body)
             .map(str::to_owned);
         if is_location {
             attachment.filename = None;
-            attachment.caption = json::string(content, "geo_uri").map(str::to_owned);
+            attachment.caption = json::string(message_content, "geo_uri").map(str::to_owned);
         }
         // For media the body is the filename, not the message text.
         normalized.set_text(None::<String>);

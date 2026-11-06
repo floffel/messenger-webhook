@@ -16,6 +16,7 @@ carry a `!` in the conventional-commit subject.
 
 ### Changed
 
+- **Matrix identifiers and drifted event content are validated against their real shapes.** The Matrix adapter now rejects bare `"!"` room ids and bare `"mxc://"` media URIs, requires reactions to carry an `m.annotation` relation, and normalizes inbound edits from `m.new_content` instead of the replacement fallback body; the typed `ruma` parser remains unavailable because `ruma-common` pulls in `as_variant` under `MPL-2.0`, which `deny.toml` rejects. Closes #43.
 - The `cargo-deny` gate now resolves all features, so default-off dependencies
   such as the `matrix-out` HTTP stack are covered by advisory checks. Closes #17.
 - **The body ceiling is now a per-adapter property.** `Adapter` gains

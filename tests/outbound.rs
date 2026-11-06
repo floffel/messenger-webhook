@@ -697,15 +697,20 @@ mod matrix {
             Error::InvalidMessage { .. }
         ));
 
-        // Media url is not an mxc:// uri.
-        let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "");
-        let mut image = Attachment::new(AttachmentKind::Image);
-        image.url = Some("https://example.org/cat.jpg".to_owned());
-        message.attachments.push(image);
-        assert!(matches!(
-            adapter().encode(&message).unwrap_err(),
-            Error::InvalidMessage { .. }
-        ));
+        // Media url is not a complete mxc://server/media URI.
+        for url in ["https://example.org/cat.jpg", "mxc://", "mxc:///cat"] {
+            let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "");
+            let mut image = Attachment::new(AttachmentKind::Image);
+            image.url = Some(url.to_owned());
+            message.attachments.push(image);
+            assert!(
+                matches!(
+                    adapter().encode(&message).unwrap_err(),
+                    Error::InvalidMessage { .. }
+                ),
+                "{url}"
+            );
+        }
 
         // Location cannot be an m.room.message.
         let mut location = OutboundMessage::text(Channel::Matrix, "!r:s", "");
