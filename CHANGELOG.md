@@ -28,6 +28,12 @@ carry a `!` in the conventional-commit subject.
   `ProviderPayload::new` keeps its existing signature and defaults to the
   conservative unsafe policy, while `ProviderPayload::with_retry` is available
   for adapters that know the provider contract. Closes #39.
+- **Bounded body reads: `read_body` and `MAX_BODY_READ_BYTES`.** The adapter
+  size check only sees an already-materialised `&[u8]`, so it cannot stop a
+  hostile client from streaming an unbounded body into memory. `read_body`
+  reads at most `MAX_BODY_READ_BYTES` (`MAX_BODY_BYTES + 1`) and returns
+  `Error::BodyTooLarge` once the ceiling is crossed; read failures get their own
+  typed `Error::Io` variant. Closes #38.
 - **Rich text: `NormalizedMessage::spans`.** Providers flatten formatting into
   markup that this crate threw away, so a Telegram `**bold**` run reached the
   application as nothing but text. `NormalizedMessage` now carries

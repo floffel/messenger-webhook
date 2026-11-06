@@ -9,7 +9,7 @@
 use messenger_webhook::{
     signature, Attachment, AttachmentKind, Channel, DeliveryStatus, Error, Headers, IdempotencyKey,
     NormalizedMessage, ProviderPayload, Reaction, Registry, RetryPolicy, Secret,
-    MAX_IDEMPOTENCY_KEY_BYTES,
+    MAX_BODY_READ_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
 };
 
 #[test]
@@ -254,9 +254,19 @@ fn secret_api() {
 }
 
 #[test]
+fn bounded_body_read_api() {
+    assert_eq!(MAX_BODY_READ_BYTES, messenger_webhook::MAX_BODY_BYTES + 1);
+    assert_eq!(messenger_webhook::read_body(&b"{}"[..]).unwrap(), b"{}");
+}
+
+#[test]
 fn every_error_variant_renders_without_panicking() {
     let errors = [
         Error::Payload("not json".to_owned()),
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset",
+        )),
         Error::BodyTooLarge {
             limit: 10,
             actual: 11,

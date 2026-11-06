@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(dead_code, unused_imports, unused_mut, unused_variables)]
 
-use messenger_webhook::{Adapter, Error, Headers, MAX_BODY_BYTES};
+use messenger_webhook::{read_body, Adapter, Error, Headers, MAX_BODY_BYTES, MAX_BODY_READ_BYTES};
 
 #[cfg(feature = "whatsapp")]
 fn whatsapp() -> messenger_webhook::WhatsAppAdapter {
@@ -69,6 +69,92 @@ fn body_size_is_checked_before_hashing() {
             Err(Error::BodyTooLarge { .. })
         ));
     }
+}
+
+#[test]
+fn read_body_accepts_empty_and_exactly_the_limit() {
+    assert_eq!(read_body(&b""[..]).unwrap(), b"");
+
+    let at_limit = vec![b' '; MAX_BODY_BYTES];
+    assert_eq!(read_body(&at_limit[..]).unwrap(), at_limit);
+}
+
+#[test]
+fn read_body_rejects_one_over_the_limit_without_reading_further() {
+    struct CountingReader {
+        bytes: Vec<u8>,
+        read: usize,
+    }
+
+    impl std::io::Read for CountingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let remaining = self.bytes.len().saturating_sub(self.read);
+            let read = remaining.min(buffer.len());
+            buffer[..read].copy_from_slice(&self.bytes[self.read..self.read + read]);
+            self.read += read;
+            Ok(read)
+        }
+    }
+
+    let mut reader = CountingReader {
+        bytes: vec![b' '; MAX_BODY_READ_BYTES + 4096],
+        read: 0,
+    };
+    let error = read_body(&mut reader).unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::BodyTooLarge {
+            limit: MAX_BODY_BYTES,
+            actual: MAX_BODY_READ_BYTES,
+        }
+    ));
+    assert_eq!(
+        reader.read, MAX_BODY_READ_BYTES,
+        "read_body must not consume bytes after the sentinel"
+    );
+}
+
+#[test]
+fn read_body_reports_io_failures() {
+    struct Broken;
+
+    impl std::io::Read for Broken {
+        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset",
+            ))
+        }
+    }
+
+    assert!(matches!(read_body(Broken), Err(Error::Io(_))));
+}
+
+#[test]
+fn read_body_retries_interrupted_reads() {
+    struct InterruptedOnce {
+        calls: usize,
+    }
+
+    impl std::io::Read for InterruptedOnce {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.calls += 1;
+            if self.calls == 1 {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "try again",
+                ))
+            } else {
+                buffer[0] = b'{';
+                Ok(1)
+            }
+        }
+    }
+
+    let mut reader = InterruptedOnce { calls: 0 };
+    let body = std::io::Read::take(&mut reader, 1);
+    assert_eq!(read_body(body).unwrap(), b"{");
 }
 
 #[test]
