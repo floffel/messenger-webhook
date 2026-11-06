@@ -78,7 +78,43 @@ pub fn meta_signature(secret: &Secret, body: &[u8]) -> Result<String> {
 /// construction rejects the key, which cannot happen for HMAC-SHA256 and would
 /// still fail closed.
 pub fn verify_meta(secret: &Secret, header: &str, body: &[u8]) -> Result<()> {
-    let actual = hmac_sha256(secret, body)?;
+    verify_meta_any(std::slice::from_ref(secret), header, body)
+}
+
+/// Verifies a Meta `X-Hub-Signature-256` header value against any `secret`.
+///
+/// Use this during app-secret rotation: keep both the previous and current
+/// secret configured until every delivery signed with the previous one has
+/// drained. Every candidate is hashed and compared independently, so the work
+/// does not stop early when a later candidate matches.
+///
+/// ```
+/// use messenger_webhook::{signature, Secret};
+///
+/// let previous = Secret::new("previous-secret-previous")?;
+/// let current = Secret::new("current-secret-current")?;
+/// let header = signature::meta_signature(&previous, b"{}")?;
+///
+/// signature::verify_meta_any(&[previous, current], &header, b"{}")?;
+/// # Ok::<(), messenger_webhook::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns [`Error::MissingSecret`] when `secrets` is empty or contains an
+/// empty secret — before the header is parsed and before anything is hashed.
+/// Returns [`Error::MalformedVerificationHeader`] when the header is not
+/// `sha256=` followed by 64 hex digits, and [`Error::BadSignature`] when no
+/// candidate digest matches `body`. Returns [`Error::Hmac`] if the HMAC
+/// construction rejects a key, which cannot happen for HMAC-SHA256 and would
+/// still fail closed.
+pub fn verify_meta_any(secrets: &[Secret], header: &str, body: &[u8]) -> Result<()> {
+    if secrets.is_empty() || secrets.iter().any(Secret::is_empty) {
+        return Err(Error::MissingSecret {
+            channel: Channel::WhatsApp,
+        });
+    }
+
     let hex = header.strip_prefix(META_SIGNATURE_PREFIX).ok_or_else(|| {
         Error::MalformedVerificationHeader {
             channel: Channel::WhatsApp,
@@ -89,7 +125,14 @@ pub fn verify_meta(secret: &Secret, header: &str, body: &[u8]) -> Result<()> {
         channel: Channel::WhatsApp,
         reason: "signature digest is not 64 hex digits".to_owned(),
     })?;
-    if bool::from(expected.ct_eq(&actual)) {
+
+    let mut matched = subtle::Choice::from(0);
+    for secret in secrets {
+        let actual = hmac_sha256(secret, body)?;
+        matched |= expected.ct_eq(&actual);
+    }
+
+    if bool::from(matched) {
         Ok(())
     } else {
         Err(Error::BadSignature {
@@ -291,6 +334,40 @@ mod tests {
         assert!(matches!(
             verify_meta(&secret, valid_for_other_body, b"{}"),
             Err(Error::BadSignature {
+                channel: Channel::WhatsApp
+            })
+        ));
+    }
+
+    #[test]
+    fn verify_meta_any_accepts_a_rotation_candidate_and_rejects_forgeries() {
+        let previous = Secret::new("previous-secret-previous").expect("secret");
+        let current = Secret::new("current-secret-current").expect("secret");
+
+        let previous_header = meta_signature(&previous, b"{}").expect("signature");
+        let current_header = meta_signature(&current, b"{}").expect("signature");
+        let forged_header =
+            meta_signature(&Secret::new("forged-secret-forged").expect("secret"), b"{}")
+                .expect("signature");
+
+        assert!(verify_meta_any(
+            &[previous.clone(), current.clone()],
+            &previous_header,
+            b"{}"
+        )
+        .is_ok());
+        assert!(
+            verify_meta_any(&[previous.clone(), current.clone()], &current_header, b"{}").is_ok()
+        );
+        assert!(matches!(
+            verify_meta_any(&[previous.clone(), current.clone()], &forged_header, b"{}"),
+            Err(Error::BadSignature {
+                channel: Channel::WhatsApp
+            })
+        ));
+        assert!(matches!(
+            verify_meta_any(&[], &previous_header, b"{}"),
+            Err(Error::MissingSecret {
                 channel: Channel::WhatsApp
             })
         ));

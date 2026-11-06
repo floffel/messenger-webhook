@@ -269,6 +269,7 @@ src/signature.rs:const META_SIGNATURE_HEADER
 src/signature.rs:const META_SIGNATURE_PREFIX
 src/signature.rs:fn meta_signature
 src/signature.rs:fn verify_meta
+src/signature.rs:fn verify_meta_any
 src/subscription.rs:const MAX_CHALLENGE_BYTES
 src/subscription.rs:const META_CHALLENGE_PARAM
 src/subscription.rs:const META_MODE_PARAM
@@ -285,4 +286,5 @@ src/whatsapp.rs:const MAX_CAPTION_BYTES
 src/whatsapp.rs:const MAX_TEXT_BYTES
 src/whatsapp.rs:impl WhatsAppAdapter:const SIGNATURE_HEADER
 src/whatsapp.rs:impl WhatsAppAdapter:fn new
+src/whatsapp.rs:impl WhatsAppAdapter:fn with_secret_rotation
 src/whatsapp.rs:struct WhatsAppAdapter

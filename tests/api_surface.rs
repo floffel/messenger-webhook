@@ -535,11 +535,53 @@ fn hmac_construction_error_keeps_its_source_chain() {
 #[test]
 fn signature_helpers_are_usable_from_outside() {
     let secret = Secret::new("app-secret-app-secret").expect("secret");
+    let previous = Secret::new("previous-secret-previous").expect("secret");
     let header = signature::meta_signature(&secret, b"body").unwrap();
+    let previous_header = signature::meta_signature(&previous, b"body").unwrap();
     assert!(header.starts_with(signature::META_SIGNATURE_PREFIX));
     assert_eq!(signature::META_SIGNATURE_HEADER, "x-hub-signature-256");
     assert!(signature::verify_meta(&secret, &header, b"body").is_ok());
     assert!(signature::verify_meta(&secret, &header, b"other-secret-value").is_err());
+    assert!(signature::verify_meta_any(
+        &[previous.clone(), secret.clone()],
+        &previous_header,
+        b"body"
+    )
+    .is_ok());
+}
+
+#[test]
+#[cfg(feature = "whatsapp")]
+fn whatsapp_adapter_accepts_a_rotation_window() {
+    use messenger_webhook::{Adapter, Headers, WhatsAppAdapter};
+
+    let previous = Secret::new("previous-secret-previous").expect("secret");
+    let current = Secret::new("current-secret-current").expect("secret");
+    let adapter = WhatsAppAdapter::with_secret_rotation([previous.clone(), current.clone()])
+        .expect("rotation adapter");
+
+    for secret in [&previous, &current] {
+        let headers = Headers::from_pairs([(
+            "x-hub-signature-256",
+            signature::meta_signature(secret, b"body").unwrap(),
+        )]);
+        assert!(adapter.verify(&headers, b"body").is_ok());
+    }
+
+    let forged = Headers::from_pairs([(
+        "x-hub-signature-256",
+        signature::meta_signature(
+            &Secret::new("forged-secret-forged").expect("secret"),
+            b"body",
+        )
+        .unwrap(),
+    )]);
+    assert!(matches!(
+        adapter.verify(&forged, b"body"),
+        Err(Error::BadSignature {
+            channel: Channel::WhatsApp
+        })
+    ));
 }
 
 #[test]

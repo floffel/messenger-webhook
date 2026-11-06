@@ -68,7 +68,7 @@ pub const MAX_CAPTION_BYTES: usize = 1024;
 /// ```
 #[derive(Debug, Clone)]
 pub struct WhatsAppAdapter {
-    secret: Secret,
+    secrets: Vec<Secret>,
 }
 
 impl WhatsAppAdapter {
@@ -99,8 +99,47 @@ impl WhatsAppAdapter {
             });
         }
         Ok(Self {
-            secret: Secret::new(app_secret)?,
+            secrets: vec![Secret::new(app_secret)?],
         })
+    }
+
+    /// Creates an adapter that verifies against a rotation window.
+    ///
+    /// Use this when Meta app secrets are being rotated: pass the previous and
+    /// current secret so deliveries signed with either are accepted until the
+    /// old one has drained. Verification tries every secret with an
+    /// independent constant-time comparison and returns
+    /// [`Error::BadSignature`] only when none matched.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::MissingSecret`] when no secret is supplied. Build each value
+    /// through [`Secret::new`] first, which rejects weak secrets before they
+    /// reach the adapter.
+    ///
+    /// ```
+    /// use messenger_webhook::{signature::meta_signature, Adapter, Headers, Secret, WhatsAppAdapter};
+    ///
+    /// let previous = Secret::new("previous-secret-previous")?;
+    /// let current = Secret::new("current-secret-current")?;
+    /// let adapter = WhatsAppAdapter::with_secret_rotation([previous.clone(), current])?;
+    /// let mut headers = Headers::new();
+    /// headers.insert("x-hub-signature-256", meta_signature(&previous, b"{}")?)?;
+    ///
+    /// adapter.verify(&headers, b"{}")?;
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    pub fn with_secret_rotation<I>(app_secrets: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = Secret>,
+    {
+        let secrets = app_secrets.into_iter().collect::<Vec<_>>();
+        if secrets.is_empty() {
+            return Err(Error::MissingSecret {
+                channel: Channel::WhatsApp,
+            });
+        }
+        Ok(Self { secrets })
     }
 
     /// The header Meta signs with.
@@ -121,13 +160,13 @@ impl Adapter for WhatsAppAdapter {
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()> {
         // Size before hashing: never spend work on an oversized body.
         check_body(body.len())?;
-        if self.secret.is_empty() {
+        if self.secrets.is_empty() || self.secrets.iter().any(Secret::is_empty) {
             return Err(Error::MissingSecret {
                 channel: Channel::WhatsApp,
             });
         }
         let header = headers.exactly_one(Channel::WhatsApp, META_SIGNATURE_HEADER)?;
-        signature::verify_meta(&self.secret, header, body)
+        signature::verify_meta_any(&self.secrets, header, body)
     }
 
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
