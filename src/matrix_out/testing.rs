@@ -368,7 +368,7 @@ impl RecordingSleeper {
         Self::default()
     }
 
-    /// Every delay the client asked for, in order.
+    /// Every delay the client awaited, in order.
     ///
     /// ```
     /// use messenger_webhook::matrix_out::RecordingSleeper;
@@ -398,11 +398,12 @@ impl RecordingSleeper {
 
 impl Sleeper for RecordingSleeper {
     fn sleep(&self, delay: Duration) -> BoxFuture<'_, ()> {
-        self.delays
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(delay);
-        Box::pin(async {})
+        Box::pin(async move {
+            self.delays
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(delay);
+        })
     }
 }
 
@@ -507,5 +508,15 @@ mod tests {
             vec![Duration::from_millis(10), Duration::from_millis(20)]
         );
         assert_eq!(sleeper.total(), Duration::from_millis(30));
+    }
+
+    #[test]
+    fn the_recording_sleeper_ignores_a_future_that_is_dropped_unawaited() {
+        let sleeper = RecordingSleeper::new();
+        drop(sleeper.sleep(Duration::from_millis(10)));
+        assert_eq!(sleeper.delays(), [] as [std::time::Duration; 0]);
+
+        runtime().block_on(sleeper.sleep(Duration::from_millis(20)));
+        assert_eq!(sleeper.delays(), vec![Duration::from_millis(20)]);
     }
 }
