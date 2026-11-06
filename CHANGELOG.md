@@ -14,6 +14,17 @@ carry a `!` in the conventional-commit subject.
 
 - The `cargo-deny` gate now resolves all features, so default-off dependencies
   such as the `matrix-out` HTTP stack are covered by advisory checks. Closes #17.
+- **The body ceiling is now a per-adapter property.** `Adapter` gains
+  `max_body_bytes`, and the shipped adapters report their provider's published
+  webhook ceiling instead of the model-wide `MAX_BODY_BYTES`: `WhatsApp` 3 MiB
+  (Meta *Payload size*), Telegram 4 MiB (reference Bot API server), Matrix 6 MiB
+  (`100 ×` the 65536-byte per-event cap). `Registry` reads the value from the
+  registered adapter and rejects an oversized body before dispatch, so a valid
+  provider payload is no longer rejected and an oversized one is not parsed.
+  `MAX_BODY_BYTES` becomes the fallback a custom adapter inherits and the bound
+  `read_body` applies while the adapter is still unknown; its value moves from
+  1 MiB to `100 × 65536` so a caller that reads first never rejects a payload a
+  shipped adapter would accept. Closes #9.
 - `signature::decode_hex` and the synthetic-id suffix now use `const-hex` for
   the fixed-shape digest encode/decode path. The wire format is unchanged:
   signatures are still 64 lower-case hex digits after `sha256=`, and synthetic
@@ -50,6 +61,11 @@ carry a `!` in the conventional-commit subject.
   flattened into `text` or dropped into `raw`. `OutboundMessage` can carry the
   same value and `WhatsAppAdapter::encode` sends it as a Cloud API reply button,
   so a tap can be echoed back end to end. Closes #12.
+- **Per-provider webhook ceilings.** `whatsapp::MAX_WEBHOOK_BODY_BYTES`,
+  `telegram::MAX_WEBHOOK_BODY_BYTES` and `matrix::MAX_WEBHOOK_BODY_BYTES` state
+  each provider's own body limit, cited to its source, and
+  `Adapter::max_body_bytes` exposes it. Each is pinned by a just-inside /
+  just-outside test. Closes #9.
 - **Ambiguous adapter outcomes are explicit.** `Error` now has
   `Transport` and `Ambiguous` variants for adapter implementations with their
   own transports. `Error::is_retryable()` is true only for `Transport`, while

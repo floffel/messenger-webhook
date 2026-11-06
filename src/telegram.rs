@@ -50,6 +50,20 @@ pub const MAX_TEXT_UTF16: usize = 4096;
 /// ```
 pub const MAX_CAPTION_UTF16: usize = 1024;
 
+/// Largest Telegram Bot API update body, in bytes.
+///
+/// The Bot API does not publish a webhook body ceiling. Its reference server
+/// (tdlib `telegram-bot-api`) caps a serialised batch of updates at `1 << 22`
+/// bytes and delivers one update per webhook `POST` (`Client.cpp`,
+/// `Client::JsonUpdates`), so a delivered update body stays within that bound.
+/// [`TelegramAdapter`] uses it as the ceiling and rejects a larger body before
+/// hashing or parsing.
+///
+/// ```
+/// assert_eq!(messenger_webhook::telegram::MAX_WEBHOOK_BODY_BYTES, 4 * 1024 * 1024);
+/// ```
+pub const MAX_WEBHOOK_BODY_BYTES: usize = 1 << 22;
+
 /// Header Telegram sends the registered `secret_token` in.
 pub const SECRET_TOKEN_HEADER: &str = "x-telegram-bot-api-secret-token";
 
@@ -127,8 +141,12 @@ impl Adapter for TelegramAdapter {
         Channel::Telegram
     }
 
+    fn max_body_bytes(&self) -> usize {
+        MAX_WEBHOOK_BODY_BYTES
+    }
+
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()> {
-        check_body(body.len())?;
+        check_body(body.len(), MAX_WEBHOOK_BODY_BYTES)?;
         if self.secret.is_empty() {
             return Err(Error::MissingSecret {
                 channel: Channel::Telegram,
@@ -145,7 +163,7 @@ impl Adapter for TelegramAdapter {
     }
 
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
-        check_body(payload.len())?;
+        check_body(payload.len(), MAX_WEBHOOK_BODY_BYTES)?;
         let root: Value = serde_json::from_slice(payload)?;
         if !root.is_object() {
             return Err(Error::Payload("expected a JSON object".to_owned()));

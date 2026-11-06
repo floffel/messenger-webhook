@@ -43,6 +43,7 @@ src/lib.rs:use subscription::meta_subscription_challenge
 src/lib.rs:use telegram::TelegramAdapter
 src/lib.rs:use whatsapp::WhatsAppAdapter
 src/matrix.rs:const AUTHORIZATION_HEADER
+src/matrix.rs:const MAX_WEBHOOK_BODY_BYTES
 src/matrix.rs:impl MatrixAdapter:fn new
 src/matrix.rs:struct MatrixAdapter
 src/matrix_out/error.rs:enum OutboundError
@@ -294,12 +295,14 @@ src/subscription.rs:const META_VERIFY_TOKEN_PARAM
 src/subscription.rs:fn meta_subscription_challenge
 src/telegram.rs:const MAX_CAPTION_UTF16
 src/telegram.rs:const MAX_TEXT_UTF16
+src/telegram.rs:const MAX_WEBHOOK_BODY_BYTES
 src/telegram.rs:const SECRET_TOKEN_HEADER
 src/telegram.rs:impl TelegramAdapter:const HEADER
 src/telegram.rs:impl TelegramAdapter:fn new
 src/telegram.rs:struct TelegramAdapter
 src/whatsapp.rs:const MAX_CAPTION_BYTES
 src/whatsapp.rs:const MAX_TEXT_BYTES
+src/whatsapp.rs:const MAX_WEBHOOK_BODY_BYTES
 src/whatsapp.rs:impl WhatsAppAdapter:const SIGNATURE_HEADER
 src/whatsapp.rs:impl WhatsAppAdapter:fn new
 src/whatsapp.rs:impl WhatsAppAdapter:fn with_secret_rotation

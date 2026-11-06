@@ -594,10 +594,10 @@ mod tests {
 
     #[test]
     fn body_too_large_boundary_matches_the_variant_contract() {
-        assert!(check_body(MAX_BODY_BYTES - 1).is_ok());
-        assert!(check_body(MAX_BODY_BYTES).is_ok());
+        assert!(check_body(MAX_BODY_BYTES - 1, MAX_BODY_BYTES).is_ok());
+        assert!(check_body(MAX_BODY_BYTES, MAX_BODY_BYTES).is_ok());
         assert!(matches!(
-            check_body(MAX_BODY_BYTES + 1),
+            check_body(MAX_BODY_BYTES + 1, MAX_BODY_BYTES),
             Err(Error::BodyTooLarge {
                 limit: MAX_BODY_BYTES,
                 actual,
