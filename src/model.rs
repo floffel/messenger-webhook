@@ -923,11 +923,13 @@ pub struct NormalizedMessage {
     /// Provider event id — use it as the idempotency key.
     ///
     /// When the provider sent none, this crate synthesises a stable one (see
-    /// [`SYNTHETIC_ID_PREFIX`]) instead of dropping the event, so a replay
-    /// dedupes and nothing disappears. [`Self::has_synthetic_id`] tells the
-    /// two apart. A provider-assigned id that starts with
-    /// [`SYNTHETIC_ID_PREFIX`] is retagged before it reaches this field, so
-    /// the prefix stays a reliable provenance signal.
+    /// [`SYNTHETIC_ID_PREFIX`]) instead of dropping the event. The digest
+    /// includes the object's position in the webhook envelope, so a replay
+    /// dedupes while byte-identical objects at different positions remain
+    /// distinct. [`Self::has_synthetic_id`] tells the two apart. A
+    /// provider-assigned id that starts with [`SYNTHETIC_ID_PREFIX`] is retagged
+    /// before it reaches this field, so the prefix stays a reliable provenance
+    /// signal.
     pub external_id: String,
     /// Conversation the event belongs to (chat id, room id, phone number).
     pub conversation_id: String,
@@ -1189,9 +1191,9 @@ impl NormalizedMessage {
     ///
     /// Providers occasionally send an event without an id. Instead of dropping
     /// it, [`Adapter::adapt`](crate::Adapter::adapt) surfaces it with a stable
-    /// synthetic id — the digest of the raw event, so a replay still dedupes.
-    /// Applications that need the provider's own key (to call back into the
-    /// provider, for example) check this first.
+    /// synthetic id — the digest of the raw event and its envelope position, so
+    /// a replay still dedupes. Applications that need the provider's own key (to
+    /// call back into the provider, for example) check this first.
     ///
     /// ```
     /// use messenger_webhook::{Channel, NormalizedMessage};

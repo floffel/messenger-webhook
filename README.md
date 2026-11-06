@@ -55,8 +55,10 @@ for message in adapter.adapt(&body)? {
 ```
 
 `external_id` is the provider's event id and therefore the right idempotency
-key. `raw` keeps the provider's original object, so anything this crate does not
-model is still reachable.
+key. When the provider sent none, the synthesised key also covers the object's
+position in the webhook envelope, so retries dedupe without collapsing two
+byte-identical events at different paths. `raw` keeps the provider's original
+object, so anything this crate does not model is still reachable.
 
 ### Registry
 
@@ -386,7 +388,7 @@ explicit.
 | `tests/properties.rs` | arbitrary JSON (any depth/types) and arbitrary bytes never panic; encode → provider echo → normalise round-trips on all three channels; unknown fields survive; limits hold exactly at N and N+1 |
 | `tests/edge_cases.rs` | empty body, each provider's body ceiling at N/N+1, missing/ malformed signature headers, signature bound to the exact body, duplicate keys, unknown types, 20 recipients, unicode/NUL, numeric-vs-string ids, wrong JSON types, deep nesting |
 | `tests/subscription.rs` | the Meta handshake: the documented sample request, wrong/prefix/short token, empty secret, each missing parameter, identical and conflicting duplicate parameters, mode casing, the PHP underscore spellings, percent-decoded values, `+`-as-space, challenge ceiling at N-1/N/N+1, decoded control bytes and empty challenge, no received token in the error message; plus three proptest properties |
-| `tests/synthetic_ids.rs` | an event the provider sent without an id is carried with a stable synthesised key: same body, same id across replays; different body, different id; per adapter |
+| `tests/synthetic_ids.rs` | an event the provider sent without an id is carried with a stable synthesised key: same body at the same envelope path, same id across replays; different body, path or Telegram update id, different id; per adapter |
 | `tests/media_and_receipts.rs` | every media kind, reaction and receipt shape in both directions |
 | `tests/concurrency.rs` | 32 threads over one `Registry`, 32 threads over a borrowed `&dyn Adapter`, forged signatures under load |
 | `tests/fixtures.rs` | the fuzz seeds, compiled in, normalised through every adapter |
@@ -481,11 +483,13 @@ Each of these is a decision, not an omission:
 - **No event is dropped for want of an id.** A provider that omits its own id
   (a `WhatsApp` status without `id`, a Matrix event without `event_id`) still
   gets an event: the `external_id` is then synthesised — `SYNTHETIC_ID_PREFIX`
-  followed by the SHA-256 of the channel, the event role and the raw object, so
-  a replay of the same body dedupes. `NormalizedMessage::has_synthetic_id` tells
-  an invented key from a provider-assigned one. An entry that carries none of the
-  provider's own fields — a body forwarded from another provider — is skipped
-  rather than turned into an invented event.
+  followed by the SHA-256 of the channel, the event role, the object's position
+  in the webhook envelope and the raw object, so a replay of the same body
+  dedupes while identical objects at different positions stay distinct.
+  `NormalizedMessage::has_synthetic_id` tells an invented key from a
+  provider-assigned one. An entry that carries none of the provider's own fields
+  — a body forwarded from another provider — is skipped rather than turned into
+  an invented event.
 
 ## License
 

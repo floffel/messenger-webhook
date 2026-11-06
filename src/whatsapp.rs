@@ -195,22 +195,25 @@ impl Adapter for WhatsAppAdapter {
         }
 
         let mut events = Vec::new();
-        for entry in json::array(&root, "entry") {
-            for change in json::array(entry, "changes") {
+        for (entry_index, entry) in json::array(&root, "entry").iter().enumerate() {
+            for (change_index, change) in json::array(entry, "changes").iter().enumerate() {
                 let Some(value) = json::child(change, "value") else {
                     continue;
                 };
-                for message in json::array(value, "messages")
-                    .iter()
-                    .filter(|entry| is_message(entry))
-                {
-                    events.push(normalize_message(message)?);
+                let value_path = format!("/entry/{entry_index}/changes/{change_index}/value");
+                for (message_index, message) in json::array(value, "messages").iter().enumerate() {
+                    if !is_message(message) {
+                        continue;
+                    }
+                    let path = format!("{value_path}/messages/{message_index}");
+                    events.push(normalize_message(message, &path)?);
                 }
-                for status in json::array(value, "statuses")
-                    .iter()
-                    .filter(|entry| is_status(entry))
-                {
-                    events.push(normalize_status(status)?);
+                for (status_index, status) in json::array(value, "statuses").iter().enumerate() {
+                    if !is_status(status) {
+                        continue;
+                    }
+                    let path = format!("{value_path}/statuses/{status_index}");
+                    events.push(normalize_status(status, &path)?);
                 }
             }
         }
@@ -377,8 +380,8 @@ fn encode_reply_button(
 }
 
 /// Maps one `messages[]` object, or drops it when it has no id to key on.
-fn normalize_message(message: &Value) -> Result<NormalizedMessage> {
-    let external_id = id::identify(message, "id", &Channel::WhatsApp, "message")?;
+fn normalize_message(message: &Value, envelope_path: &str) -> Result<NormalizedMessage> {
+    let external_id = id::identify(message, "id", &Channel::WhatsApp, "message", envelope_path)?;
     let sender_id = json::id(message, "from").unwrap_or_default();
     let provider_type = json::string(message, "type")
         .unwrap_or("unknown")
@@ -562,8 +565,8 @@ fn push_media(
 }
 
 /// Maps one `statuses[]` entry (delivery receipt) onto a status event.
-fn normalize_status(status: &Value) -> Result<NormalizedMessage> {
-    let external_id = id::identify(status, "id", &Channel::WhatsApp, "status")?;
+fn normalize_status(status: &Value, envelope_path: &str) -> Result<NormalizedMessage> {
+    let external_id = id::identify(status, "id", &Channel::WhatsApp, "status", envelope_path)?;
     let recipient = json::id(status, "recipient_id").unwrap_or_default();
     let state = json::string(status, "status").unwrap_or("unknown");
 

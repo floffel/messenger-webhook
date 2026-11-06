@@ -170,14 +170,21 @@ impl Adapter for TelegramAdapter {
         }
 
         let update = schema::Update::new(&root);
+        let update_id = json::id(&root, schema::UPDATE_ID);
         let mut events = Vec::new();
         for kind in schema::UPDATE_KINDS {
             let Some(object) = update.object(kind) else {
                 continue;
             };
+            let discriminator = update_id.as_ref().map_or_else(
+                || format!("/{}", kind.field()),
+                |id| format!("/{}#update_id={id}", kind.field()),
+            );
             match kind {
-                schema::UpdateKind::MessageReaction => events.push(normalize_reaction(object)?),
-                _ => events.push(normalize_message(object, kind)?),
+                schema::UpdateKind::MessageReaction => {
+                    events.push(normalize_reaction(object, &discriminator)?);
+                }
+                _ => events.push(normalize_message(object, kind, &discriminator)?),
             }
         }
         Ok(events)
@@ -519,13 +526,18 @@ fn telegram_contact_fields(
 }
 
 /// Maps one `Message` object.
-fn normalize_message(message: &Value, kind: schema::UpdateKind) -> Result<NormalizedMessage> {
+fn normalize_message(
+    message: &Value,
+    kind: schema::UpdateKind,
+    envelope_discriminator: &str,
+) -> Result<NormalizedMessage> {
     let message = schema::Message::new(message);
     let external_id = id::identify(
         message.raw(),
         schema::MESSAGE_ID,
         &Channel::Telegram,
         "message",
+        envelope_discriminator,
     )?;
     let conversation_id = message.chat_id().unwrap_or_default();
     // Channel posts have no `from`; the chat itself is the author.
@@ -670,7 +682,7 @@ fn photo_area(size: &Value) -> Option<u128> {
 
 /// Maps a `message_reaction` update; the reaction is keyed by the message it
 /// annotates.
-fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
+fn normalize_reaction(reaction: &Value, envelope_discriminator: &str) -> Result<NormalizedMessage> {
     let reaction = schema::MessageReactionUpdated::new(reaction);
     let conversation_id = reaction.chat_id().unwrap_or_default();
     let message_id = id::identify(
@@ -678,6 +690,7 @@ fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
         schema::MESSAGE_ID,
         &Channel::Telegram,
         "reaction",
+        envelope_discriminator,
     )?;
     let sender_id = reaction
         .user_id()

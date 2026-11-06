@@ -60,11 +60,11 @@
 //! `external_id` is the provider's message id and therefore the right
 //! idempotency key. An event the provider sent without one is not dropped: it
 //! arrives with a stable synthesised id (`SYNTHETIC_ID_PREFIX`, the digest of
-//! the raw object), and `NormalizedMessage::has_synthetic_id` says which kind a
-//! given event carries. In the default build nothing in this crate performs I/O:
-//! the caller owns the HTTP server, retries and rate limits. With `matrix-out`
-//! enabled, `matrix_out` is the only I/O path, and the transport it uses is
-//! supplied by the caller.
+//! the raw object and its position in the webhook envelope), and
+//! `NormalizedMessage::has_synthetic_id` says which kind a given event carries.
+//! In the default build nothing in this crate performs I/O: the caller owns the
+//! HTTP server, retries and rate limits. With `matrix-out` enabled, `matrix_out`
+//! is the only I/O path, and the transport it uses is supplied by the caller.
 //!
 //! ## Deliberate exclusions
 //!
@@ -361,11 +361,12 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     ///
     /// Unknown fields and unknown event types are carried, not rejected. An
     /// event the provider sent without an id is carried too, with a stable
-    /// synthesised `external_id` ([`SYNTHETIC_ID_PREFIX`]) — the same body
-    /// always yields the same key, so a provider retry still dedupes. Only an
-    /// entry that carries none of the provider's own fields — a body forwarded
-    /// from another provider — is skipped rather than turned into an invented
-    /// event.
+    /// synthesised `external_id` ([`SYNTHETIC_ID_PREFIX`]) — the same body at
+    /// the same envelope position always yields the same key, so a provider
+    /// retry still dedupes, while identical objects at different positions stay
+    /// distinct. Only an entry that carries none of the provider's own fields —
+    /// a body forwarded from another provider — is skipped rather than turned
+    /// into an invented event.
     ///
     /// The [`Adapter::max_body_bytes`] ceiling is checked before JSON parsing.
     /// [`Registry`] enforces it before dispatching to a custom adapter.

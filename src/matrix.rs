@@ -177,7 +177,8 @@ impl Adapter for MatrixAdapter {
             return Err(Error::Payload("expected a JSON object".to_owned()));
         }
 
-        let events: Vec<&Value> = match root.get("events") {
+        let mut messages = Vec::new();
+        match root.get("events") {
             Some(events) => {
                 if is_event(&root) {
                     return Err(Error::Payload(
@@ -189,17 +190,21 @@ impl Adapter for MatrixAdapter {
                         "expected matrix transaction `events` to be an array".to_owned(),
                     ));
                 };
-                transaction.iter().collect()
+                for (index, event) in transaction.iter().enumerate() {
+                    if !is_event(event) {
+                        continue;
+                    }
+                    let path = format!("/events/{index}");
+                    messages.extend(normalize_event(event, &path)?);
+                }
             }
-            None => vec![&root],
-        };
-        events.into_iter().filter(|entry| is_event(entry)).try_fold(
-            Vec::new(),
-            |mut messages, event| {
-                messages.extend(normalize_event(event)?);
-                Ok(messages)
-            },
-        )
+            None => {
+                if is_event(&root) {
+                    messages.extend(normalize_event(&root, "")?);
+                }
+            }
+        }
+        Ok(messages)
     }
 
     fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
@@ -367,9 +372,9 @@ fn is_media_replacement_without_url(replacement: &serde_json::Map<String, Value>
 }
 
 /// Maps one Matrix event of any type.
-fn normalize_event(event: &Value) -> Result<Vec<NormalizedMessage>> {
+fn normalize_event(event: &Value, envelope_path: &str) -> Result<Vec<NormalizedMessage>> {
     let event_type = json::string(event, "type").unwrap_or("unknown");
-    let external_id = id::identify(event, "event_id", &Channel::Matrix, "event")?;
+    let external_id = id::identify(event, "event_id", &Channel::Matrix, "event", envelope_path)?;
     let conversation_id = json::id(event, "room_id").unwrap_or_default();
     let sender_id = json::id(event, "sender").unwrap_or_default();
     let content = json::child(event, "content")
