@@ -314,16 +314,19 @@ fn normalize_event(event: &Value) -> Result<NormalizedMessage> {
         "m.reaction" => {
             let relates = json::child(&content, "m.relates_to");
             let target = relates.and_then(|relates| json::id(relates, "event_id"));
-            if let Some(message_id) = target {
-                let emoji = relates
-                    .and_then(|relates| json::string(relates, "key"))
-                    .unwrap_or_default()
-                    .to_owned();
+            let emoji = relates.and_then(|relates| json::string(relates, "key"));
+            if let (Some(message_id), Some(emoji)) = (target, emoji.filter(|key| !key.is_empty())) {
                 normalized.reaction = Some(Reaction {
                     message_id,
-                    removed: emoji.is_empty(),
-                    emoji,
+                    emoji: emoji.to_owned(),
+                    removed: false,
                 });
+            }
+        }
+        "m.room.redaction" => {
+            if let Some(redacts) = json::id(&content, "redacts") {
+                normalized.external_id = redacts;
+                normalized.status = Some(DeliveryStatus::Deleted);
             }
         }
         "m.receipt" => apply_receipts(&mut normalized, &content),
