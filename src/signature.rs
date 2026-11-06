@@ -121,19 +121,7 @@ pub(crate) fn hmac_sha256(key: &[u8], message: &[u8]) -> Option<[u8; DIGEST_LEN]
 
 /// Lower-case hex encoding of a digest.
 pub(crate) fn encode_hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(hex_digit(byte >> 4));
-        out.push(hex_digit(byte & 0x0f));
-    }
-    out
-}
-
-const fn hex_digit(value: u8) -> char {
-    match value {
-        0..=9 => (b'0' + value) as char,
-        _ => (b'a' + value - 10) as char,
-    }
+    const_hex::encode(bytes)
 }
 
 /// Decodes exactly 64 hex digits (either case) into a 32-byte digest.
@@ -142,21 +130,7 @@ pub(crate) fn decode_hex(text: &str) -> Option<[u8; DIGEST_LEN]> {
     if bytes.len() != DIGEST_LEN * 2 {
         return None;
     }
-    let mut out = [0u8; DIGEST_LEN];
-    let (pairs, _) = bytes.as_chunks::<2>();
-    for (slot, pair) in out.iter_mut().zip(pairs) {
-        *slot = hex_value(pair[0])? * 16 + hex_value(pair[1])?;
-    }
-    Some(out)
-}
-
-const fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+    const_hex::decode_to_array::<_, DIGEST_LEN>(bytes).ok()
 }
 
 #[cfg(test)]

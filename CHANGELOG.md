@@ -10,6 +10,13 @@ carry a `!` in the conventional-commit subject.
 
 ## [Unreleased]
 
+### Changed
+
+- `signature::decode_hex` and the synthetic-id suffix now use `const-hex` for
+  the fixed-shape digest encode/decode path. The wire format is unchanged:
+  signatures are still 64 lower-case hex digits after `sha256=`, and synthetic
+  ids still carry a 64 lower-case hex SHA-256 suffix.
+
 ### Added
 
 - **Rich text: `NormalizedMessage::spans`.** Providers flatten formatting into
