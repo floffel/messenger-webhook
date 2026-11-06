@@ -19,8 +19,8 @@
 //! `matrix_out` module, a typed Matrix Client-Server *outbound client* — sends,
 //! reactions, redactions, typing, receipts and media upload — on a transport
 //! seam so the crate can be tested without a homeserver. It is the only module
-//! that performs I/O, and only when a consumer opts in with the transport it
-//! wants.
+//! that performs I/O: with `matrix-out` enabled, it is the only I/O path in the
+//! crate, and the caller still supplies the transport it wants.
 //!
 //! Verification is part of the adapter contract, not an afterthought: an
 //! adapter cannot be constructed without a secret, and [`Adapter::verify`]
@@ -57,8 +57,10 @@
 //! idempotency key. An event the provider sent without one is not dropped: it
 //! arrives with a stable synthesised id (`SYNTHETIC_ID_PREFIX`, the digest of
 //! the raw object), and `NormalizedMessage::has_synthetic_id` says which kind a
-//! given event carries. Nothing in this crate performs I/O: the caller owns the
-//! HTTP server, retries and rate limits.
+//! given event carries. In the default build nothing in this crate performs I/O:
+//! the caller owns the HTTP server, retries and rate limits. With `matrix-out`
+//! enabled, `matrix_out` is the only I/O path, and the transport it uses is
+//! supplied by the caller.
 //!
 //! ## Deliberate exclusions
 //!
