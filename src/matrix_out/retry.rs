@@ -69,6 +69,13 @@ pub const DEFAULT_MAX_DELAY_MS: u64 = 30_000;
 /// ```
 pub const DEFAULT_MAX_RATE_LIMIT_WAIT_MS: u64 = 60_000;
 
+/// Largest `429` body searched for `retry_after_ms`.
+///
+/// Rate-limit bodies are tiny. Bounding the bytes before JSON parsing keeps a
+/// hostile or broken endpoint from making the back-pressure path allocate a
+/// generic JSON tree for an unbounded response body.
+const MAX_RETRY_AFTER_BODY_BYTES: usize = 8 * 1024;
+
 /// How repeatable an operation is.
 ///
 /// ```
@@ -625,16 +632,23 @@ impl RetryPolicy {
 /// some reverse proxies in front of a homeserver answer with a bare `Retry-After`
 /// header in seconds instead. Both are accepted, the body wins.
 pub(crate) fn retry_after_ms(response: &Response) -> Option<Duration> {
-    if let Some(ms) = serde_json::from_slice::<Value>(&response.body)
-        .ok()
-        .and_then(|body| numeric_ms(&body, "retry_after_ms"))
-    {
+    if let Some(ms) = retry_after_ms_from_body(&response.body) {
         return Some(ms);
     }
     response
         .header("retry-after")
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map(Duration::from_secs)
+}
+
+/// The body's `retry_after_ms`, only when the body is small enough to parse.
+fn retry_after_ms_from_body(body: &[u8]) -> Option<Duration> {
+    if body.len() > MAX_RETRY_AFTER_BODY_BYTES {
+        return None;
+    }
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|body| numeric_ms(&body, "retry_after_ms"))
 }
 
 /// `field` as a millisecond value, accepting a number or a numeric string.
@@ -918,6 +932,22 @@ mod tests {
         }
         // A non-finite float is not a duration.
         let response = Response::json(429, r#"{"retry_after_ms":1e400}"#);
+        assert!(retry_after_ms(&response).is_none());
+    }
+
+    #[test]
+    fn retry_after_body_is_size_bounded_before_parsing() {
+        let prefix = br#"{"retry_after_ms":250}"#;
+        let mut at_limit = Vec::with_capacity(MAX_RETRY_AFTER_BODY_BYTES);
+        at_limit.extend_from_slice(prefix);
+        at_limit.resize(MAX_RETRY_AFTER_BODY_BYTES, b' ');
+        let response = Response::new(429, at_limit);
+        assert_eq!(retry_after_ms(&response), Some(Duration::from_millis(250)));
+
+        let mut over_limit = Vec::with_capacity(MAX_RETRY_AFTER_BODY_BYTES + 1);
+        over_limit.extend_from_slice(prefix);
+        over_limit.resize(MAX_RETRY_AFTER_BODY_BYTES + 1, b' ');
+        let response = Response::new(429, over_limit);
         assert!(retry_after_ms(&response).is_none());
     }
 
