@@ -137,13 +137,13 @@ impl Adapter for TelegramAdapter {
             ("edited_channel_post", "edited_channel_post"),
         ] {
             if let Some(message) = json::child(&root, field).filter(|value| value.is_object()) {
-                events.push(normalize_message(message, provider_type));
+                events.push(normalize_message(message, provider_type)?);
             }
         }
         if let Some(reaction) =
             json::child(&root, "message_reaction").filter(|value| value.is_object())
         {
-            events.push(normalize_reaction(reaction));
+            events.push(normalize_reaction(reaction)?);
         }
         Ok(events)
     }
@@ -254,8 +254,8 @@ fn telegram_id(text: &str, field: &str) -> Result<i64> {
 }
 
 /// Maps one `Message` object.
-fn normalize_message(message: &Value, provider_type: &str) -> NormalizedMessage {
-    let external_id = id::identify(message, "message_id", &Channel::Telegram, "message");
+fn normalize_message(message: &Value, provider_type: &str) -> Result<NormalizedMessage> {
+    let external_id = id::identify(message, "message_id", &Channel::Telegram, "message")?;
     let chat = json::child(message, "chat");
     let conversation_id = chat
         .and_then(|chat| json::id(chat, "id"))
@@ -271,7 +271,7 @@ fn normalize_message(message: &Value, provider_type: &str) -> NormalizedMessage 
         .map(str::to_owned);
     let is_edit = provider_type.starts_with("edited_");
 
-    NormalizedMessage {
+    Ok(NormalizedMessage {
         channel: Channel::Telegram,
         conversation_id,
         sender_id,
@@ -288,7 +288,7 @@ fn normalize_message(message: &Value, provider_type: &str) -> NormalizedMessage 
         spans: spans(message),
         provider_type: Some(provider_type.to_owned()),
         raw: Some(message.clone()),
-    }
+    })
 }
 
 /// Collects every media field Telegram may attach to a message.
@@ -389,12 +389,12 @@ fn attachments(message: &Value) -> Vec<Attachment> {
 
 /// Maps a `message_reaction` update; the reaction is keyed by the message it
 /// annotates.
-fn normalize_reaction(reaction: &Value) -> NormalizedMessage {
+fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
     let chat = json::child(reaction, "chat");
     let conversation_id = chat
         .and_then(|chat| json::id(chat, "id"))
         .unwrap_or_default();
-    let message_id = id::identify(reaction, "message_id", &Channel::Telegram, "reaction");
+    let message_id = id::identify(reaction, "message_id", &Channel::Telegram, "reaction")?;
     let sender_id = json::child(reaction, "user")
         .and_then(|user| json::id(user, "id"))
         .unwrap_or_else(|| conversation_id.clone());
@@ -408,7 +408,7 @@ fn normalize_reaction(reaction: &Value) -> NormalizedMessage {
         })
         .unwrap_or_default();
 
-    NormalizedMessage {
+    Ok(NormalizedMessage {
         channel: Channel::Telegram,
         external_id: message_id.clone(),
         conversation_id,
@@ -428,7 +428,7 @@ fn normalize_reaction(reaction: &Value) -> NormalizedMessage {
         spans: Vec::new(),
         provider_type: Some("message_reaction".to_owned()),
         raw: Some(reaction.clone()),
-    }
+    })
 }
 
 /// Collects the formatting Telegram marks on a message.

@@ -237,6 +237,26 @@ fn a_synthetic_key_is_prefixed_and_never_empty() {
     );
 }
 
+#[test]
+fn a_synthetic_key_is_a_bounded_64_hex_character_digest() {
+    let body = json!({
+        "entry": [{ "changes": [{ "value": { "messages": [{
+            "from": "49",
+            "type": "text",
+            "text": { "body": "x".repeat(512) }
+        }] } }] }]
+    });
+    let events = adapt(&whatsapp(), &body);
+    assert_eq!(events.len(), 1);
+    assert!(events[0].has_synthetic_id());
+    assert_eq!(events[0].external_id.len(), SYNTHETIC_ID_PREFIX.len() + 64);
+    assert!(events[0]
+        .external_id
+        .trim_start_matches(SYNTHETIC_ID_PREFIX)
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit()));
+}
+
 proptest! {
     /// The key is a pure function of the body: any object without an `id` maps
     /// to one stable synthesised key, and two parses of the same body agree.

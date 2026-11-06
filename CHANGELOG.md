@@ -41,6 +41,17 @@ carry a `!` in the conventional-commit subject.
   possible. The next version therefore moves to **0.4.0**; 0.3.4 stays the
   released one.
 
+### Fixed
+
+- **Synthesised ids no longer materialise the event body twice.** An event the
+  provider sent without an id is keyed by the canonical JSON of that object, but
+  the digest path serialised the object into a second heap `String` before
+  hashing it. The renderer now streams directly into SHA-256 through a bounded
+  writer, so the same stable `synthetic:` key is produced without a
+  body-sized allocation, and the private helper rejects input over
+  `MAX_BODY_BYTES` if it is ever reached outside the adapter's existing size
+  gate.
+
 ## [0.3.3] - 2026-10-27
 
 ### Added

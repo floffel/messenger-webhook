@@ -138,13 +138,13 @@ impl Adapter for WhatsAppAdapter {
                     .iter()
                     .filter(|entry| is_message(entry))
                 {
-                    events.push(normalize_message(message));
+                    events.push(normalize_message(message)?);
                 }
                 for status in json::array(value, "statuses")
                     .iter()
                     .filter(|entry| is_status(entry))
                 {
-                    events.push(normalize_status(status));
+                    events.push(normalize_status(status)?);
                 }
             }
         }
@@ -251,8 +251,8 @@ impl Adapter for WhatsAppAdapter {
 }
 
 /// Maps one `messages[]` object, or drops it when it has no id to key on.
-fn normalize_message(message: &Value) -> NormalizedMessage {
-    let external_id = id::identify(message, "id", &Channel::WhatsApp, "message");
+fn normalize_message(message: &Value) -> Result<NormalizedMessage> {
+    let external_id = id::identify(message, "id", &Channel::WhatsApp, "message")?;
     let sender_id = json::id(message, "from").unwrap_or_default();
     let provider_type = json::string(message, "type")
         .unwrap_or("unknown")
@@ -340,7 +340,7 @@ fn normalize_message(message: &Value) -> NormalizedMessage {
         _ => {}
     }
 
-    normalized
+    Ok(normalized)
 }
 
 /// Maps a media object (`image`, `document`, `audio`, `video`, `sticker`).
@@ -371,12 +371,12 @@ fn push_media(
 }
 
 /// Maps one `statuses[]` entry (delivery receipt) onto a status event.
-fn normalize_status(status: &Value) -> NormalizedMessage {
-    let external_id = id::identify(status, "id", &Channel::WhatsApp, "status");
+fn normalize_status(status: &Value) -> Result<NormalizedMessage> {
+    let external_id = id::identify(status, "id", &Channel::WhatsApp, "status")?;
     let recipient = json::id(status, "recipient_id").unwrap_or_default();
     let state = json::string(status, "status").unwrap_or("unknown");
 
-    NormalizedMessage {
+    Ok(NormalizedMessage {
         channel: Channel::WhatsApp,
         conversation_id: recipient.clone(),
         sender_id: recipient,
@@ -392,7 +392,7 @@ fn normalize_status(status: &Value) -> NormalizedMessage {
         spans: Vec::new(),
         provider_type: Some("status".to_owned()),
         raw: Some(status.clone()),
-    }
+    })
 }
 
 fn delivery_status(state: &str) -> DeliveryStatus {
