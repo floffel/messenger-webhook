@@ -50,6 +50,37 @@ fn registration_is_by_channel_and_replaceable() {
 }
 
 #[test]
+fn try_register_reports_a_duplicate_instead_of_replacing() {
+    #[cfg(feature = "telegram")]
+    {
+        use messenger_webhook::TelegramAdapter;
+
+        let mut registry = Registry::new();
+        registry
+            .try_register(TelegramAdapter::new("first"))
+            .expect("the first registration succeeds");
+        let error = registry
+            .try_register(TelegramAdapter::new("second"))
+            .expect_err("the second registration is a typed error");
+        assert!(matches!(
+            error,
+            Error::ChannelAlreadyRegistered(Channel::Telegram)
+        ));
+
+        // The first adapter is kept: the shadowed secret still verifies and
+        // the replacement candidate does not.
+        let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "first")]);
+        assert!(registry.verify(&Channel::Telegram, &headers, b"{}").is_ok());
+
+        let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "second")]);
+        assert!(matches!(
+            registry.verify(&Channel::Telegram, &headers, b"{}"),
+            Err(Error::BadSignature { .. })
+        ));
+    }
+}
+
+#[test]
 #[allow(unused_mut)]
 fn channels_are_sorted_and_counted() {
     let mut registry = Registry::new();
@@ -263,6 +294,9 @@ fn registry_is_send_sync_and_debug_is_redacted() {
         let rendered = format!("{registry:?}");
         assert!(rendered.starts_with("Registry"));
         assert!(!rendered.contains("super-secret"), "no secrets in Debug");
+        assert!(rendered.contains("adapters"));
+        assert!(rendered.contains("WhatsApp"));
+        assert!(rendered.contains("WhatsAppAdapter"));
 
         // The adapter itself must not leak the secret either.
         let adapter = messenger_webhook::WhatsAppAdapter::new("super-secret");

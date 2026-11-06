@@ -63,6 +63,13 @@ carry a `!` in the conventional-commit subject.
   encoded by another provider's adapter under the wrong recipient and length
   rules. A mismatch now returns the existing typed `InvalidMessage` error before
   the adapter is called. Closes #96.
+- **`Registry` no longer replaces an adapter invisibly.** `register` kept its
+  documented override behaviour, but a duplicate registration used to discard
+  the previous adapter with no error and no trace in `Debug`. `try_register`
+  now reports a duplicate as `Error::ChannelAlreadyRegistered` and keeps the
+  existing adapter, and `Registry`'s `Debug` output lists the channel-to-adapter
+  map (secrets stay redacted) so an operator can see which adapter won. Closes
+  #98.
 - **Header lookup no longer allocates on mixed-case queries.** `Headers::get`
   copied the query into a fresh lower-cased `String` whenever it contained an
   ASCII upper-case byte, then scanned the entries comparing owned strings; that
