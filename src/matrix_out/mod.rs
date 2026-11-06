@@ -1211,8 +1211,8 @@ impl MatrixClient {
     ///
     /// # Errors
     ///
-    /// [`OutboundError::Decode`] when the body is not the `whoami` shape, plus
-    /// every delivery error.
+    /// [`OutboundError::DecodeRead`] when the body is not the `whoami` shape,
+    /// plus every delivery error.
     ///
     /// ```
     /// use std::sync::Arc;
@@ -1273,7 +1273,7 @@ impl MatrixClient {
                                 value,
                                 attempts: attempt,
                             }),
-                            Err(error) => Err(Self::undecodable(error, operation, txn, attempt)),
+                            Err(error) => Err(Self::undecodable(error, operation, txn)),
                         };
                     }
                     Verdict::Retry { delay } => self.config.sleeper.sleep(delay).await,
@@ -1398,15 +1398,17 @@ impl MatrixClient {
         error: OutboundError,
         operation: Operation,
         txn: Option<&TxnId>,
-        attempt: u32,
     ) -> OutboundError {
         if operation.is_repeatable() && txn.is_none() {
             return error;
         }
-        OutboundError::Ambiguous {
-            txn_id: txn.cloned(),
-            attempts: attempt,
-            reason: format!("the homeserver accepted the request but answered unreadably: {error}"),
+        match error {
+            OutboundError::DecodeRead { what, reason } => OutboundError::DecodeAfterWrite {
+                what,
+                txn_id: txn.cloned(),
+                reason,
+            },
+            error => error,
         }
     }
 }
@@ -1609,14 +1611,14 @@ fn field_str<'a>(body: &'a Value, names: &[&str]) -> Option<&'a str> {
 /// `{"event_id": "$…"}` from a send or redact leg.
 fn decode_event_id(response: &Response) -> OutboundResult<String> {
     let body: Value =
-        serde_json::from_slice(&response.body).map_err(|error| OutboundError::Decode {
+        serde_json::from_slice(&response.body).map_err(|error| OutboundError::DecodeRead {
             what: "event send",
             reason: error.to_string(),
         })?;
     field_str(&body, &["event_id", "eventId"])
         .filter(|event_id| !event_id.is_empty())
         .map(str::to_owned)
-        .ok_or_else(|| OutboundError::Decode {
+        .ok_or_else(|| OutboundError::DecodeRead {
             what: "event send",
             reason: "the body carries no event_id".to_owned(),
         })
@@ -1635,16 +1637,17 @@ fn decode_unit(_response: &Response) -> OutboundResult<()> {
 /// `{"content_uri": "mxc://…"}` from an upload.
 fn decode_content_uri(response: &Response) -> OutboundResult<MxcUri> {
     let body: Value =
-        serde_json::from_slice(&response.body).map_err(|error| OutboundError::Decode {
+        serde_json::from_slice(&response.body).map_err(|error| OutboundError::DecodeRead {
             what: "media upload",
             reason: error.to_string(),
         })?;
-    let uri =
-        field_str(&body, &["content_uri", "contentUri"]).ok_or_else(|| OutboundError::Decode {
+    let uri = field_str(&body, &["content_uri", "contentUri"]).ok_or_else(|| {
+        OutboundError::DecodeRead {
             what: "media upload",
             reason: "the body carries no content_uri".to_owned(),
-        })?;
-    MxcUri::parse(uri).map_err(|error| OutboundError::Decode {
+        }
+    })?;
+    MxcUri::parse(uri).map_err(|error| OutboundError::DecodeRead {
         what: "media upload",
         reason: error.to_string(),
     })
@@ -1653,14 +1656,14 @@ fn decode_content_uri(response: &Response) -> OutboundResult<MxcUri> {
 /// `{"user_id": "@…"}` from the probe.
 fn decode_whoami(response: &Response) -> OutboundResult<String> {
     let body: Value =
-        serde_json::from_slice(&response.body).map_err(|error| OutboundError::Decode {
+        serde_json::from_slice(&response.body).map_err(|error| OutboundError::DecodeRead {
             what: "whoami",
             reason: error.to_string(),
         })?;
     field_str(&body, &["user_id", "userId"])
         .filter(|user_id| !user_id.is_empty())
         .map(str::to_owned)
-        .ok_or_else(|| OutboundError::Decode {
+        .ok_or_else(|| OutboundError::DecodeRead {
             what: "whoami",
             reason: "the body carries no user_id".to_owned(),
         })

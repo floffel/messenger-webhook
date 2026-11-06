@@ -12,7 +12,7 @@
 //! * **terminal** — neither retryable nor ambiguous: the caller must change the
 //!   request, configuration or fixture before trying again. This explicit
 //!   bucket holds the request/configuration validation variants, a homeserver
-//!   [`OutboundError::Rejected`], and local [`OutboundError::Decode`] or
+//!   [`OutboundError::Rejected`], and local [`OutboundError::DecodeRead`] or
 //!   [`OutboundError::TestHarness`] failures.
 //!
 //! [`MatrixClient::send_text_with_txn`]: crate::matrix_out::MatrixClient::send_text_with_txn
@@ -162,9 +162,26 @@ pub enum OutboundError {
         reason: String,
     },
 
-    /// A `2xx` arrived but the body was not the JSON shape the leg expects.
+    /// A `2xx` arrived for a write, but the body was not the JSON shape the leg
+    /// expects. The homeserver accepted the request, so the write may have been
+    /// applied; repeat with the same transaction id when one is present.
+    #[error(
+        "the homeserver accepted the {what} but answered unreadably: {reason}{suffix}",
+        suffix = txn_id_suffix(.txn_id.as_ref())
+    )]
+    DecodeAfterWrite {
+        /// Which response was being decoded.
+        what: &'static str,
+        /// The transaction id of the write, when the operation had one.
+        txn_id: Option<TxnId>,
+        /// The parse error.
+        reason: String,
+    },
+
+    /// A `2xx` arrived for a read, but the body was not the JSON shape the leg
+    /// expects. Nothing was applied.
     #[error("cannot decode the {what} response: {reason}")]
-    Decode {
+    DecodeRead {
         /// Which response was being decoded.
         what: &'static str,
         /// The parse error.
@@ -214,8 +231,9 @@ impl OutboundError {
 
     /// Whether the request may have been applied.
     ///
-    /// Only an [`OutboundError::Ambiguous`] is ambiguous. A caller must not
-    /// treat it as a failure: the message may be in the room already.
+    /// [`OutboundError::Ambiguous`] and [`OutboundError::DecodeAfterWrite`] are
+    /// ambiguous. A caller must not treat them as plain failures: the message
+    /// may be in the room already.
     ///
     /// ```
     /// use messenger_webhook::matrix_out::{OutboundError, TxnId};
@@ -228,10 +246,18 @@ impl OutboundError {
     /// assert!(error.is_ambiguous());
     /// assert!(!error.is_retryable());
     /// assert!(error.to_string().contains("t1"));
+    ///
+    /// let decoded = OutboundError::DecodeAfterWrite {
+    ///     what: "event send",
+    ///     txn_id: TxnId::new("t2").ok(),
+    ///     reason: "bad body".into(),
+    /// };
+    /// assert!(decoded.is_ambiguous());
+    /// assert!(decoded.to_string().contains("t2"));
     /// ```
     #[must_use]
     pub const fn is_ambiguous(&self) -> bool {
-        matches!(self, Self::Ambiguous { .. })
+        matches!(self, Self::Ambiguous { .. } | Self::DecodeAfterWrite { .. })
     }
 
     /// The transaction id of an ambiguous write, when it had one.
@@ -246,12 +272,21 @@ impl OutboundError {
     /// let txn = TxnId::new("t1")?;
     /// let error = OutboundError::Ambiguous { txn_id: Some(txn.clone()), attempts: 1, reason: "timeout".into() };
     /// assert_eq!(error.txn_id(), Some(&txn));
+    ///
+    /// let decoded = OutboundError::DecodeAfterWrite {
+    ///     what: "event send",
+    ///     txn_id: Some(txn.clone()),
+    ///     reason: "bad body".into(),
+    /// };
+    /// assert_eq!(decoded.txn_id(), Some(&txn));
     /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
     /// ```
     #[must_use]
     pub fn txn_id(&self) -> Option<&TxnId> {
         match self {
-            Self::Ambiguous { txn_id, .. } => txn_id.as_ref(),
+            Self::Ambiguous { txn_id, .. } | Self::DecodeAfterWrite { txn_id, .. } => {
+                txn_id.as_ref()
+            }
             _ => None,
         }
     }
@@ -543,7 +578,7 @@ mod tests {
     #[test]
     fn transport_and_decode_variants_report_their_classification() {
         let cases: Vec<(OutboundError, bool, bool, bool, String)> = vec![(
-            OutboundError::Decode {
+            OutboundError::DecodeRead {
                 what: "whoami",
                 reason: "missing user_id".into(),
             },
@@ -575,6 +610,21 @@ mod tests {
                 txn_id: None,
                 attempts: 1,
                 reason: "timeout".into()
+            }
+            .txn_id(),
+            None
+        );
+        let decoded = OutboundError::DecodeAfterWrite {
+            what: "event send",
+            txn_id: Some(txn.clone()),
+            reason: "bad body".into(),
+        };
+        assert_eq!(decoded.txn_id(), Some(&txn));
+        assert_eq!(
+            OutboundError::DecodeAfterWrite {
+                what: "media upload",
+                txn_id: None,
+                reason: "bad body".into()
             }
             .txn_id(),
             None
@@ -632,11 +682,13 @@ mod tests {
                 classification: Retryable,
                 client_error: false,
             },
-            OutboundError::Ambiguous { .. } => ExpectedClassification {
-                classification: Ambiguous,
-                client_error: false,
-            },
-            OutboundError::TestHarness { .. } | OutboundError::Decode { .. } => {
+            OutboundError::Ambiguous { .. } | OutboundError::DecodeAfterWrite { .. } => {
+                ExpectedClassification {
+                    classification: Ambiguous,
+                    client_error: false,
+                }
+            }
+            OutboundError::TestHarness { .. } | OutboundError::DecodeRead { .. } => {
                 ExpectedClassification {
                     classification: Terminal,
                     client_error: false,
@@ -685,7 +737,7 @@ mod tests {
                 attempts: 2,
             },
             OutboundError::Ambiguous {
-                txn_id: Some(txn),
+                txn_id: Some(txn.clone()),
                 attempts: 1,
                 reason: "x".into(),
             },
@@ -694,7 +746,12 @@ mod tests {
                 reason: "x".into(),
             },
             OutboundError::TestHarness { reason: "x".into() },
-            OutboundError::Decode {
+            OutboundError::DecodeAfterWrite {
+                what: "event send",
+                txn_id: Some(txn.clone()),
+                reason: "x".into(),
+            },
+            OutboundError::DecodeRead {
                 what: "whoami",
                 reason: "x".into(),
             },
@@ -707,7 +764,7 @@ mod tests {
     #[test]
     fn every_error_variant_has_one_explicit_classification() {
         let errors = every_outbound_error();
-        assert_eq!(errors.len(), 13, "the table must cover every variant");
+        assert_eq!(errors.len(), 14, "the table must cover every variant");
 
         for error in errors {
             let expected = expected_classification(&error);
