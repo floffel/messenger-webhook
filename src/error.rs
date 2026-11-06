@@ -89,6 +89,28 @@ pub enum Error {
         channel: Channel,
     },
 
+    /// HMAC-SHA256 could not be constructed.
+    ///
+    /// This is an internal configuration or dependency fault, not a forged
+    /// request: verification failures caused by a signature mismatch remain
+    /// [`Error::BadSignature`].
+    ///
+    /// ```
+    /// use messenger_webhook::Error;
+    ///
+    /// let error = Error::Hmac {
+    ///     source: hmac::digest::InvalidLength,
+    /// };
+    /// assert_eq!(error.to_string(), "could not construct HMAC-SHA256");
+    /// assert!(std::error::Error::source(&error).is_some());
+    /// ```
+    #[error("could not construct HMAC-SHA256")]
+    Hmac {
+        /// The underlying HMAC construction failure.
+        #[source]
+        source: hmac::digest::InvalidLength,
+    },
+
     /// The message cannot be expressed in the provider's outbound schema.
     #[error("{channel} cannot encode this message: {reason}")]
     InvalidMessage {
@@ -141,6 +163,12 @@ impl Error {
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
         false
+    }
+}
+
+impl From<hmac::digest::InvalidLength> for Error {
+    fn from(source: hmac::digest::InvalidLength) -> Self {
+        Self::Hmac { source }
     }
 }
 

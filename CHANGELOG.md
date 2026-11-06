@@ -70,6 +70,10 @@ carry a `!` in the conventional-commit subject.
   existing adapter, and `Registry`'s `Debug` output lists the channel-to-adapter
   map (secrets stay redacted) so an operator can see which adapter won. Closes
   #98.
+- **HMAC construction failures are no longer reported as `BadSignature`.**
+  Meta signature construction and verification now surface an impossible HMAC construction
+  failure as `Error::Hmac` with the underlying `hmac::digest::InvalidLength` source, so an
+  internal signing fault cannot be mistaken for a forged webhook. Closes #112.
 - **Header lookup no longer allocates on mixed-case queries.** `Headers::get`
   copied the query into a fresh lower-cased `String` whenever it contained an
   ASCII upper-case byte, then scanned the entries comparing owned strings; that
