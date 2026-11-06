@@ -1,13 +1,19 @@
 //! Typed errors.
 //!
-//! Every failure this crate reports is **terminal**: the caller has to fix the
-//! payload, the headers or the configuration before retrying. Signature and
-//! size failures fail closed, so a request that cannot be proven authentic
-//! never reaches a parser.
+//! Most failures reported by the shipped adapters are **terminal**: the caller
+//! has to fix the payload, the headers or the configuration before retrying.
+//! Signature and size failures fail closed, so a request that cannot be proven
+//! authentic never reaches a parser.
+//!
+//! Third-party [`crate::Adapter`] implementations can also report transport and
+//! delivery outcomes through [`Error::Transport`] and [`Error::Ambiguous`].
+//! Those variants keep retry safety explicit: a transport failure before a
+//! write is retryable, while an ambiguous write must be repeated only with the
+//! same idempotency key, if one exists.
 
 use thiserror::Error;
 
-use crate::model::Channel;
+use crate::model::{Channel, IdempotencyKey};
 
 /// Unit a provider message limit is expressed in.
 ///
@@ -258,6 +264,66 @@ pub enum Error {
         reason: String,
     },
 
+    /// A transport failed before the provider could apply the request.
+    ///
+    /// This is retryable: nothing is known to have been applied, so an adapter
+    /// can report a connection, DNS or TLS failure here and let the caller
+    /// retry the same request. If the provider might have processed the write,
+    /// use [`Error::Ambiguous`] instead.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, Error};
+    ///
+    /// let error = Error::Transport {
+    ///     channel: Channel::Telegram,
+    ///     reason: "connection refused".to_owned(),
+    /// };
+    /// assert!(error.is_retryable());
+    /// assert!(!error.is_ambiguous());
+    /// ```
+    #[error("transport failed before the request was applied for {channel}: {reason}")]
+    Transport {
+        /// Channel whose adapter saw the transport failure.
+        channel: Channel,
+        /// Transport-level reason. Never include credentials or request bodies.
+        reason: String,
+    },
+
+    /// The provider may have applied the request, and the adapter cannot tell.
+    ///
+    /// A read timeout or a `5xx` after the provider might have accepted the
+    /// write is ambiguous. Do **not** retry blindly with a fresh idempotency
+    /// key: repeat the same key, when one exists, or reconcile the outcome with
+    /// the provider before deciding what to do next.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, Error, IdempotencyKey};
+    ///
+    /// let error = Error::Ambiguous {
+    ///     channel: Channel::Matrix,
+    ///     idempotency_key: Some(IdempotencyKey::new("txn-1")?),
+    ///     reason: "read timeout".to_owned(),
+    /// };
+    /// assert!(!error.is_retryable());
+    /// assert!(error.is_ambiguous());
+    /// assert_eq!(error.idempotency_key().map(IdempotencyKey::as_str), Some("txn-1"));
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[error(
+        "the request may have been applied for {channel}: {reason}{suffix}",
+        suffix = idempotency_key_suffix(.idempotency_key.as_ref())
+    )]
+    Ambiguous {
+        /// Channel whose adapter saw the uncertain outcome.
+        channel: Channel,
+        /// Idempotency key that must be reused if the caller repeats the
+        /// request, when the adapter had one.
+        idempotency_key: Option<IdempotencyKey>,
+        /// Why the outcome is unknown. Never include credentials or request
+        /// bodies.
+        reason: String,
+    },
+
     /// The message is longer than the provider accepts.
     ///
     /// ```
@@ -404,18 +470,93 @@ impl Error {
 
     /// Whether the same request could succeed if it were retried unchanged.
     ///
-    /// Always `false`: every error here is terminal and needs a fix in the
-    /// payload or the configuration, not a retry.
+    /// `true` only for [`Error::Transport`], where nothing is known to have
+    /// been applied. An [`Error::Ambiguous`] is not retryable through this
+    /// method because a blind retry may duplicate work; use
+    /// [`Error::is_ambiguous`] and repeat with the same idempotency key.
     ///
     /// ```
-    /// use messenger_webhook::Error;
+    /// use messenger_webhook::{Channel, Error};
+    ///
+    /// let transport = Error::Transport {
+    ///     channel: Channel::WhatsApp,
+    ///     reason: "dns failure".to_owned(),
+    /// };
+    /// assert!(transport.is_retryable());
+    ///
+    /// let ambiguous = Error::Ambiguous {
+    ///     channel: Channel::WhatsApp,
+    ///     idempotency_key: None,
+    ///     reason: "timeout".to_owned(),
+    /// };
+    /// assert!(!ambiguous.is_retryable());
     ///
     /// assert!(!Error::Payload("not a JSON object".into()).is_retryable());
     /// ```
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
-        false
+        matches!(self, Self::Transport { .. })
     }
+
+    /// Whether the request may have been applied.
+    ///
+    /// Only [`Error::Ambiguous`] is ambiguous. A caller must not treat it as a
+    /// terminal request error: the write may already be in the provider's
+    /// system.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, Error};
+    ///
+    /// let error = Error::Ambiguous {
+    ///     channel: Channel::Telegram,
+    ///     idempotency_key: None,
+    ///     reason: "timeout".to_owned(),
+    /// };
+    /// assert!(error.is_ambiguous());
+    /// ```
+    #[must_use]
+    pub const fn is_ambiguous(&self) -> bool {
+        matches!(self, Self::Ambiguous { .. })
+    }
+
+    /// The idempotency key of an ambiguous delivery outcome, when there is one.
+    ///
+    /// Repeat the request with this key instead of minting a new one, or use it
+    /// to reconcile the provider-side outcome.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, Error, IdempotencyKey};
+    ///
+    /// let key = IdempotencyKey::new("txn-1")?;
+    /// let error = Error::Ambiguous {
+    ///     channel: Channel::Matrix,
+    ///     idempotency_key: Some(key.clone()),
+    ///     reason: "timeout".to_owned(),
+    /// };
+    /// assert_eq!(error.idempotency_key(), Some(&key));
+    ///
+    /// let transport = Error::Transport {
+    ///     channel: Channel::Matrix,
+    ///     reason: "dns failure".to_owned(),
+    /// };
+    /// assert!(transport.idempotency_key().is_none());
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+        match self {
+            Self::Ambiguous {
+                idempotency_key, ..
+            } => idempotency_key.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+fn idempotency_key_suffix(idempotency_key: Option<&IdempotencyKey>) -> String {
+    idempotency_key.map_or_else(String::new, |key| {
+        format!(" (repeat with idempotency key `{key}`)")
+    })
 }
 
 impl From<hmac::digest::InvalidLength> for Error {
