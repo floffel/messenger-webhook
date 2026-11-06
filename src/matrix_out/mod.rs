@@ -94,7 +94,7 @@ pub use retry::{
     Operation, RetryPolicy, RetryPolicyError, Verdict, DEFAULT_BASE_DELAY_MS, DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_DELAY_MS, DEFAULT_MAX_RATE_LIMIT_WAIT_MS,
 };
-pub use testing::{RecordedRequest, RecordingSleeper, StubTransport};
+pub use testing::{RecordedRequest, RecordingSleeper, StubCounters, StubTransport};
 pub use transport::Transport;
 pub use types::{
     MediaKind, MediaUpload, MxcUri, SendOutcome, TxnId, DEFAULT_MAX_UPLOAD_BYTES,
