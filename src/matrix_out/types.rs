@@ -610,16 +610,46 @@ fn validate_content_type(content_type: &str) -> Result<(), OutboundError> {
     if content_type.len() > 255 {
         return Err(invalid("longer than 255 bytes"));
     }
-    if !content_type.contains('/') {
-        return Err(invalid("not a `type/subtype` pair"));
-    }
     if content_type
         .chars()
         .any(|c| c.is_control() || c.is_whitespace())
     {
         return Err(invalid("it contains whitespace or a control character"));
     }
+    let Some((ty, subtype)) = content_type.split_once('/') else {
+        return Err(invalid("not a `type/subtype` pair"));
+    };
+    if ty.is_empty() || subtype.is_empty() || subtype.contains('/') {
+        return Err(invalid("not a `type/subtype` pair"));
+    }
+    if !is_http_token(ty) || !is_http_token(subtype) {
+        return Err(invalid("not a `type/subtype` pair"));
+    }
     Ok(())
+}
+
+/// RFC 7230's `token` production.
+fn is_http_token(value: &str) -> bool {
+    value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+            )
+    })
 }
 
 /// A file name goes into the query string: separators and controls are out.
@@ -646,6 +676,8 @@ fn validate_filename(filename: &str) -> Result<(), OutboundError> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     #[test]
@@ -766,7 +798,21 @@ mod tests {
         assert!(validate_media(&MediaUpload::new(&[], "image/png"), 8).is_err());
         assert!(validate_media(&MediaUpload::new(&bytes, ""), 8).is_err());
         assert!(validate_media(&MediaUpload::new(&bytes, "png"), 8).is_err());
+        assert!(validate_media(&MediaUpload::new(&bytes, "/"), 8).is_err());
+        assert!(validate_media(&MediaUpload::new(&bytes, "a/"), 8).is_err());
+        assert!(validate_media(&MediaUpload::new(&bytes, "/b"), 8).is_err());
+        assert!(validate_media(&MediaUpload::new(&bytes, "a/b/c"), 8).is_err());
+        assert!(validate_media(&MediaUpload::new(&bytes, "image//png"), 8).is_err());
+        assert!(validate_media(&MediaUpload::new(&bytes, "image/p?ng"), 8).is_err());
         assert!(validate_media(&MediaUpload::new(&bytes, "image/png\r\nX: y"), 8).is_err());
+
+        let content_type_at_limit = format!("{}/{}", "a".repeat(127), "b".repeat(127));
+        assert_eq!(content_type_at_limit.len(), 255);
+        assert!(validate_media(&MediaUpload::new(&bytes, &content_type_at_limit), 8).is_ok());
+
+        let content_type_over_limit = format!("{}/{}", "a".repeat(128), "b".repeat(127));
+        assert_eq!(content_type_over_limit.len(), 256);
+        assert!(validate_media(&MediaUpload::new(&bytes, &content_type_over_limit), 8).is_err());
         assert!(
             validate_media(&MediaUpload::new(&bytes, "image/png").with_filename(""), 8).is_err()
         );
@@ -790,6 +836,29 @@ mod tests {
             8
         )
         .is_ok());
+    }
+
+    proptest! {
+        #[test]
+        fn content_type_validation_matches_the_type_subtype_token_rule(raw in "\\PC{0,300}") {
+            let expected = !raw.is_empty()
+                && raw.len() <= 255
+                && !raw.chars().any(|c| c.is_control() || c.is_whitespace())
+                && raw.split_once('/').is_some_and(|(ty, subtype)| {
+                    !ty.is_empty()
+                        && !subtype.is_empty()
+                        && !subtype.contains('/')
+                        && is_http_token(ty)
+                        && is_http_token(subtype)
+                });
+
+            prop_assert_eq!(
+                validate_content_type(raw.as_str()).is_ok(),
+                expected,
+                "for {:?}",
+                raw
+            );
+        }
     }
 
     #[test]
