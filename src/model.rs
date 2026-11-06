@@ -418,7 +418,9 @@ pub struct NormalizedMessage {
     /// When the provider sent none, this crate synthesises a stable one (see
     /// [`SYNTHETIC_ID_PREFIX`]) instead of dropping the event, so a replay
     /// dedupes and nothing disappears. [`Self::has_synthetic_id`] tells the
-    /// two apart.
+    /// two apart. A provider-assigned id that starts with
+    /// [`SYNTHETIC_ID_PREFIX`] is retagged before it reaches this field, so
+    /// the prefix stays a reliable provenance signal.
     pub external_id: String,
     /// Conversation the event belongs to (chat id, room id, phone number).
     pub conversation_id: String,

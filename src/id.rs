@@ -21,12 +21,29 @@ use crate::model::{Channel, SYNTHETIC_ID_PREFIX};
 use crate::signature::encode_hex;
 use crate::MAX_BODY_BYTES;
 
+/// Prefix used when a provider id would otherwise impersonate this crate's
+/// synthetic-id namespace.
+const PROVIDER_ID_PREFIX: &str = "provider:";
+
 /// Returns the provider's id, or a stable synthesised one when the field is
 /// missing, empty or not an id at all.
 pub(crate) fn identify(value: &Value, key: &str, channel: &Channel, role: &str) -> Result<String> {
     match crate::json::id(value, key) {
-        Some(id) => Ok(id),
+        Some(id) => Ok(retag_provider_id(id)),
         None => synthesize(channel.as_str(), role, value, MAX_BODY_BYTES),
+    }
+}
+
+/// Guards the synthetic-id namespace from provider ids that impersonate it.
+///
+/// A provider is free to send an id that already looks like `synthetic:...`.
+/// Carrying it verbatim would make `has_synthetic_id()` lie, so such a value is
+/// moved under the `provider:` namespace while keeping the original content.
+fn retag_provider_id(id: String) -> String {
+    if id.starts_with(SYNTHETIC_ID_PREFIX) {
+        format!("{PROVIDER_ID_PREFIX}{id}")
+    } else {
+        id
     }
 }
 
@@ -114,7 +131,7 @@ impl Write for DigestWriter<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{identify, synthesize};
+    use super::{identify, synthesize, PROVIDER_ID_PREFIX};
     use crate::error::Error;
     use crate::model::{Channel, SYNTHETIC_ID_PREFIX};
     use serde_json::{json, Value};
@@ -126,6 +143,14 @@ mod tests {
             identify(&value, "id", &Channel::WhatsApp, "message").expect("provider id"),
             "wamid.1"
         );
+    }
+
+    #[test]
+    fn a_provider_id_that_impersonates_the_synthetic_prefix_is_retagged() {
+        let value = json!({ "id": "synthetic:x" });
+        let id = identify(&value, "id", &Channel::WhatsApp, "message").expect("retagged id");
+        assert_eq!(id, format!("{PROVIDER_ID_PREFIX}synthetic:x"));
+        assert!(!id.starts_with(SYNTHETIC_ID_PREFIX));
     }
 
     #[test]
