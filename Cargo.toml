@@ -23,9 +23,14 @@ matrix = []
 # runtime (tokio's sync + time primitives). A webhook-only consumer must not
 # inherit either, so the whole `matrix_out` module sits behind this feature.
 matrix-out = ["dep:reqwest", "dep:tokio", "dep:uuid"]
+# Default-off: this mirrors a downstream consumer enabling `serde_json`'s
+# `preserve_order` feature. The crate's synthetic ids stay stable either way,
+# but CI must build and test the `IndexMap` implementation too.
+preserve_order = ["serde_json/preserve_order"]
 
 [dependencies]
 serde_json = "1"
+serde_json_canonicalizer = "0.4.1"
 sha2 = "0.11"
 hmac = "0.13"
 const-hex = { version = "1.19.3", default-features = false, features = ["alloc"] }

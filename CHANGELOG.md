@@ -117,6 +117,13 @@ carry a `!` in the conventional-commit subject.
   the opposite of the truth. Adapters now keep the id but add a `provider:`
   namespace when the provider's value starts with `SYNTHETIC_ID_PREFIX`, which
   preserves provenance for idempotency and trust decisions. Closes #33.
+- **Synthetic ids are now canonical under `serde_json/preserve_order` and
+  number spelling changes.** The digest for an event without a provider id used
+  `serde_json::Value`'s `Display`, which follows the active map implementation
+  and preserves `1` versus `1.0`. It now hashes RFC 8785 JCS bytes via
+  `serde_json_canonicalizer`, so a provider replay that reorders object keys or
+  rewrites equivalent numbers still maps to the same key. A default-off
+  `preserve_order` feature builds and tests the `IndexMap` path in CI.
 
 ## [0.3.3] - 2026-10-27
 

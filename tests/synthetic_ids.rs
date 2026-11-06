@@ -104,6 +104,42 @@ fn different_content_yields_a_different_synthetic_id() {
 }
 
 #[test]
+fn canonical_numbers_keep_equivalent_payloads_together() {
+    let integer = json!({
+        "entry": [{ "changes": [{ "value": { "messages": [
+            { "from": "4915112345678", "type": "text", "amount": 1,
+              "nested": { "b": 2, "a": 1 } }
+        ] } }] }]
+    });
+    let decimal_and_reordered = json!({
+        "entry": [{ "changes": [{ "value": { "messages": [
+            { "nested": { "a": 1, "b": 2 }, "amount": 1.0,
+              "type": "text", "from": "4915112345678" }
+        ] } }] }]
+    });
+    let first = adapt(&whatsapp(), &integer);
+    let second = adapt(&whatsapp(), &decimal_and_reordered);
+    assert_eq!(
+        first[0].external_id, second[0].external_id,
+        "JCS canonicalisation makes number spelling and object order irrelevant"
+    );
+}
+
+#[test]
+fn a_number_change_still_changes_the_synthetic_id() {
+    let build = |amount: serde_json::Value| {
+        json!({
+            "entry": [{ "changes": [{ "value": { "messages": [
+                { "from": "4915112345678", "type": "text", "amount": amount }
+            ] } }] }]
+        })
+    };
+    let first = adapt(&whatsapp(), &build(json!(1)));
+    let second = adapt(&whatsapp(), &build(json!(1.5)));
+    assert_ne!(first[0].external_id, second[0].external_id);
+}
+
+#[test]
 fn a_whatsapp_status_without_an_id_is_a_status_event() {
     let body = json!({
         "entry": [{ "changes": [{ "value": { "statuses": [

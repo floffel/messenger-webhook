@@ -20,7 +20,13 @@ a homeserver client are different jobs and only one of them needs an HTTP stack.
 | `telegram` | `message`, edits, channel posts, `message_reaction` | `X-Telegram-Bot-Api-Secret-Token` | `sendMessage` / send-media |
 | `matrix` | `m.room.message`, `m.reaction`, `m.receipt`, unknown types | `Authorization: Bearer <hs_token>` | `m.room.message` content |
 
-All three features are on by default; each module is independently gated.
+All three provider features are on by default; each module is independently
+gated.
+
+Two extra features are default-off. `matrix-out` adds the Matrix outbound
+client described below, and `preserve_order` mirrors a downstream consumer
+enabling `serde_json/preserve_order`; synthetic event ids stay stable in both
+map implementations.
 
 Each gated item carries a `feature` badge on docs.rs, which builds the crate
 with `--all-features`. The crate uses `std` only — there is no `no_std` story.
