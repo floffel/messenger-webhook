@@ -10,7 +10,8 @@
 //! | outcome | [`Operation::Read`] | [`Operation::Idempotent`] | [`Operation::NonIdempotent`] |
 //! |---------|------------------|--------------------------|------------------------------|
 //! | `2xx` | success | success | success |
-//! | `429` | retry after the server's `retry_after_ms` | same | same — a rate limit is answered before the request is processed |
+//! | `429` with a Matrix `M_LIMIT_EXCEEDED` body | retry after the server's `retry_after_ms` | same | same — a homeserver rate limit is answered before the request is processed |
+//! | `429` without a Matrix body | retry from the header or backoff | same | **ambiguous** — a reverse proxy may answer after receiving the body |
 //! | `5xx` | retry | retry | **ambiguous** — the write may have landed |
 //! | `4xx` (other) | rejected | rejected | rejected |
 //! | connect failure | retry | retry | retry — nothing was written |
@@ -544,11 +545,17 @@ impl RetryPolicy {
     ///     policy.classify(1, &Response::json(503, "{}"), Operation::NonIdempotent),
     ///     Verdict::Ambiguous,
     /// );
+    /// let proxy = Response::new(429, Vec::new()).with_header("retry-after", "2");
+    /// assert_eq!(
+    ///     policy.classify(1, &proxy, Operation::NonIdempotent),
+    ///     Verdict::Ambiguous,
+    /// );
     /// ```
     #[must_use]
     pub fn classify(&self, attempt: u32, response: &Response, operation: Operation) -> Verdict {
         match response.status {
             200..=299 => Verdict::Success,
+            429 if !operation.is_repeatable() && !matrix_rate_limit(response) => Verdict::Ambiguous,
             429 => {
                 let wait = retry_after_ms(response).unwrap_or_else(|| self.retry_delay(attempt));
                 // A rate limit still costs an attempt: the budget bounds every
@@ -639,6 +646,26 @@ pub(crate) fn retry_after_ms(response: &Response) -> Option<Duration> {
         .header("retry-after")
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map(Duration::from_secs)
+}
+
+/// Whether the response body proves the homeserver answered the `429` with
+/// `M_LIMIT_EXCEEDED`.
+///
+/// Reverse proxies can answer `429` after forwarding the request body, so a
+/// non-idempotent operation needs the Matrix error code before it may retry.
+pub(crate) fn matrix_rate_limit(response: &Response) -> bool {
+    matrix_rate_limit_from_body(&response.body)
+}
+
+fn matrix_rate_limit_from_body(body: &[u8]) -> bool {
+    if body.len() > MAX_RETRY_AFTER_BODY_BYTES {
+        return false;
+    }
+    serde_json::from_slice::<Value>(body).is_ok_and(|body| {
+        body.get("errcode")
+            .and_then(Value::as_str)
+            .is_some_and(|errcode| errcode == "M_LIMIT_EXCEEDED")
+    })
 }
 
 /// The body's `retry_after_ms`, only when the body is small enough to parse.
@@ -839,6 +866,79 @@ mod tests {
         );
         // A 429 is answered before the request is processed, so even an upload
         // may be repeated after it.
+    }
+
+    #[test]
+    fn a_proxy_429_is_ambiguous_for_non_idempotent_work() {
+        let policy = RetryPolicy::default();
+        let proxy = Response::new(429, Vec::new()).with_header("retry-after", "2");
+        assert_eq!(
+            policy.classify(1, &proxy, Operation::NonIdempotent),
+            Verdict::Ambiguous
+        );
+        assert!(matches!(
+            policy.classify(1, &proxy, Operation::Read),
+            Verdict::Retry { .. }
+        ));
+
+        let non_matrix = Response::json(429, r#"{"retry_after_ms":2000}"#);
+        assert_eq!(
+            policy.classify(1, &non_matrix, Operation::NonIdempotent),
+            Verdict::Ambiguous
+        );
+        assert!(matches!(
+            policy.classify(1, &non_matrix, Operation::Read),
+            Verdict::Retry { .. }
+        ));
+    }
+
+    #[test]
+    fn a_matrix_rate_limit_is_still_retryable_for_non_idempotent_work() {
+        let policy = RetryPolicy::default();
+        let response = Response::json(
+            429,
+            r#"{"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":2000}"#,
+        );
+        assert_eq!(
+            policy.classify(1, &response, Operation::NonIdempotent),
+            Verdict::Retry {
+                delay: Duration::from_secs(2)
+            }
+        );
+
+        let boundary = Response::new(
+            429,
+            br#"{"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":1}"#.to_vec(),
+        );
+        assert_eq!(
+            policy.classify(1, &boundary, Operation::NonIdempotent),
+            Verdict::Retry {
+                delay: Duration::from_millis(1)
+            }
+        );
+    }
+
+    #[test]
+    fn a_matrix_rate_limit_body_is_size_bounded_before_parsing() {
+        let policy = RetryPolicy::default();
+        let prefix = br#"{"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":250}"#;
+        let mut at_limit = Vec::with_capacity(MAX_RETRY_AFTER_BODY_BYTES);
+        at_limit.extend_from_slice(prefix);
+        at_limit.resize(MAX_RETRY_AFTER_BODY_BYTES, b' ');
+        assert_eq!(
+            policy.classify(1, &Response::new(429, at_limit), Operation::NonIdempotent),
+            Verdict::Retry {
+                delay: Duration::from_millis(250)
+            }
+        );
+
+        let mut over_limit = Vec::with_capacity(MAX_RETRY_AFTER_BODY_BYTES + 1);
+        over_limit.extend_from_slice(prefix);
+        over_limit.resize(MAX_RETRY_AFTER_BODY_BYTES + 1, b' ');
+        assert_eq!(
+            policy.classify(1, &Response::new(429, over_limit), Operation::NonIdempotent),
+            Verdict::Ambiguous
+        );
     }
 
     #[test]

@@ -121,6 +121,11 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- **Proxy `429`s do not retry non-idempotent uploads.** A `429` on media
+  upload is now retried only when the body proves a Matrix
+  `M_LIMIT_EXCEEDED`; a header-only or non-Matrix `429` is reported as
+  ambiguous because a reverse proxy may have forwarded the request body.
+  Closes #72.
 - **Matrix receipts keep their event identity and fan out completely.** A
   Matrix `m.receipt` event used to overwrite `external_id` with the referenced
   message id, so a read marker could be stored as the message it referred to,

@@ -1094,9 +1094,10 @@ impl MatrixClient {
     /// Uploads media and returns the `mxc://` URI that references it.
     ///
     /// The upload carries **no** idempotency key: a repeated upload stores the
-    /// bytes twice. It is therefore never retried after a `5xx` or a timeout —
-    /// those come back as [`OutboundError::Ambiguous`] — only after a `429` or a
-    /// connection that was never established.
+    /// bytes twice. It is therefore never retried after a `5xx`, a timeout, or a
+    /// `429` that is not proven by a Matrix `M_LIMIT_EXCEEDED` body — those come
+    /// back as [`OutboundError::Ambiguous`] — only after a homeserver rate limit
+    /// or a connection that was never established.
     ///
     /// # Errors
     ///
@@ -1548,6 +1549,16 @@ fn http_failure(
 ) -> OutboundError {
     let (errcode, message) = matrix_error(response);
     match response.status {
+        429 if !operation.is_repeatable() && !retry::matrix_rate_limit(response) => {
+            OutboundError::Ambiguous {
+                txn_id: txn.cloned(),
+                attempts,
+                reason: format!(
+                    "the proxy answered 429 for a write that may have been applied: {detail}",
+                    detail = detail_text(&errcode, &message),
+                ),
+            }
+        }
         429 => OutboundError::RateLimited {
             retry_after: retry::retry_after_ms(response),
             errcode,
