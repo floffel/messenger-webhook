@@ -508,18 +508,18 @@ fn an_exhausted_stub_is_a_broken_test_not_a_transport_failure() {
 }
 
 #[test]
-fn content_at_the_ceiling_is_accepted_and_one_byte_past_is_not() {
+fn content_just_inside_the_ceiling_is_accepted_and_at_the_ceiling_is_not() {
     let (client, transport, _) = client_with(|config| config);
     transport
         .push_json(200, r#"{"event_id":"$1"}"#)
         .push_json(200, r#"{"event_id":"$2"}"#);
 
     // `{"msgtype":"m.text","body":""}` is a 30 byte envelope.
-    let at_limit = "x".repeat(MAX_CONTENT_BYTES - 30);
-    assert!(block_on(client.send_text("!r:m.example", &at_limit)).is_ok());
+    let just_inside = "x".repeat(MAX_CONTENT_BYTES - 30 - 1);
+    assert!(block_on(client.send_text("!r:m.example", &just_inside)).is_ok());
 
-    let over = "x".repeat(MAX_CONTENT_BYTES - 29);
-    let error = block_on(client.send_text("!r:m.example", &over)).expect_err("over the ceiling");
+    let at_limit = "x".repeat(MAX_CONTENT_BYTES - 30);
+    let error = block_on(client.send_text("!r:m.example", &at_limit)).expect_err("at the ceiling");
     assert!(
         matches!(error, OutboundError::MessageTooLong { .. }),
         "{error:?}"

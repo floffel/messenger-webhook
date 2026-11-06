@@ -581,24 +581,28 @@ fn a_redaction_reason_must_fit_the_event_ceiling() {
         .transport
         .push_json(200, r#"{"event_id":"$redaction"}"#);
 
-    let at_limit = "x".repeat(ceiling - envelope);
+    let just_inside = "x".repeat(ceiling - envelope - 1);
     block_on(
         harness
             .client
-            .redact("!r:example.org", "$abc", Some(&at_limit)),
+            .redact("!r:example.org", "$abc", Some(&just_inside)),
     )
-    .expect("exactly at the ceiling");
+    .expect("just inside the ceiling");
     assert_eq!(harness.transport.call_count(), 1);
     assert_eq!(
         harness.transport.requests()[0].json().expect("json")["reason"]
             .as_str()
             .map(str::len),
-        Some(at_limit.len())
+        Some(just_inside.len())
     );
 
-    let over = "x".repeat(ceiling - envelope + 1);
-    let error = block_on(harness.client.redact("!r:example.org", "$abc", Some(&over)))
-        .expect_err("over the ceiling");
+    let at_limit = "x".repeat(ceiling - envelope);
+    let error = block_on(
+        harness
+            .client
+            .redact("!r:example.org", "$abc", Some(&at_limit)),
+    )
+    .expect_err("at the ceiling");
     assert!(matches!(error, OutboundError::MessageTooLong { .. }));
     assert!(error.is_client_error());
     assert_eq!(harness.transport.call_count(), 1);

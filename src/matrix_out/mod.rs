@@ -1421,7 +1421,10 @@ fn json_bytes(value: &Value) -> Vec<u8> {
 /// Serialises outbound content and enforces the event ceiling.
 fn check_content(content: &Value) -> OutboundResult<Vec<u8>> {
     let bytes = json_bytes(content);
-    if bytes.len() > MAX_CONTENT_BYTES {
+    // The specification says "The complete event MUST NOT be larger than 65536
+    // bytes". The envelope is never empty, so content of exactly the event
+    // ceiling can never fit.
+    if bytes.len() >= MAX_CONTENT_BYTES {
         return Err(OutboundError::MessageTooLong {
             limit: MAX_CONTENT_BYTES,
             actual: bytes.len(),
@@ -1723,13 +1726,15 @@ mod tests {
     }
 
     #[test]
-    fn content_over_the_event_ceiling_is_refused_at_the_boundary() {
-        let at_limit = json!({ "body": "x".repeat(MAX_CONTENT_BYTES - 32) });
-        let bytes = check_content(&at_limit).expect("below the ceiling");
-        assert!(bytes.len() <= MAX_CONTENT_BYTES);
+    fn content_at_the_event_ceiling_is_refused_at_the_boundary() {
+        let envelope = json!({ "body": "" }).to_string().len();
 
-        let over = json!({ "body": "x".repeat(MAX_CONTENT_BYTES) });
-        let error = check_content(&over).expect_err("over the ceiling");
+        let just_inside = json!({ "body": "x".repeat(MAX_CONTENT_BYTES - envelope - 1) });
+        let bytes = check_content(&just_inside).expect("just inside the ceiling");
+        assert_eq!(bytes.len(), MAX_CONTENT_BYTES - 1);
+
+        let at_limit = json!({ "body": "x".repeat(MAX_CONTENT_BYTES - envelope) });
+        let error = check_content(&at_limit).expect_err("at the ceiling");
         assert!(matches!(error, OutboundError::MessageTooLong { .. }));
         assert!(error.to_string().contains("65536"));
     }

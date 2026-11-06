@@ -281,7 +281,7 @@ proptest! {
         prop_assert_eq!(transport.call_count(), 1);
     }
 
-    /// The content ceiling is enforced at exactly N and N+1, never off by one.
+    /// The content ceiling is enforced at exactly N-1 and N, never off by one.
     #[test]
     fn the_content_ceiling_is_exact(padding in 0usize..80) {
         let transport = Arc::new(StubTransport::new());
@@ -292,8 +292,8 @@ proptest! {
         )
         .expect("valid");
         // `{"msgtype":"m.text","body":""}` is exactly 30 bytes of envelope, so
-        // this body lands on the ceiling plus `padding`.
-        let body = "x".repeat(65_536 - 30 + padding);
+        // this body lands just inside the ceiling plus `padding`.
+        let body = "x".repeat(65_536 - 30 - 1 + padding);
         transport.push_json(200, r#"{"event_id":"$1"}"#);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
