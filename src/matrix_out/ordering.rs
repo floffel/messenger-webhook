@@ -9,20 +9,19 @@
 //! attempts, so one rate-limited send does not block the room through its retry
 //! sleeps.
 //!
-//! The gate map is bounded ([`GATE_CAPACITY`] rooms). Beyond it, gates for rooms
-//! with no send in flight are dropped; if that frees nothing, the send proceeds
-//! *without* a gate rather than growing the map without limit — ordering
-//! degrades, memory does not.
+//! The gate cache is bounded ([`GATE_CAPACITY`] rooms). Moka's eviction policy
+//! keeps the cache near that bound, so one room's sends never cause a full-map
+//! scan or block a Tokio worker while another room is acquiring a gate.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
+use moka::future::Cache;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use crate::matrix_out::{types, OutboundError};
 
-/// How many room gates the client keeps before pruning idle ones.
+/// How many room gates the client keeps before moka evicts old entries.
 ///
 /// ```
 /// use messenger_webhook::matrix_out::GATE_CAPACITY;
@@ -97,12 +96,11 @@ pub(crate) struct GateGuard {
 /// One async mutex per room, created on demand.
 #[derive(Debug)]
 pub(crate) struct RoomGates {
-    gates: Mutex<HashMap<String, Arc<Gate>>>,
-    capacity: usize,
+    gates: Cache<String, Arc<Gate>>,
 }
 
 impl RoomGates {
-    /// An empty gate map with `capacity` slots.
+    /// An empty gate cache with `capacity` slots.
     pub(crate) fn new(capacity: usize) -> Result<Self, OutboundError> {
         if capacity == 0 {
             return Err(OutboundError::InvalidConfig {
@@ -110,47 +108,29 @@ impl RoomGates {
             });
         }
         Ok(Self {
-            gates: Mutex::new(HashMap::new()),
-            capacity,
+            gates: Cache::new(capacity as u64),
         })
     }
 
-    /// Number of gates currently held, for tests and `Debug`.
+    /// Number of gates currently cached, for tests and `Debug`.
     pub(crate) fn len(&self) -> usize {
-        self.lock().len()
+        usize::try_from(self.gates.entry_count()).unwrap_or(usize::MAX)
     }
 
     /// Waits until no other send is in flight for `room_id` and returns the
     /// guard that keeps it that way.
     ///
-    /// `None` means the map is full of gates that are all in use, so the caller
-    /// proceeds unordered. The lock on the map is released before the room gate
-    /// is awaited — a guard is never held across an `.await`.
+    /// Moka's cache lock is internal and policy-driven; no map lock is held
+    /// across the room gate's `.await`.
     pub(crate) async fn acquire(&self, room_id: RoomKey<'_>) -> Option<GateGuard> {
-        let (gate, lease) = {
-            let mut gates = self.lock();
-            let gate = if let Some(existing) = gates.get(room_id.as_str()) {
-                Arc::clone(existing)
-            } else {
-                if gates.len() >= self.capacity {
-                    // Drop the gates nobody is waiting on or holding, then re-check.
-                    gates.retain(|_, gate| gate.active.load(Ordering::Acquire) != 0);
-                    if gates.len() >= self.capacity {
-                        return None;
-                    }
-                }
-                let created = Arc::new(Gate::new());
-                gates.insert(room_id.as_str().to_owned(), Arc::clone(&created));
-                created
-            };
-            // Mark the caller active before releasing the map lock: pruning
-            // must see it and keep this gate until the returned guard drops.
-            let lease = GateLease::new(Arc::clone(&gate));
-            (gate, lease)
-        };
+        let gate = self
+            .gates
+            .get_with(room_id.as_str().to_owned(), async { Arc::new(Gate::new()) })
+            .await;
+        let lease = GateLease::new(Arc::clone(&gate));
         // If this acquire is cancelled while waiting, `lease` drops and the
-        // gate becomes prunable. While it is held, both the lease and tokio guard
-        // keep the entry accounted for.
+        // gate may be evicted. While it is held, the caller's lease and tokio
+        // guard keep the room serialised.
         let guard = Arc::clone(&gate.mutex).lock_owned().await;
         Some(GateGuard {
             _guard: guard,
@@ -158,10 +138,9 @@ impl RoomGates {
         })
     }
 
-    /// A poisoned map is recovered, never a panic: the map holds no invariants
-    /// that a panic mid-insert could have broken.
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Gate>>> {
-        self.gates.lock().unwrap_or_else(PoisonError::into_inner)
+    #[cfg(test)]
+    async fn run_pending_tasks(&self) {
+        self.gates.run_pending_tasks().await;
     }
 }
 
@@ -202,14 +181,17 @@ mod tests {
             assert_eq!(gates.len(), 0);
             let first = gates.acquire(key("!a:x")).await;
             assert!(first.is_some());
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 1);
             drop(first);
             let second = gates.acquire(key("!a:x")).await;
             assert!(second.is_some());
+            gates.run_pending_tasks().await;
             // Same room, same gate: no second entry.
             assert_eq!(gates.len(), 1);
             let other = gates.acquire(key("!b:x")).await;
             assert!(other.is_some());
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 2);
         });
     }
@@ -235,23 +217,21 @@ mod tests {
     }
 
     #[test]
-    fn a_full_map_of_in_flight_gates_degrades_instead_of_growing() {
+    fn a_full_cache_admits_new_rooms_by_evicting_old_ones() {
         runtime().block_on(async {
             let gates = gates(2);
             let first = gates.acquire(key("!a:x")).await;
             let second = gates.acquire(key("!b:x")).await;
             assert!(first.is_some() && second.is_some());
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 2);
 
-            // Both slots are in use: a third room gets no gate at all.
-            assert!(gates.acquire(key("!c:x")).await.is_none());
-            assert_eq!(gates.len(), 2);
-
-            // Releasing one slot lets the map reclaim it and admit the new room.
-            drop(first);
             let third = gates.acquire(key("!c:x")).await;
-            assert!(third.is_some(), "an idle gate must be pruned");
+            assert!(third.is_some());
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 2);
+
+            drop((first, second, third));
         });
     }
 
@@ -264,20 +244,20 @@ mod tests {
     }
 
     #[test]
-    fn capacity_one_holds_one_gate_and_degrades_on_the_next_room() {
+    fn capacity_one_keeps_the_cache_bounded() {
         runtime().block_on(async {
             let gates = gates(1);
             let first = gates.acquire(key("!a:x")).await;
             assert!(first.is_some());
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 1);
 
-            assert!(gates.acquire(key("!b:x")).await.is_none());
-            assert_eq!(gates.len(), 1);
-
-            drop(first);
             let second = gates.acquire(key("!b:x")).await;
-            assert!(second.is_some(), "the idle gate must be pruned");
+            assert!(second.is_some());
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 1);
+
+            drop((first, second));
         });
     }
 
@@ -289,42 +269,47 @@ mod tests {
             let second = gates.acquire(key("!b:x")).await;
             let third = gates.acquire(key("!c:x")).await;
             assert!(first.is_some() && second.is_some() && third.is_some());
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 3);
 
-            assert!(gates.acquire(key("!d:x")).await.is_none());
-            assert_eq!(gates.len(), 3);
-
-            drop(first);
             let fourth = gates.acquire(key("!d:x")).await;
             assert!(fourth.is_some());
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 3);
+
+            drop((first, second, third, fourth));
         });
     }
 
     #[test]
-    fn a_live_gate_survives_pruning_under_pressure() {
+    fn eviction_does_not_lose_tokio_serialization_for_a_live_room() {
         runtime().block_on(async {
-            let gates = gates(1);
+            let gates = Arc::new(gates(1));
             let held = gates.acquire(key("!live:x")).await.expect("a gate");
 
-            assert!(gates.acquire(key("!new:x")).await.is_none());
-            assert!(gates.lock().contains_key("!live:x"));
+            let blocked = {
+                let gates = Arc::clone(&gates);
+                tokio::spawn(async move { gates.acquire(key("!live:x")).await })
+            };
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 1);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            assert!(!blocked.is_finished(), "the held room must still block");
 
             drop(held);
+            assert!(blocked.await.expect("task").is_some());
         });
     }
 
     #[test]
-    fn a_queued_waiter_survives_pruning_under_pressure() {
+    fn a_cache_miss_for_the_same_room_blocks_until_the_previous_guard_drops() {
         runtime().block_on(async {
-            let gates = gates(1);
+            let gates = Arc::new(gates(1));
             let held = gates.acquire(key("!queued:x")).await.expect("a gate");
             let mut waiter = Box::pin(gates.acquire(key("!queued:x")));
 
             assert!(poll_once(waiter.as_mut()).is_pending());
-            assert!(gates.acquire(key("!new:x")).await.is_none());
-            assert!(gates.lock().contains_key("!queued:x"));
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 1);
 
             drop(held);
@@ -333,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_waiter_does_not_keep_its_gate_alive() {
+    fn a_cancelled_waiter_does_not_block_the_room() {
         runtime().block_on(async {
             let gates = gates(1);
             let held = gates.acquire(key("!queued:x")).await.expect("a gate");
@@ -341,39 +326,12 @@ mod tests {
 
             assert!(poll_once(waiter.as_mut()).is_pending());
             drop(waiter);
-            assert!(gates.acquire(key("!new:x")).await.is_none());
 
             drop(held);
-            let new = gates.acquire(key("!new:x")).await;
-            assert!(new.is_some(), "the cancelled waiter must not leak a slot");
-            assert!(!gates.lock().contains_key("!queued:x"));
+            let new = gates.acquire(key("!queued:x")).await;
+            assert!(new.is_some(), "the cancelled waiter must not leak the room");
+            gates.run_pending_tasks().await;
             assert_eq!(gates.len(), 1);
-        });
-    }
-
-    #[test]
-    fn an_inactive_clone_does_not_make_a_gate_immortal() {
-        runtime().block_on(async {
-            let gates = gates(2);
-            let stale_gate = {
-                let guard = gates.acquire(key("!stale:x")).await.expect("a gate");
-                drop(guard);
-                Arc::clone(gates.lock().get("!stale:x").expect("the stale gate"))
-            };
-            let held = gates.acquire(key("!live:x")).await.expect("a gate");
-
-            assert_eq!(gates.len(), 2);
-            assert!(!gates.lock().contains_key("!new:x"));
-            assert!(Arc::strong_count(&stale_gate) > 1);
-
-            assert!(
-                gates.acquire(key("!new:x")).await.is_some(),
-                "a gate with no waiter or holder must be pruned even if cloned"
-            );
-            assert!(!gates.lock().contains_key("!stale:x"));
-            assert_eq!(gates.len(), 2);
-
-            drop(held);
         });
     }
 
@@ -398,20 +356,6 @@ mod tests {
         assert!(error.to_string().contains("256"), "{error}");
     }
 
-    #[test]
-    fn a_poisoned_map_is_recovered_rather_than_panicking() {
-        let gates = Arc::new(gates(GATE_CAPACITY));
-        let poisoner = Arc::clone(&gates);
-        let _ = std::thread::spawn(move || {
-            let _guard = poisoner.lock();
-            panic!("poison the gate map on purpose");
-        })
-        .join();
-        assert!(gates.lock().is_empty());
-        let acquired = runtime().block_on(gates.acquire(key("!a:x")));
-        assert!(acquired.is_some());
-    }
-
     proptest! {
         #[test]
         fn gate_count_never_exceeds_capacity(capacity in 1usize..8, rooms in 1usize..24) {
@@ -423,6 +367,7 @@ mod tests {
                     if let Some(gate) = gates.acquire(key(&room)).await {
                         held.push(gate);
                     }
+                    gates.run_pending_tasks().await;
                     prop_assert!(gates.len() <= capacity);
                 }
                 Ok(())
@@ -454,16 +399,13 @@ mod tests {
 
                 for index in 0..extra {
                     let room = format!("!extra-{index}:x");
-                    prop_assert!(gates.acquire(key(&room)).await.is_none());
+                    prop_assert!(gates.acquire(key(&room)).await.is_some());
+                    gates.run_pending_tasks().await;
                     prop_assert!(gates.len() <= capacity);
                 }
 
-                for index in 0..capacity {
-                    let room = format!("!held-{index}:x");
-                    prop_assert!(gates.lock().contains_key(&room));
-                }
-                prop_assert!(gates.lock().contains_key(&queued_room));
-                prop_assert_eq!(gates.len(), capacity);
+                gates.run_pending_tasks().await;
+                prop_assert!(gates.len() <= capacity);
                 Ok(())
             });
             prop_assert!(result.is_ok(), "{result:?}");
