@@ -17,6 +17,13 @@ carry a `!` in the conventional-commit subject.
   signatures are still 64 lower-case hex digits after `sha256=`, and synthetic
   ids still carry a 64 lower-case hex SHA-256 suffix.
 
+### Breaking
+
+- **`Headers::insert` validates before it stores.** It now returns `Result` and
+  rejects empty or non-token header names, values with bytes outside visible
+  ASCII plus horizontal tab, and names or values above the new
+  `MAX_HEADER_NAME_BYTES` / `MAX_HEADER_VALUE_BYTES` ceilings. Closes #26.
+
 ### Added
 
 - **Repeated HTTP header fields are observable.** `Headers::append`,

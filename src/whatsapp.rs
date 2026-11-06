@@ -59,7 +59,7 @@ pub const MAX_CAPTION_BYTES: usize = 1024;
 ///     {"id":"wamid.1","from":"4915112345678","timestamp":"1729600000","type":"text","text":{"body":"Hallo"}}]}}]}]}"#;
 ///
 /// let mut headers = Headers::new();
-/// headers.insert("x-hub-signature-256", meta_signature(&secret, body)?);
+/// headers.insert("x-hub-signature-256", meta_signature(&secret, body)?)?;
 /// adapter.verify(&headers, body)?;
 ///
 /// let messages = adapter.adapt(body)?;

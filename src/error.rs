@@ -183,6 +183,22 @@ pub enum Error {
         reason: String,
     },
 
+    /// A header name or value cannot be carried as an HTTP header field.
+    ///
+    /// ```
+    /// use messenger_webhook::{Error, Headers};
+    ///
+    /// let mut headers = Headers::new();
+    /// let error = headers.insert("", "value").unwrap_err();
+    /// assert!(matches!(error, Error::InvalidHeader { .. }));
+    /// assert_eq!(error.to_string(), "invalid header: header name is empty");
+    /// ```
+    #[error("invalid header: {reason}")]
+    InvalidHeader {
+        /// Why the header was rejected.
+        reason: String,
+    },
+
     /// A custom channel name is invalid.
     ///
     /// ```

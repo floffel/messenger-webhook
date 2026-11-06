@@ -22,14 +22,20 @@ fuzz_target!(|data: &[u8]| {
     // the parser is reached on every iteration.
     let signature = meta_signature(&Secret::new("fuzz-secret"), data).unwrap_or_default();
     let mut authentic = Headers::new();
-    authentic.insert("x-hub-signature-256", signature);
-    authentic.insert("x-telegram-bot-api-secret-token", "fuzz-secret");
-    authentic.insert("authorization", "Bearer fuzz-secret");
+    authentic.insert("x-hub-signature-256", signature).unwrap();
+    authentic
+        .insert("x-telegram-bot-api-secret-token", "fuzz-secret")
+        .unwrap();
+    authentic
+        .insert("authorization", "Bearer fuzz-secret")
+        .unwrap();
 
     let mut forged = Headers::new();
-    forged.insert("x-hub-signature-256", "sha256=00");
-    forged.insert("x-telegram-bot-api-secret-token", "wrong");
-    forged.insert("authorization", "Bearer wrong");
+    forged.insert("x-hub-signature-256", "sha256=00").unwrap();
+    forged
+        .insert("x-telegram-bot-api-secret-token", "wrong")
+        .unwrap();
+    forged.insert("authorization", "Bearer wrong").unwrap();
 
     for adapter in [&whatsapp as &dyn Adapter, &telegram, &matrix] {
         let _ = adapter.verify(&authentic, data);

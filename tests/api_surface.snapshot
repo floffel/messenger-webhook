@@ -1,6 +1,8 @@
 src/error.rs:enum Error
 src/error.rs:enum LimitUnit
 src/error.rs:impl Error:fn is_retryable
+src/headers.rs:const MAX_HEADER_NAME_BYTES
+src/headers.rs:const MAX_HEADER_VALUE_BYTES
 src/headers.rs:impl Headers:fn append
 src/headers.rs:impl Headers:fn from_pairs
 src/headers.rs:impl Headers:fn get

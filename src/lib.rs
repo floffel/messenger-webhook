@@ -43,7 +43,7 @@
 //! let secret = Secret::new("app-secret");
 //! let body = br#"{"entry":[]}"#;
 //! let mut headers = Headers::new();
-//! headers.insert("X-Hub-Signature-256", meta_signature(&secret, body)?);
+//! headers.insert("X-Hub-Signature-256", meta_signature(&secret, body)?)?;
 //!
 //! assert_eq!(headers.get("x-hub-signature-256").map(str::len), Some(71));
 //! # Ok::<(), messenger_webhook::Error>(())

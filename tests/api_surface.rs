@@ -318,8 +318,8 @@ fn headers_api() {
     assert_eq!(headers.len(), 0);
     assert_eq!(headers.len(), 0);
 
-    headers.insert("X-Hub-Signature-256", "one");
-    headers.insert("x-hub-signature-256", "two");
+    headers.insert("X-Hub-Signature-256", "one").unwrap();
+    headers.insert("x-hub-signature-256", "two").unwrap();
     assert_eq!(headers.len(), 1, "same header, case-insensitively");
     assert_eq!(headers.get("X-Hub-Signature-256"), Some("two"));
     assert_eq!(headers.get("x-hub-signature-256"), Some("two"));
@@ -339,7 +339,7 @@ fn headers_api() {
         ["two", "three", "four"]
     );
 
-    headers.insert("X-Hub-Signature-256", "five");
+    headers.insert("X-Hub-Signature-256", "five").unwrap();
     assert_eq!(headers.len(), 1);
     assert_eq!(headers.get("X-Hub-Signature-256"), Some("five"));
 

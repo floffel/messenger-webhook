@@ -6,18 +6,43 @@
 
 use std::fmt;
 
+/// Hard ceiling on a header field name, in bytes.
+///
+/// The ceiling matches the `http` crate's `HeaderName` limit, so a name this
+/// crate accepts can be carried by common HTTP stacks.
+///
+/// ```
+/// use messenger_webhook::headers::MAX_HEADER_NAME_BYTES;
+///
+/// assert_eq!(MAX_HEADER_NAME_BYTES, (1 << 16) - 1);
+/// ```
+pub const MAX_HEADER_NAME_BYTES: usize = (1 << 16) - 1;
+
+/// Hard ceiling on a header field value, in bytes.
+///
+/// This is deliberately conservative: webhook signature and token headers are
+/// tiny, and the ceiling is enforced before the value is copied into the set.
+///
+/// ```
+/// use messenger_webhook::headers::MAX_HEADER_VALUE_BYTES;
+///
+/// assert_eq!(MAX_HEADER_VALUE_BYTES, 8 * 1024);
+/// ```
+pub const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
+
 /// A case-insensitive collection of request headers.
 ///
 /// Header values are redacted in [`Debug`](fmt::Debug) output, so logging a
 /// header set cannot expose credentials. Repeated fields are preserved when
 /// built with [`Headers::from_pairs`], [`Headers::append`] or the iterator and
-/// slice constructors; use [`Headers::insert`] to replace an existing field.
+/// slice constructors; use [`Headers::insert`] to validate and replace an
+/// existing field.
 ///
 /// ```
 /// use messenger_webhook::Headers;
 ///
 /// let mut headers = Headers::new();
-/// headers.insert("X-Hub-Signature-256", "sha256=abcd");
+/// headers.insert("X-Hub-Signature-256", "sha256=abcd")?;
 /// assert_eq!(headers.get("x-hub-signature-256"), Some("sha256=abcd"));
 /// assert_eq!(headers.len(), 1);
 ///
@@ -25,6 +50,7 @@ use std::fmt;
 /// assert!(rendered.contains("x-hub-signature-256"));
 /// assert!(!rendered.contains("sha256=abcd"));
 /// assert!(rendered.contains("<redacted>"));
+/// # Ok::<(), messenger_webhook::Error>(())
 /// ```
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Headers {
@@ -70,13 +96,31 @@ impl Headers {
     /// use messenger_webhook::Headers;
     ///
     /// let mut headers = Headers::new();
-    /// headers.insert("X-Telegram-Bot-Api-Secret-Token", "abc");
-    /// headers.insert("x-telegram-bot-api-secret-token", "def");
+    /// headers.insert("X-Telegram-Bot-Api-Secret-Token", "abc")?;
+    /// headers.insert("x-telegram-bot-api-secret-token", "def")?;
     /// assert_eq!(headers.get("X-Telegram-Bot-Api-Secret-Token"), Some("def"));
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
-    pub fn insert(&mut self, name: impl AsRef<str>, value: impl Into<String>) -> &mut Self {
-        let name = name.as_ref().to_ascii_lowercase();
-        let value = value.into();
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidHeader`] when the name is empty, longer
+    /// than [`MAX_HEADER_NAME_BYTES`], or contains a byte outside the HTTP field
+    /// name token set; or when the value is longer than
+    /// [`MAX_HEADER_VALUE_BYTES`] or contains a byte outside visible ASCII plus
+    /// horizontal tab.
+    pub fn insert(
+        &mut self,
+        name: impl AsRef<str>,
+        value: impl AsRef<str>,
+    ) -> crate::Result<&mut Self> {
+        let name = name.as_ref();
+        let value = value.as_ref();
+        validate_name(name)?;
+        validate_value(value)?;
+
+        let name = name.to_ascii_lowercase();
+        let value = value.to_owned();
         if let Some(index) = self.entries.iter().position(|(stored, _)| *stored == name) {
             self.entries[index].1 = value;
             let mut seen = false;
@@ -89,10 +133,10 @@ impl Headers {
                     true
                 }
             });
-            return self;
+            return Ok(self);
         }
         self.entries.push((name, value));
-        self
+        Ok(self)
     }
 
     /// Appends a header, lower-casing its name and preserving repeated fields.
@@ -246,6 +290,73 @@ impl Headers {
             .find(|(stored, _)| stored.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
     }
+}
+
+fn validate_name(name: &str) -> crate::Result<()> {
+    if name.is_empty() {
+        return Err(crate::Error::InvalidHeader {
+            reason: "header name is empty".to_owned(),
+        });
+    }
+    if name.len() > MAX_HEADER_NAME_BYTES {
+        return Err(crate::Error::InvalidHeader {
+            reason: format!(
+                "header name is {} bytes, the ceiling is {MAX_HEADER_NAME_BYTES}",
+                name.len()
+            ),
+        });
+    }
+    if name.bytes().any(|byte| !is_field_name_byte(byte)) {
+        return Err(crate::Error::InvalidHeader {
+            reason: "header name contains a byte outside the HTTP token set".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_value(value: &str) -> crate::Result<()> {
+    if value.len() > MAX_HEADER_VALUE_BYTES {
+        return Err(crate::Error::InvalidHeader {
+            reason: format!(
+                "header value is {} bytes, the ceiling is {MAX_HEADER_VALUE_BYTES}",
+                value.len()
+            ),
+        });
+    }
+    if value.bytes().any(|byte| !is_field_value_byte(byte)) {
+        return Err(crate::Error::InvalidHeader {
+            reason: "header value contains a byte outside visible ASCII or tab".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn is_field_name_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'a'..=b'z'
+            | b'A'..=b'Z'
+            | b'0'..=b'9'
+            | b'!'
+            | b'#'
+            | b'$'
+            | b'%'
+            | b'&'
+            | b'\''
+            | b'*'
+            | b'+'
+            | b'-'
+            | b'.'
+            | b'^'
+            | b'_'
+            | b'`'
+            | b'|'
+            | b'~'
+    )
+}
+
+fn is_field_value_byte(byte: u8) -> bool {
+    matches!(byte, b'\t' | b' '..=b'~')
 }
 
 impl<'a> FromIterator<(&'a str, &'a str)> for Headers {
