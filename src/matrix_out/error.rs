@@ -131,6 +131,13 @@ pub enum OutboundError {
         reason: String,
     },
 
+    /// A test transport was asked for a response the test never scripted. This
+    /// is a broken test fixture, not a homeserver or network outcome.
+    TestHarness {
+        /// Which request went unanswered.
+        reason: String,
+    },
+
     /// A `2xx` arrived but the body was not the JSON shape the leg expects.
     Decode {
         /// Which response was being decoded.
@@ -208,6 +215,10 @@ impl fmt::Display for OutboundError {
             Self::Transport { attempts, reason } => write!(
                 f,
                 "the transport failed for all {attempts} attempts: {reason}"
+            ),
+            Self::TestHarness { reason } => write!(
+                f,
+                "the test transport was not scripted for this request: {reason}"
             ),
             Self::Decode { what, reason } => {
                 write!(f, "cannot decode the {what} response: {reason}")
@@ -489,17 +500,48 @@ mod tests {
                 false,
                 "the transport failed for all 2 attempts: dns".into(),
             ),
-            (
-                OutboundError::Decode {
-                    what: "whoami",
-                    reason: "missing user_id".into(),
-                },
-                false,
-                false,
-                false,
-                "cannot decode the whoami response: missing user_id".into(),
-            ),
         ];
+
+        for (error, retryable, ambiguous, client_error, text) in cases {
+            assert_eq!(error.is_retryable(), retryable, "{error:?}");
+            assert_eq!(error.is_ambiguous(), ambiguous, "{error:?}");
+            assert_eq!(error.is_client_error(), client_error, "{error:?}");
+            assert_eq!(error.to_string(), text, "{error:?}");
+        }
+    }
+
+    /// Test harness failures are neither retryable nor ambiguous: they mean the
+    /// test forgot to script a call, not that a delivery failed.
+    #[test]
+    fn test_harness_errors_report_their_classification() {
+        let error = OutboundError::TestHarness {
+            reason: "PUT https://m.example/a ran out of scripted responses".into(),
+        };
+
+        assert!(!error.is_retryable());
+        assert!(!error.is_ambiguous());
+        assert!(!error.is_client_error());
+        assert_eq!(
+            error.to_string(),
+            "the test transport was not scripted for this request: PUT \
+             https://m.example/a ran out of scripted responses"
+        );
+    }
+
+    /// The remaining delivery variants: transport failures and response-body
+    /// decode failures.
+    #[test]
+    fn transport_and_decode_variants_report_their_classification() {
+        let cases: Vec<(OutboundError, bool, bool, bool, String)> = vec![(
+            OutboundError::Decode {
+                what: "whoami",
+                reason: "missing user_id".into(),
+            },
+            false,
+            false,
+            false,
+            "cannot decode the whoami response: missing user_id".into(),
+        )];
 
         for (error, retryable, ambiguous, client_error, text) in cases {
             assert_eq!(error.is_retryable(), retryable, "{error:?}");

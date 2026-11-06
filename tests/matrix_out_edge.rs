@@ -462,6 +462,28 @@ fn a_connect_failure_on_a_read_exhausts_into_a_retryable_transport_error() {
 }
 
 #[test]
+fn an_exhausted_stub_is_a_broken_test_not_a_transport_failure() {
+    let (client, transport, _) = client_with(|config| config);
+
+    let error = block_on(client.send_text("!r:m.example", "x")).expect_err("unscripted");
+
+    match &error {
+        OutboundError::TestHarness { reason } => {
+            assert!(reason.contains("PUT "), "{reason}");
+            assert!(
+                reason.contains("/rooms/%21r%3Am.example/send/m.room.message/"),
+                "{reason}"
+            );
+            assert!(reason.contains("ran out of scripted responses"), "{reason}");
+        }
+        other => panic!("expected a test-harness failure, got {other:?}"),
+    }
+    assert!(!error.is_retryable());
+    assert!(!error.is_ambiguous());
+    assert_eq!(transport.call_count(), 1);
+}
+
+#[test]
 fn content_at_the_ceiling_is_accepted_and_one_byte_past_is_not() {
     let (client, transport, _) = client_with(|config| config);
     transport

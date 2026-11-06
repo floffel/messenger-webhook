@@ -125,6 +125,7 @@ proptest! {
             Just(TransportErrorKind::Connect),
             Just(TransportErrorKind::Timeout),
             Just(TransportErrorKind::Other),
+            Just(TransportErrorKind::TestHarness),
         ],
         attempt in 1u32..=5,
         repeatable in any::<bool>(),
@@ -136,16 +137,19 @@ proptest! {
         };
         let error = TransportError { kind, message: "x".into() };
         let verdict = policy().classify_transport(attempt, &error, operation);
-        match (kind.is_before_write(), repeatable) {
-            (true, _) => prop_assert!(
+        match (kind, kind.is_before_write(), repeatable) {
+            (TransportErrorKind::TestHarness, _, _) => {
+                prop_assert_eq!(verdict, Verdict::Rejected);
+            }
+            (_, true, _) => prop_assert!(
                 matches!(verdict, Verdict::Retry { .. } | Verdict::Exhausted),
                 "{verdict:?}"
             ),
-            (false, true) => prop_assert!(
+            (_, false, true) => prop_assert!(
                 matches!(verdict, Verdict::Retry { .. } | Verdict::Exhausted),
                 "{verdict:?}"
             ),
-            (false, false) => prop_assert_eq!(verdict, Verdict::Ambiguous),
+            (_, false, false) => prop_assert_eq!(verdict, Verdict::Ambiguous),
         }
     }
 
