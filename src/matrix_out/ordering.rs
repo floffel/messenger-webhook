@@ -18,6 +18,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
+use crate::matrix_out::{types, OutboundError};
+
 /// How many room gates the client keeps before pruning idle ones.
 ///
 /// ```
@@ -26,6 +28,27 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 /// assert_eq!(GATE_CAPACITY, 4_096);
 /// ```
 pub const GATE_CAPACITY: usize = 4_096;
+
+/// A room address that has passed the id checks the send endpoints require.
+///
+/// The gate map never sees the caller's raw string: constructing this key is
+/// the only way to acquire a gate, so an alias or an oversized id cannot create
+/// a second, unbounded entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RoomKey<'a>(&'a str);
+
+impl<'a> RoomKey<'a> {
+    /// Rejects anything the Matrix send endpoints cannot address.
+    pub(crate) fn new(room_id: &'a str) -> Result<Self, OutboundError> {
+        types::validate_room_id(room_id)?;
+        Ok(Self(room_id))
+    }
+
+    /// The validated room id, still borrowed from the caller.
+    fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
 
 /// One async mutex per room, created on demand.
 #[derive(Debug)]
@@ -54,10 +77,10 @@ impl RoomGates {
     /// `None` means the map is full of gates that are all in use, so the caller
     /// proceeds unordered. The lock on the map is released before the room gate
     /// is awaited — a guard is never held across an `.await`.
-    pub(crate) async fn acquire(&self, room_id: &str) -> Option<OwnedMutexGuard<()>> {
+    pub(crate) async fn acquire(&self, room_id: RoomKey<'_>) -> Option<OwnedMutexGuard<()>> {
         let gate = {
             let mut gates = self.lock();
-            if let Some(existing) = gates.get(room_id) {
+            if let Some(existing) = gates.get(room_id.as_str()) {
                 Arc::clone(existing)
             } else {
                 if gates.len() >= self.capacity {
@@ -68,7 +91,7 @@ impl RoomGates {
                     }
                 }
                 let created = Arc::new(AsyncMutex::new(()));
-                gates.insert(room_id.to_owned(), Arc::clone(&created));
+                gates.insert(room_id.as_str().to_owned(), Arc::clone(&created));
                 created
             }
         };
@@ -87,6 +110,7 @@ impl RoomGates {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::matrix_out::MAX_ID_BYTES;
     use std::time::Duration;
 
     fn runtime() -> tokio::runtime::Runtime {
@@ -96,20 +120,24 @@ mod tests {
             .expect("a current-thread runtime")
     }
 
+    fn key(room_id: &str) -> RoomKey<'_> {
+        RoomKey::new(room_id).expect("a valid room id")
+    }
+
     #[test]
     fn gates_are_created_per_room_and_reused() {
         runtime().block_on(async {
             let gates = RoomGates::new(GATE_CAPACITY);
             assert_eq!(gates.len(), 0);
-            let first = gates.acquire("!a:x").await;
+            let first = gates.acquire(key("!a:x")).await;
             assert!(first.is_some());
             assert_eq!(gates.len(), 1);
             drop(first);
-            let second = gates.acquire("!a:x").await;
+            let second = gates.acquire(key("!a:x")).await;
             assert!(second.is_some());
             // Same room, same gate: no second entry.
             assert_eq!(gates.len(), 1);
-            let other = gates.acquire("!b:x").await;
+            let other = gates.acquire(key("!b:x")).await;
             assert!(other.is_some());
             assert_eq!(gates.len(), 2);
         });
@@ -121,12 +149,12 @@ mod tests {
             let gates = Arc::new(RoomGates::new(GATE_CAPACITY));
             // A gate held for room A must block a second acquire of room A but
             // not of room B.
-            let held = gates.acquire("!a:x").await.expect("a free gate");
+            let held = gates.acquire(key("!a:x")).await.expect("a free gate");
             let blocked = {
                 let gates = Arc::clone(&gates);
-                tokio::spawn(async move { gates.acquire("!a:x").await })
+                tokio::spawn(async move { gates.acquire(key("!a:x")).await })
             };
-            let free = gates.acquire("!b:x").await;
+            let free = gates.acquire(key("!b:x")).await;
             assert!(free.is_some(), "a different room must not block");
             tokio::time::sleep(Duration::from_millis(10)).await;
             assert!(!blocked.is_finished(), "the same room must block");
@@ -139,21 +167,42 @@ mod tests {
     fn a_full_map_of_in_flight_gates_degrades_instead_of_growing() {
         runtime().block_on(async {
             let gates = RoomGates::new(2);
-            let first = gates.acquire("!a:x").await;
-            let second = gates.acquire("!b:x").await;
+            let first = gates.acquire(key("!a:x")).await;
+            let second = gates.acquire(key("!b:x")).await;
             assert!(first.is_some() && second.is_some());
             assert_eq!(gates.len(), 2);
 
             // Both slots are in use: a third room gets no gate at all.
-            assert!(gates.acquire("!c:x").await.is_none());
+            assert!(gates.acquire(key("!c:x")).await.is_none());
             assert_eq!(gates.len(), 2);
 
             // Releasing one slot lets the map reclaim it and admit the new room.
             drop(first);
-            let third = gates.acquire("!c:x").await;
+            let third = gates.acquire(key("!c:x")).await;
             assert!(third.is_some(), "an idle gate must be pruned");
             assert_eq!(gates.len(), 2);
         });
+    }
+
+    #[test]
+    fn an_alias_is_not_a_room_key() {
+        let error = RoomKey::new("#alias:x").expect_err("an alias");
+
+        assert!(matches!(error, OutboundError::InvalidRequest { .. }));
+        assert!(error.to_string().contains("resolve a `#alias`"), "{error}");
+    }
+
+    #[test]
+    fn room_keys_are_bounded_before_they_can_be_stored() {
+        let prefix = "!r:";
+        let exact = format!("{prefix}{}", "a".repeat(MAX_ID_BYTES - prefix.len()));
+        assert!(RoomKey::new(&exact).is_ok());
+
+        let over = format!("{prefix}{}", "a".repeat(MAX_ID_BYTES - prefix.len() + 1));
+        let error = RoomKey::new(&over).expect_err("one byte too long");
+
+        assert!(matches!(error, OutboundError::InvalidRequest { .. }));
+        assert!(error.to_string().contains("256"), "{error}");
     }
 
     #[test]
@@ -166,7 +215,7 @@ mod tests {
         })
         .join();
         assert!(gates.lock().is_empty());
-        let acquired = runtime().block_on(gates.acquire("!a:x"));
+        let acquired = runtime().block_on(gates.acquire(key("!a:x")));
         assert!(acquired.is_some());
     }
 }

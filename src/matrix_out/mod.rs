@@ -101,7 +101,7 @@ pub use types::{
 };
 // `MAX_TXN_ID_BYTES` and friends are declared in `types` and re-exported above.
 
-use crate::matrix_out::ordering::RoomGates;
+use crate::matrix_out::ordering::{RoomGates, RoomKey};
 use crate::matrix_out::transport::{
     Body, BoxFuture, Method, Request, Response, TransportError, TransportErrorKind,
 };
@@ -1217,7 +1217,9 @@ impl MatrixClient {
         decode: fn(&Response) -> OutboundResult<T>,
     ) -> OutboundResult<Attempted<T>> {
         let _gate = match call.room_id() {
-            Some(room_id) if self.config.per_room_ordering => self.gates.acquire(room_id).await,
+            Some(room_id) if self.config.per_room_ordering => {
+                self.gates.acquire(RoomKey::new(room_id)?).await
+            }
             _ => None,
         };
         let mut attempt: u32 = 0;
