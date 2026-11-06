@@ -167,6 +167,8 @@ fn normalized_message_helpers() {
         message_id: "1".to_owned(),
         emoji: "👍".to_owned(),
         removed: false,
+        added_reactions: vec!["👍".to_owned()],
+        removed_reactions: Vec::new(),
     };
     assert!(!reaction.removed);
 }

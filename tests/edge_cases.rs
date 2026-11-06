@@ -692,7 +692,52 @@ mod telegram_edges {
         let reaction = events[0].reaction.as_ref().unwrap();
         assert!(reaction.removed);
         assert_eq!(reaction.emoji, "");
+        assert_eq!(reaction.added_reactions, Vec::<String>::new());
+        assert_eq!(reaction.removed_reactions, ["👍"]);
         assert_eq!(reaction.message_id, "9");
+    }
+
+    #[test]
+    fn reaction_updates_keep_every_current_reaction() {
+        let payload = br#"{"message_reaction":{"chat":{"id":1},"message_id":9,
+            "user":{"id":2},"date":1,"old_reaction":[],
+            "new_reaction":[{"type":"emoji","emoji":"\ud83d\udc4d"},
+                {"type":"emoji","emoji":"\u2764\ufe0f"}]}}"#;
+        let events = telegram().adapt(payload).unwrap();
+        let reaction = events[0].reaction.as_ref().unwrap();
+        assert!(!reaction.removed);
+        assert_eq!(reaction.emoji, "👍");
+        assert_eq!(reaction.added_reactions, ["👍", "❤️"]);
+        assert_eq!(reaction.removed_reactions, Vec::<String>::new());
+    }
+
+    #[test]
+    fn reaction_updates_report_the_replaced_reaction() {
+        let payload = br#"{"message_reaction":{"chat":{"id":1},"message_id":9,
+            "user":{"id":2},"date":1,"old_reaction":[{"type":"emoji","emoji":"\ud83d\udc4d"}],
+            "new_reaction":[{"type":"emoji","emoji":"\u2764\ufe0f"}]}}"#;
+        let events = telegram().adapt(payload).unwrap();
+        let reaction = events[0].reaction.as_ref().unwrap();
+        assert!(!reaction.removed);
+        assert_eq!(reaction.emoji, "❤️");
+        assert_eq!(reaction.added_reactions, ["❤️"]);
+        assert_eq!(reaction.removed_reactions, ["👍"]);
+    }
+
+    #[test]
+    fn unparseable_reaction_entries_are_not_removals() {
+        for new_reaction in [r#"[{"type":"unknown"}]"#, r#""unknown""#, r"null"] {
+            let payload = format!(
+                r#"{{"message_reaction":{{"chat":{{"id":1}},"message_id":9,
+                    "user":{{"id":2}},"date":1,"old_reaction":[],"new_reaction":{new_reaction}}}}}"#
+            );
+            let events = telegram().adapt(payload.as_bytes()).unwrap();
+            let reaction = events[0].reaction.as_ref().unwrap();
+            assert!(!reaction.removed, "{new_reaction}");
+            assert_eq!(reaction.emoji, "");
+            assert_eq!(reaction.added_reactions, Vec::<String>::new());
+            assert_eq!(reaction.removed_reactions, Vec::<String>::new());
+        }
     }
 }
 

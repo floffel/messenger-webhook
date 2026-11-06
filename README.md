@@ -232,7 +232,10 @@ timestamp plus:
   filename, caption
 - `reply_to` / `thread_id` — reply and thread references
 - `edit_of` — set when the event replaces an earlier message
-- `reaction` — `Reaction { message_id, emoji, removed }`
+- `reaction` — `Reaction { message_id, emoji, removed, added_reactions,
+  removed_reactions }`; the added/removed lists carry the complete change from
+  providers that report a before/after state, such as Telegram's
+  `message_reaction` update
 - `status` — `DeliveryStatus` (sent, delivered, read, failed, deleted, unknown)
 - `spans` — the provider's formatting as `TextSpan`s over `text` (see below)
 - `provider_type` — the provider's own event name, verbatim

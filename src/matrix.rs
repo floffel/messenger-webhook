@@ -336,8 +336,10 @@ fn normalize_event(event: &Value) -> Result<NormalizedMessage> {
             if let (Some(message_id), Some(emoji)) = (target, emoji.filter(|key| !key.is_empty())) {
                 normalized.reaction = Some(Reaction {
                     message_id,
-                    emoji: emoji.to_owned(),
                     removed: false,
+                    emoji: emoji.to_owned(),
+                    added_reactions: vec![emoji.to_owned()],
+                    removed_reactions: Vec::new(),
                 });
             }
         }

@@ -315,6 +315,8 @@ fn normalize_message(message: &Value) -> Result<NormalizedMessage> {
                         message_id: target,
                         removed: emoji.is_empty(),
                         emoji,
+                        added_reactions: Vec::new(),
+                        removed_reactions: Vec::new(),
                     });
                 }
             }
