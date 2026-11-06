@@ -5,8 +5,9 @@
 //! fired concurrently into one room can be ordered by whichever finished first,
 //! and for a bot writing a sequence ("your contract is attached" → the PDF) that
 //! is a visible defect. The client therefore takes a per-room gate — one
-//! in-flight request per room, any number across rooms — and releases it when
-//! the operation completes, retries included.
+//! in-flight request per room, any number across rooms — and releases it between
+//! attempts, so one rate-limited send does not block the room through its retry
+//! sleeps.
 //!
 //! The gate map is bounded ([`GATE_CAPACITY`] rooms). Beyond it, gates for rooms
 //! with no send in flight are dropped; if that frees nothing, the send proceeds

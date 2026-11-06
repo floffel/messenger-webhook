@@ -1250,8 +1250,8 @@ impl MatrixClient {
             .map(|attempted| attempted.value)
     }
 
-    /// Runs one call under the retry policy, holding the room gate when the call
-    /// belongs to a room.
+    /// Runs one call under the retry policy, holding the room gate only while a
+    /// request is in flight.
     async fn execute<T>(
         &self,
         call: Call<'_>,
@@ -1259,17 +1259,22 @@ impl MatrixClient {
         txn: Option<&TxnId>,
         decode: fn(&Response) -> OutboundResult<T>,
     ) -> OutboundResult<Attempted<T>> {
-        let _gate = match call.room_id() {
-            Some(room_id) if self.config.per_room_ordering => {
-                self.gates.acquire(RoomKey::new(room_id)?).await
-            }
+        let room_key = match call.room_id() {
+            Some(room_id) if self.config.per_room_ordering => Some(RoomKey::new(room_id)?),
             _ => None,
         };
         let mut attempt: u32 = 0;
         loop {
             attempt += 1;
             let request = self.build(&call);
-            match self.transport.send(request).await {
+            let response = match room_key {
+                Some(room_key) => {
+                    let _gate = self.gates.acquire(room_key).await;
+                    self.transport.send(request).await
+                }
+                None => self.transport.send(request).await,
+            };
+            match response {
                 Ok(response) => match self.config.retry.classify(attempt, &response, operation) {
                     Verdict::Success => {
                         return match decode(&response) {
