@@ -69,6 +69,12 @@ carry a `!` in the conventional-commit subject.
   happened to be stored last. `Headers` now preserves duplicates and every
   verifier returns the new typed `Error::DuplicateVerificationHeader` instead
   of choosing one. Closes #25.
+- **`Channel::Other` no longer disagrees with canonical channel names.** The
+  enum derived identity from the variant, while `as_str` returned the payload,
+  so `Channel::Other("whatsapp")` logged as `whatsapp` but looked up a different
+  adapter than `Channel::WhatsApp`. Equality, hashing and ordering now compare
+  `Channel::as_str`, and `Channel::other` validates caller-supplied custom names
+  against the same lower-case `[a-z0-9_-]` grammar. Closes #93.
 - **`Registry::encode` rejects cross-channel messages.** The registry used the
   caller's `channel` argument for dispatch but never compared it with
   `NormalizedMessage::channel`, so a message tagged for one provider could be

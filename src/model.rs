@@ -5,7 +5,9 @@
 //! express stay `None`; fields this crate does not model stay reachable in
 //! [`NormalizedMessage::raw`].
 
+use std::cmp::Ordering;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use crate::rich::TextSpan;
 
@@ -14,13 +16,19 @@ use crate::rich::TextSpan;
 /// The enum is `#[non_exhaustive]`, so a messenger this crate learns to speak
 /// later arrives as a new variant in a minor release instead of a break.
 ///
+/// Equality, hashing and ordering all compare [`Channel::as_str`], so
+/// `Channel::Other("whatsapp")` identifies the same channel as
+/// [`Channel::WhatsApp`]. New custom channels should be built with
+/// [`Channel::other`], which rejects names that collide with a built-in channel.
+///
 /// ```
 /// use messenger_webhook::Channel;
 ///
 /// assert_eq!(Channel::WhatsApp.as_str(), "whatsapp");
 /// assert_eq!(Channel::Other("signal".into()).as_str(), "signal");
+/// assert_eq!(Channel::Other("whatsapp".into()), Channel::WhatsApp);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Channel {
     /// `WhatsApp` Cloud API.
@@ -30,10 +38,36 @@ pub enum Channel {
     /// Matrix client-server or application-service events.
     Matrix,
     /// Anything else, verbatim.
+    ///
+    /// Prefer [`Channel::other`] for caller-supplied channel names. This variant
+    /// is public for compatibility and for carrying provider strings, and is not
+    /// validated on direct construction.
     Other(String),
 }
 
 impl Channel {
+    /// Builds a custom channel from a validated lower-case name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidChannelName`] when `name` is empty,
+    /// longer than [`MAX_CHANNEL_NAME_BYTES`], contains a byte outside
+    /// `[a-z0-9_-]`, or matches a built-in channel name.
+    ///
+    /// ```
+    /// use messenger_webhook::Channel;
+    ///
+    /// let signal = Channel::other("signal")?;
+    /// assert_eq!(signal.as_str(), "signal");
+    /// assert!(Channel::other("whatsapp").is_err());
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    pub fn other(name: impl Into<String>) -> crate::Result<Self> {
+        let name = name.into();
+        validate_channel_name(&name)?;
+        Ok(Self::Other(name))
+    }
+
     /// Stable lower-case name, used in error messages and registry lookups.
     ///
     /// ```
@@ -50,6 +84,71 @@ impl Channel {
             Self::Other(name) => name,
         }
     }
+}
+
+impl PartialEq for Channel {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for Channel {}
+
+impl Hash for Channel {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl PartialOrd for Channel {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Channel {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+/// Longest custom channel name this crate accepts, in bytes.
+///
+/// ```
+/// use messenger_webhook::MAX_CHANNEL_NAME_BYTES;
+///
+/// assert_eq!(MAX_CHANNEL_NAME_BYTES, 255);
+/// ```
+pub const MAX_CHANNEL_NAME_BYTES: usize = 255;
+
+fn validate_channel_name(name: &str) -> crate::Result<()> {
+    if name.is_empty() {
+        return Err(crate::Error::InvalidChannelName {
+            reason: "channel name is empty".to_owned(),
+        });
+    }
+    if name.len() > MAX_CHANNEL_NAME_BYTES {
+        return Err(crate::Error::InvalidChannelName {
+            reason: format!(
+                "channel name is {} bytes, the ceiling is {MAX_CHANNEL_NAME_BYTES}",
+                name.len()
+            ),
+        });
+    }
+    if name
+        .bytes()
+        .any(|byte| !matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
+    {
+        return Err(crate::Error::InvalidChannelName {
+            reason: "channel name must match [a-z0-9_-]".to_owned(),
+        });
+    }
+    if matches!(name, "whatsapp" | "telegram" | "matrix") {
+        return Err(crate::Error::InvalidChannelName {
+            reason: format!("channel name {name:?} is reserved by a built-in channel"),
+        });
+    }
+    Ok(())
 }
 
 impl fmt::Display for Channel {

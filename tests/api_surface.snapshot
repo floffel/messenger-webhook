@@ -29,7 +29,7 @@ src/lib.rs:use error::{Error,Result}
 src/lib.rs:use headers::Headers
 src/lib.rs:use matrix::MatrixAdapter
 src/lib.rs:use model::SYNTHETIC_ID_PREFIX
-src/lib.rs:use model::{Attachment,AttachmentKind,Channel,DeliveryStatus,IdempotencyKey,NormalizedMessage,OutboundMessage,ProviderMethod,ProviderPayload,Reaction,RetryPolicy,MAX_IDEMPOTENCY_KEY_BYTES,}
+src/lib.rs:use model::{Attachment,AttachmentKind,Channel,DeliveryStatus,IdempotencyKey,NormalizedMessage,OutboundMessage,ProviderMethod,ProviderPayload,Reaction,RetryPolicy,MAX_CHANNEL_NAME_BYTES,MAX_IDEMPOTENCY_KEY_BYTES,}
 src/lib.rs:use registry::Registry
 src/lib.rs:use rich::{SpanError,TextFormat,TextSpan}
 src/lib.rs:use secret::Secret
@@ -166,6 +166,7 @@ src/matrix_out/types.rs:struct MediaUpload
 src/matrix_out/types.rs:struct MxcUri
 src/matrix_out/types.rs:struct SendOutcome
 src/matrix_out/types.rs:struct TxnId
+src/model.rs:const MAX_CHANNEL_NAME_BYTES
 src/model.rs:const MAX_IDEMPOTENCY_KEY_BYTES
 src/model.rs:const SYNTHETIC_ID_PREFIX
 src/model.rs:enum AttachmentKind
@@ -176,6 +177,7 @@ src/model.rs:enum RetryPolicy
 src/model.rs:impl Attachment:fn new
 src/model.rs:impl AttachmentKind:fn as_str
 src/model.rs:impl Channel:fn as_str
+src/model.rs:impl Channel:fn other
 src/model.rs:impl DeliveryStatus:fn as_str
 src/model.rs:impl IdempotencyKey:fn as_str
 src/model.rs:impl IdempotencyKey:fn new

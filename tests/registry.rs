@@ -51,6 +51,24 @@ fn registration_is_by_channel_and_replaceable() {
 }
 
 #[test]
+fn lookups_treat_canonical_other_names_as_the_built_in_channel() {
+    #[cfg(feature = "telegram")]
+    {
+        use messenger_webhook::TelegramAdapter;
+
+        let mut registry = Registry::new();
+        registry.register(TelegramAdapter::new("secret"));
+
+        let canonical = Channel::Other("telegram".to_owned());
+        assert!(registry.contains(&canonical));
+        assert_eq!(
+            registry.get(&canonical).unwrap().channel(),
+            Channel::Telegram
+        );
+    }
+}
+
+#[test]
 fn try_register_reports_a_duplicate_instead_of_replacing() {
     #[cfg(feature = "telegram")]
     {
