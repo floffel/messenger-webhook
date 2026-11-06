@@ -17,6 +17,12 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- **Retry classification and outbound errors share one decision.** The Matrix
+  outbound client now converts the `Verdict` that classified a stopped attempt
+  into the caller-facing error arm instead of matching the status and
+  transaction id a second time, so an exhausted transaction-keyed `5xx` cannot
+  be reported as an ambiguous write with an unresolvable outcome after being
+  retried idempotently. Closes #73.
 - `OutboundError::DecodeAfterWrite` now marks a `2xx` whose write response body cannot be decoded as ambiguous and carries the transaction id when there is one; unreadable read responses remain terminal `DecodeRead`. Closes #48.
 
 ### Changed

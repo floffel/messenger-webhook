@@ -292,10 +292,11 @@ async fn a_5xx_over_the_wire_is_retried_with_the_same_transaction_id() {
     let error = client
         .send_text("!r:example.org", "Hallo")
         .await
-        .expect_err("a 5xx on a send is ambiguous");
+        .expect_err("a 5xx on a send follows the retry verdict");
 
+    assert!(matches!(error, OutboundError::Server { .. }), "{error:?}");
+    assert!(!error.is_retryable(), "{error:?}");
     assert!(error.is_ambiguous(), "{error:?}");
-    assert!(!error.is_retryable());
     let paths = seen.paths.lock().expect("log").clone();
     assert_eq!(paths.len(), 2, "the retry happened");
     assert_eq!(paths[0], paths[1], "and it reused the transaction id");

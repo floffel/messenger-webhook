@@ -1267,22 +1267,24 @@ impl MatrixClient {
                 None => self.transport.send(request).await,
             };
             match response {
-                Ok(response) => match self.config.retry.classify(attempt, &response, operation) {
-                    Verdict::Success => {
-                        return match decode(&response) {
-                            Ok(value) => Ok(Attempted {
-                                value,
-                                attempts: attempt,
-                            }),
-                            Err(error) => Err(Self::undecodable(error, operation, txn)),
-                        };
+                Ok(response) => {
+                    let verdict = self.config.retry.classify(attempt, &response, operation);
+                    match verdict {
+                        Verdict::Success => {
+                            return match decode(&response) {
+                                Ok(value) => Ok(Attempted {
+                                    value,
+                                    attempts: attempt,
+                                }),
+                                Err(error) => Err(Self::undecodable(error, operation, txn)),
+                            };
+                        }
+                        Verdict::Retry { delay } => self.config.sleeper.sleep(delay).await,
+                        Verdict::Rejected | Verdict::Exhausted | Verdict::Ambiguous => {
+                            return Err(http_failure(verdict, &response, operation, txn, attempt));
+                        }
                     }
-                    Verdict::Retry { delay } => self.config.sleeper.sleep(delay).await,
-                    Verdict::Rejected => return Err(rejection(&response)),
-                    Verdict::Exhausted | Verdict::Ambiguous => {
-                        return Err(http_failure(&response, operation, txn, attempt));
-                    }
-                },
+                }
                 Err(error) => {
                     match self
                         .config
@@ -1544,29 +1546,15 @@ fn rejection(response: &Response) -> OutboundError {
 /// A failure the policy stopped on, turned into the variant that tells the caller
 /// what may have happened.
 fn http_failure(
+    verdict: Verdict,
     response: &Response,
     operation: Operation,
     txn: Option<&TxnId>,
     attempts: u32,
 ) -> OutboundError {
     let (errcode, message) = matrix_error(response);
-    match response.status {
-        429 if !operation.is_repeatable() && !retry::matrix_rate_limit(response) => {
-            OutboundError::Ambiguous {
-                txn_id: txn.cloned(),
-                attempts,
-                reason: format!(
-                    "the proxy answered 429 for a write that may have been applied: {detail}",
-                    detail = detail_text(&errcode, &message),
-                ),
-            }
-        }
-        429 => OutboundError::RateLimited {
-            retry_after: retry::retry_after_ms(response),
-            errcode,
-            message,
-        },
-        500..=599 if !operation.is_repeatable() || txn.is_some() => OutboundError::Ambiguous {
+    match verdict {
+        Verdict::Ambiguous => OutboundError::Ambiguous {
             txn_id: txn.cloned(),
             attempts,
             reason: format!(
@@ -1575,7 +1563,12 @@ fn http_failure(
                 detail = detail_text(&errcode, &message),
             ),
         },
-        500..=599 => OutboundError::Server {
+        Verdict::Exhausted if response.status == 429 => OutboundError::RateLimited {
+            retry_after: retry::retry_after_ms(response),
+            errcode,
+            message,
+        },
+        Verdict::Exhausted => OutboundError::Server {
             operation,
             txn_id: txn.cloned(),
             status: response.status,
@@ -1583,7 +1576,7 @@ fn http_failure(
             message,
             attempts,
         },
-        _ => rejection(response),
+        Verdict::Success | Verdict::Retry { .. } | Verdict::Rejected => rejection(response),
     }
 }
 
@@ -1805,6 +1798,64 @@ mod tests {
             matrix_error(&huge).1.len(),
             ERROR_BODY_FALLBACK_BYTES + "…truncated".len()
         );
+    }
+
+    #[test]
+    fn http_errors_follow_the_classified_verdict_for_every_operation() {
+        let policy = RetryPolicy::default().with_max_attempts(1).expect("valid");
+        let txn = TxnId::new("txn-73").expect("valid");
+        let cases = [
+            (
+                Response::json(403, r#"{"errcode":"M_FORBIDDEN"}"#),
+                "rejected",
+            ),
+            (
+                Response::json(429, r#"{"retry_after_ms":10}"#),
+                "rate limit",
+            ),
+            (Response::json(503, r#"{"errcode":"M_UNKNOWN"}"#), "server"),
+            (
+                Response::new(429, Vec::new()).with_header("retry-after", "2"),
+                "proxy rate limit",
+            ),
+        ];
+
+        for (response, label) in cases {
+            for operation in [
+                Operation::Read,
+                Operation::Idempotent,
+                Operation::NonIdempotent,
+            ] {
+                let txn = match operation {
+                    Operation::Read => None,
+                    Operation::Idempotent | Operation::NonIdempotent => Some(&txn),
+                };
+                let verdict = policy.classify(1, &response, operation);
+                let error = http_failure(verdict, &response, operation, txn, 1);
+
+                match verdict {
+                    Verdict::Rejected => assert!(
+                        matches!(error, OutboundError::Rejected { .. }),
+                        "{label}/{operation:?}: {verdict:?} produced {error:?}"
+                    ),
+                    Verdict::Exhausted if response.status == 429 => assert!(
+                        matches!(error, OutboundError::RateLimited { .. }),
+                        "{label}/{operation:?}: {verdict:?} produced {error:?}"
+                    ),
+                    Verdict::Exhausted => assert!(
+                        matches!(error, OutboundError::Server { .. }),
+                        "{label}/{operation:?}: {verdict:?} produced {error:?}"
+                    ),
+                    Verdict::Ambiguous => assert!(
+                        matches!(error, OutboundError::Ambiguous { .. }),
+                        "{label}/{operation:?}: {verdict:?} produced {error:?}"
+                    ),
+                    Verdict::Success | Verdict::Retry { .. } => {
+                        panic!("{label}/{operation:?}: classification stopped on {verdict:?}")
+                    }
+                }
+            }
+        }
     }
 
     #[test]

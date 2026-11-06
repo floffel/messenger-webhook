@@ -167,7 +167,7 @@ so your tests can do the same.
 | `2xx` | done | `SendOutcome { event_id, txn_id, attempts }` |
 | `429` with `retry_after_ms` | waits exactly that long (bounded by `RetryPolicy::max_rate_limit_wait`), retries | more `attempts` |
 | `429` without it | exponential backoff (`500 ms`, doubling, capped) | more `attempts` |
-| `5xx` on a transaction-keyed send | retries **with the same txn id** — the homeserver de-duplicates | `Ambiguous { txn_id }` once the attempts are spent |
+| `5xx` on a transaction-keyed send | retries **with the same txn id** — the homeserver de-duplicates | `Server` once the attempts are spent; repeat with the same txn id to reconcile |
 | `5xx` / timeout on a **media upload** | **never retried** | `Ambiguous { txn_id: None }` |
 | connect/DNS/TLS failure | retried even for an upload — nothing was written | `Transport` (retryable) |
 | other `4xx` | not retried | `Rejected { status, errcode, message }` |
