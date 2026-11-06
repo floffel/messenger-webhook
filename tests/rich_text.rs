@@ -53,7 +53,7 @@ fn only_span(message: &NormalizedMessage) -> (TextFormat, String) {
     let span = &message.spans()[0];
     let text = message.text().expect("text");
     (
-        span.format.clone(),
+        span.format().clone(),
         span.slice(text).expect("span slices its text").to_owned(),
     )
 }
@@ -77,7 +77,7 @@ fn telegram_entities_become_byte_spans() {
     );
     assert!(message.is_formatted());
     let span = &message.spans()[0];
-    assert_eq!((span.start, span.end), (6, 10));
+    assert_eq!((span.start(), span.end()), (6, 10));
     assert_eq!(only_span(&message).0, TextFormat::Bold);
     assert_eq!(message.text(), Some("Hallo Welt"));
 }
@@ -92,7 +92,7 @@ fn astral_characters_shift_utf16_offsets_to_bytes() {
         &json!([{ "type": "italic", "offset": 1, "length": 2 }]),
     );
     let span = &message.spans()[0];
-    assert_eq!((span.start, span.end), (1, 5));
+    assert_eq!((span.start(), span.end()), (1, 5));
     assert_eq!(only_span(&message), (TextFormat::Italic, "😀".to_owned()));
     // ...and the byte offsets are char boundaries, so slicing cannot panic.
     assert_eq!(&message.text().unwrap()[1..5], "😀");
@@ -168,8 +168,8 @@ fn payloads_of_structured_entities_are_carried() {
         &json!([{ "type": "pre", "offset": 0, "length": 12, "language": "rust" }]),
     );
     assert_eq!(
-        pre.spans()[0].format,
-        TextFormat::Pre {
+        pre.spans()[0].format(),
+        &TextFormat::Pre {
             language: Some("rust".to_owned())
         }
     );
@@ -179,8 +179,8 @@ fn payloads_of_structured_entities_are_carried() {
         &json!([{ "type": "text_link", "offset": 0, "length": 4, "url": "https://docs.rs" }]),
     );
     assert_eq!(
-        link.spans()[0].format,
-        TextFormat::Link {
+        link.spans()[0].format(),
+        &TextFormat::Link {
             url: "https://docs.rs".to_owned()
         }
     );
@@ -190,8 +190,8 @@ fn payloads_of_structured_entities_are_carried() {
         &json!([{ "type": "text_mention", "offset": 0, "length": 3, "user": { "id": 4242 } }]),
     );
     assert_eq!(
-        mention.spans()[0].format,
-        TextFormat::TextMention {
+        mention.spans()[0].format(),
+        &TextFormat::TextMention {
             user_id: "4242".to_owned()
         }
     );
@@ -201,8 +201,8 @@ fn payloads_of_structured_entities_are_carried() {
         &json!([{ "type": "custom_emoji", "offset": 0, "length": 1, "custom_emoji_id": "5368324170671202286" }]),
     );
     assert_eq!(
-        emoji.spans()[0].format,
-        TextFormat::CustomEmoji {
+        emoji.spans()[0].format(),
+        &TextFormat::CustomEmoji {
             id: "5368324170671202286".to_owned()
         }
     );
@@ -267,7 +267,7 @@ fn entities_in_provider_order_and_overlapping_stay_untouched() {
         message
             .spans()
             .iter()
-            .map(|span| (span.start, span.end))
+            .map(|span| (span.start(), span.end()))
             .collect::<Vec<_>>(),
         [(0, 6), (2, 4)]
     );
@@ -291,7 +291,7 @@ fn many_entities_are_converted_in_provider_order_and_bad_ranges_do_not_shift() {
         message
             .spans()
             .iter()
-            .map(|span| (span.start, span.end, span.format.as_str()))
+            .map(|span| (span.start(), span.end(), span.format().as_str()))
             .collect::<Vec<_>>(),
         [(1, 5, "bold"), (5, 7, "underline"), (5, 6, "spoiler")]
     );
@@ -395,7 +395,7 @@ fn readme_example_runs() {
 
     assert_eq!(message.text(), Some("Hallo Welt"));
     let span = &message.spans()[0];
-    assert_eq!(span.format, TextFormat::Bold);
+    assert_eq!(span.format(), &TextFormat::Bold);
     assert_eq!(span.slice("Hallo Welt"), Some("Welt"));
     assert!(span.covers(6));
 }
@@ -461,11 +461,7 @@ fn telegram_encode_caption_entities_use_caption_offsets() {
 #[test]
 fn telegram_encode_rejects_span_that_does_not_slice_text() {
     let text = "Hallo Welt";
-    let over = TextSpan {
-        start: 6,
-        end: text.len() + 1,
-        format: TextFormat::Bold,
-    };
+    let over = TextSpan::new("Hallo Welt!", 6, 11, TextFormat::Bold).expect("one byte too long");
     let message = OutboundMessage::text(Channel::Telegram, "-1001", text).with_spans([over]);
 
     let error = TelegramAdapter::new("secret-secret-secret")
@@ -671,14 +667,26 @@ fn any_text() -> impl Strategy<Value = String> {
 }
 
 fn any_span() -> impl Strategy<Value = TextSpan> {
-    (0_usize..24, 0_usize..24, any::<u8>()).prop_map(|(start, end, format)| TextSpan {
-        start,
-        end,
-        format: match format % 3 {
-            0 => TextFormat::Bold,
-            1 => TextFormat::Code,
-            _ => TextFormat::Italic,
-        },
+    (0_usize..24, 0_usize..24, any::<u8>()).prop_map(|(a, b, format)| {
+        let (mut start, mut end) = if a <= b { (a, b) } else { (b, a) };
+        if start == end {
+            if end < 24 {
+                end += 1;
+            } else {
+                start -= 1;
+            }
+        }
+        TextSpan::new(
+            "aaaaaaaaaaaaaaaaaaaaaaaa",
+            start,
+            end,
+            match format % 3 {
+                0 => TextFormat::Bold,
+                1 => TextFormat::Code,
+                _ => TextFormat::Italic,
+            },
+        )
+        .expect("fixture span")
     })
 }
 
@@ -711,11 +719,7 @@ fn setting_spans_filters_every_span_against_the_final_text() {
     let valid = TextSpan::new(text, 6, 10, TextFormat::Bold).expect("valid span");
     let end_at_limit =
         TextSpan::new(text, 6, text.len(), TextFormat::Italic).expect("end at limit");
-    let over = TextSpan {
-        start: 6,
-        end: text.len() + 1,
-        format: TextFormat::Code,
-    };
+    let over = TextSpan::new("Hallo Welt!", 6, 11, TextFormat::Code).expect("past end for text");
 
     let message = NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", text)
         .with_spans([valid.clone(), end_at_limit.clone(), over]);
@@ -806,7 +810,7 @@ mod utf16_round_trip {
             );
             prop_assert_eq!(message.spans().len(), 1);
             let span = &message.spans()[0];
-            prop_assert_eq!((span.start, span.end), (start, end));
+            prop_assert_eq!((span.start(), span.end()), (start, end));
             prop_assert_eq!(span.slice(&text), Some(&text[start..end]));
         }
 
@@ -846,8 +850,8 @@ mod utf16_round_trip {
 
             prop_assert_eq!(round_tripped.spans().len(), 1);
             let round_tripped_span = &round_tripped.spans()[0];
-            prop_assert_eq!(round_tripped_span.format.clone(), TextFormat::Bold);
-            prop_assert_eq!((round_tripped_span.start, round_tripped_span.end), (start, end));
+            prop_assert_eq!(round_tripped_span.format().clone(), TextFormat::Bold);
+            prop_assert_eq!((round_tripped_span.start(), round_tripped_span.end()), (start, end));
         }
     }
 }

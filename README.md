@@ -269,7 +269,7 @@ let message = &events[0];
 
 assert_eq!(message.text(), Some("Hallo Welt"));
 let span = &message.spans()[0];
-assert_eq!(span.format, TextFormat::Bold);
+assert_eq!(span.format(), &TextFormat::Bold);
 assert_eq!(span.slice("Hallo Welt"), Some("Welt"));   // UTF-8 byte range
 assert!(span.covers(6));
 # Ok::<(), messenger_webhook::Error>(())
@@ -277,10 +277,11 @@ assert!(span.covers(6));
 
 The contract, in three lines:
 
-- `start`/`end` are UTF-8 byte offsets into `text` (`start` inclusive, `end`
-  exclusive), so `text[start..end]` is always the run — never UTF-16 units,
-  never char indices. Providers that count UTF-16 code units (Telegram does)
-  are converted; an offset that splits a surrogate pair has no byte equivalent.
+- `start()`/`end()` are UTF-8 byte offsets into `text` (`start` inclusive,
+  `end` exclusive), so `text[start()..end()]` is always the run — never UTF-16
+  units, never char indices. Providers that count UTF-16 code units (Telegram
+  does) are converted; an offset that splits a surrogate pair has no byte
+  equivalent.
 - A span is built only through `TextSpan::new`, which rejects empty, inverted,
   out-of-bounds and non-`char`-boundary ranges (`SpanError`). An entity whose
   offsets do not describe a run is **dropped**, not clamped or repaired: `text`

@@ -396,11 +396,7 @@ mod telegram {
         assert_eq!(body["entities"][1]["length"], 5);
         assert!(body.get("parse_mode").is_none());
 
-        let past_end = TextSpan {
-            start: 0,
-            end: text.len() + 1,
-            format: TextFormat::Code,
-        };
+        let past_end = TextSpan::new("a😀bc!", 0, 8, TextFormat::Code).expect("past end fixture");
         let error = adapter()
             .encode(&OutboundMessage::text(Channel::Telegram, "-1001", text).with_spans([past_end]))
             .unwrap_err();
@@ -409,11 +405,7 @@ mod telegram {
             "unexpected error: {error:?}"
         );
 
-        let mid_char = TextSpan {
-            start: 1,
-            end: 3,
-            format: TextFormat::Code,
-        };
+        let mid_char = TextSpan::new("abc", 1, 3, TextFormat::Code).expect("mid-char fixture");
         let error = adapter()
             .encode(&OutboundMessage::text(Channel::Telegram, "-1001", text).with_spans([mid_char]))
             .unwrap_err();

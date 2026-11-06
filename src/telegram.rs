@@ -529,7 +529,10 @@ fn telegram_entities(text: &str, spans: &[TextSpan]) -> Result<Value> {
             ),
         });
     }
-    let ranges = byte_to_utf16_ranges(text, spans.iter().map(|span| Some((span.start, span.end))));
+    let ranges = byte_to_utf16_ranges(
+        text,
+        spans.iter().map(|span| Some((span.start(), span.end()))),
+    );
     let mut entities = Vec::with_capacity(spans.len());
     for (span, range) in spans.iter().zip(ranges) {
         let Some((offset, length)) = range else {
@@ -537,11 +540,12 @@ fn telegram_entities(text: &str, spans: &[TextSpan]) -> Result<Value> {
                 channel: Channel::Telegram,
                 reason: format!(
                     "span {}..{} does not slice message text",
-                    span.start, span.end
+                    span.start(),
+                    span.end()
                 ),
             });
         };
-        entities.push(telegram_entity(&span.format, offset, length)?);
+        entities.push(telegram_entity(span.format(), offset, length)?);
     }
     Ok(Value::Array(entities))
 }
