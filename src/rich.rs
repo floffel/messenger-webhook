@@ -290,6 +290,8 @@ impl TextSpan {
 /// unit no Rust string has: an emoji outside the BMP is two units and four
 /// bytes. A range that starts or ends inside a surrogate pair has no byte
 /// equivalent and yields `None`, as does one that runs past the end of `text`.
+/// Zero-length and inverted ranges also yield `None`, so a successful result is
+/// always a non-empty byte range that [`TextSpan::new`] accepts.
 ///
 /// Crate-private: the Telegram adapter is the only caller, and its tests
 /// exercise the conversion through a real update body.
@@ -298,12 +300,12 @@ impl TextSpan {
 #[cfg_attr(not(feature = "telegram"), allow(dead_code))]
 pub(crate) fn utf16_to_byte_range(text: &str, offset: u64, length: u64) -> Option<(usize, usize)> {
     let end_unit = offset.checked_add(length)?;
+    if end_unit <= offset {
+        return None;
+    }
     let mut units = 0_u64;
     let mut start = (offset == 0).then_some(0_usize);
-    let mut end = (end_unit == 0).then_some(0_usize);
-    if start.is_some() && end.is_some() {
-        return Some((0, 0));
-    }
+    let mut end = None;
     for (byte, character) in text.char_indices() {
         units += u64::try_from(character.len_utf16()).ok()?;
         let next = byte + character.len_utf8();
@@ -325,13 +327,38 @@ pub(crate) fn utf16_to_byte_range(text: &str, offset: u64, length: u64) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{utf16_to_byte_range, SpanError, TextFormat, TextSpan};
+    use proptest::strategy::Strategy;
+
+    fn any_text() -> impl proptest::strategy::Strategy<Value = String> {
+        proptest::collection::vec(
+            proptest::prop_oneof![
+                proptest::prelude::Just('a'),
+                proptest::prelude::Just('Z'),
+                proptest::prelude::Just('ä'),
+                proptest::prelude::Just('€'),
+                proptest::prelude::Just('😀'),
+                proptest::prelude::Just('🧑'),
+            ],
+            0..12,
+        )
+        .prop_map(|characters| characters.into_iter().collect())
+    }
 
     #[test]
     fn ascii_and_empty_text() {
+        assert_eq!(utf16_to_byte_range("abc", 0, 1), Some((0, 1)));
         assert_eq!(utf16_to_byte_range("abc", 0, 3), Some((0, 3)));
-        assert_eq!(utf16_to_byte_range("", 0, 0), Some((0, 0)));
+        assert_eq!(utf16_to_byte_range("", 0, 0), None);
         assert_eq!(utf16_to_byte_range("", 0, 1), None);
         assert_eq!(utf16_to_byte_range("abc", 2, 9), None);
+    }
+
+    #[test]
+    fn zero_length_ranges_are_rejected() {
+        assert_eq!(utf16_to_byte_range("abc", 0, 0), None);
+        assert_eq!(utf16_to_byte_range("abc", 1, 0), None);
+        assert_eq!(utf16_to_byte_range("abc", 3, 0), None);
+        assert_eq!(utf16_to_byte_range("abc", 4, 0), None);
     }
 
     #[test]
@@ -353,6 +380,22 @@ mod tests {
     #[test]
     fn overflowing_unit_sum_is_rejected() {
         assert_eq!(utf16_to_byte_range("ab", u64::MAX, 2), None);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn successful_ranges_are_usable_spans(
+            text in any_text(),
+            offset in proptest::prelude::any::<u64>(),
+            length in proptest::prelude::any::<u64>(),
+        ) {
+            if let Some((start, end)) = utf16_to_byte_range(&text, offset, length) {
+                proptest::prop_assert!(start < end);
+                proptest::prop_assert!(
+                    TextSpan::new(&text, start, end, TextFormat::Bold).is_ok()
+                );
+            }
+        }
     }
 
     #[test]
