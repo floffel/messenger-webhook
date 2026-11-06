@@ -105,6 +105,13 @@ pub enum Error {
         unit: &'static str,
     },
 
+    /// An idempotency key is empty or longer than the crate carries.
+    #[error("invalid idempotency key: {reason}")]
+    InvalidIdempotencyKey {
+        /// Why the key was rejected.
+        reason: String,
+    },
+
     /// No adapter is registered for the requested channel.
     #[error("no adapter registered for channel {0}")]
     UnknownChannel(Channel),

@@ -16,7 +16,8 @@ fn text(channel: Channel, conversation: &str, body: &str) -> NormalizedMessage {
 mod whatsapp {
     use messenger_webhook::{
         whatsapp::{MAX_CAPTION_BYTES, MAX_TEXT_BYTES},
-        Adapter, Attachment, AttachmentKind, Channel, Error, NormalizedMessage, WhatsAppAdapter,
+        Adapter, Attachment, AttachmentKind, Channel, Error, NormalizedMessage, RetryPolicy,
+        WhatsAppAdapter,
     };
 
     fn adapter() -> WhatsAppAdapter {
@@ -29,6 +30,8 @@ mod whatsapp {
         let payload = adapter().encode(&message).unwrap();
         assert_eq!(payload.method(), "POST");
         assert_eq!(payload.content_type(), "application/json");
+        assert_eq!(payload.retry(), RetryPolicy::UnsafeUnlessKeyPresent);
+        assert!(payload.idempotency_key().is_none());
 
         let body = payload.json().unwrap();
         assert_eq!(body["messaging_product"], "whatsapp");
@@ -181,7 +184,8 @@ mod whatsapp {
 mod telegram {
     use messenger_webhook::{
         telegram::{MAX_CAPTION_UTF16, MAX_TEXT_UTF16},
-        Adapter, Attachment, AttachmentKind, Channel, Error, NormalizedMessage, TelegramAdapter,
+        Adapter, Attachment, AttachmentKind, Channel, Error, NormalizedMessage, RetryPolicy,
+        TelegramAdapter,
     };
 
     fn adapter() -> TelegramAdapter {
@@ -191,7 +195,10 @@ mod telegram {
     #[test]
     fn text_payload_has_the_bot_api_shape() {
         let message = NormalizedMessage::text(Channel::Telegram, "-1001", "Hallo");
-        let body = adapter().encode(&message).unwrap().json().unwrap();
+        let payload = adapter().encode(&message).unwrap();
+        assert_eq!(payload.retry(), RetryPolicy::UnsafeUnlessKeyPresent);
+        assert!(payload.idempotency_key().is_none());
+        let body = payload.json().unwrap();
         assert_eq!(body["chat_id"], "-1001");
         assert_eq!(body["text"], "Hallo");
         assert!(body.get("caption").is_none());
@@ -343,6 +350,7 @@ mod telegram {
 mod matrix {
     use messenger_webhook::{
         Adapter, Attachment, AttachmentKind, Channel, Error, MatrixAdapter, NormalizedMessage,
+        RetryPolicy,
     };
 
     fn adapter() -> MatrixAdapter {
@@ -354,11 +362,26 @@ mod matrix {
         let message = NormalizedMessage::text(Channel::Matrix, "!r:example.org", "Hallo");
         let payload = adapter().encode(&message).unwrap();
         assert_eq!(payload.method(), "PUT");
+        assert_eq!(payload.retry(), RetryPolicy::Safe);
+        assert!(payload.idempotency_key().is_some());
 
         let content = payload.json().unwrap();
         assert_eq!(content["msgtype"], "m.text");
         assert_eq!(content["body"], "Hallo");
         assert!(content.get("url").is_none());
+    }
+
+    #[test]
+    fn matrix_payloads_carry_distinct_transaction_keys() {
+        let message = NormalizedMessage::text(Channel::Matrix, "!r:example.org", "Hallo");
+        let first = adapter().encode(&message).unwrap();
+        let second = adapter().encode(&message).unwrap();
+
+        assert_eq!(first.retry(), RetryPolicy::Safe);
+        assert_eq!(second.retry(), RetryPolicy::Safe);
+        assert!(first.idempotency_key().is_some());
+        assert!(second.idempotency_key().is_some());
+        assert_ne!(first.idempotency_key(), second.idempotency_key());
     }
 
     #[test]
