@@ -15,6 +15,7 @@
 //! degrades, memory does not.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
@@ -51,10 +52,52 @@ impl<'a> RoomKey<'a> {
     }
 }
 
+/// A room gate and the number of callers waiting on or holding it.
+#[derive(Debug)]
+struct Gate {
+    mutex: Arc<AsyncMutex<()>>,
+    active: AtomicUsize,
+}
+
+impl Gate {
+    fn new() -> Self {
+        Self {
+            mutex: Arc::new(AsyncMutex::new(())),
+            active: AtomicUsize::new(0),
+        }
+    }
+}
+
+/// Tracks one caller's interest in a gate until it has a guard, or is cancelled.
+#[derive(Debug)]
+struct GateLease {
+    gate: Arc<Gate>,
+}
+
+impl GateLease {
+    fn new(gate: Arc<Gate>) -> Self {
+        gate.active.fetch_add(1, Ordering::AcqRel);
+        Self { gate }
+    }
+}
+
+impl Drop for GateLease {
+    fn drop(&mut self) {
+        self.gate.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// The per-room ordering guard returned by [`RoomGates::acquire`].
+#[derive(Debug)]
+pub(crate) struct GateGuard {
+    _guard: OwnedMutexGuard<()>,
+    _lease: GateLease,
+}
+
 /// One async mutex per room, created on demand.
 #[derive(Debug)]
 pub(crate) struct RoomGates {
-    gates: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    gates: Mutex<HashMap<String, Arc<Gate>>>,
     capacity: usize,
 }
 
@@ -83,32 +126,41 @@ impl RoomGates {
     /// `None` means the map is full of gates that are all in use, so the caller
     /// proceeds unordered. The lock on the map is released before the room gate
     /// is awaited — a guard is never held across an `.await`.
-    pub(crate) async fn acquire(&self, room_id: RoomKey<'_>) -> Option<OwnedMutexGuard<()>> {
-        let gate = {
+    pub(crate) async fn acquire(&self, room_id: RoomKey<'_>) -> Option<GateGuard> {
+        let (gate, lease) = {
             let mut gates = self.lock();
-            if let Some(existing) = gates.get(room_id.as_str()) {
+            let gate = if let Some(existing) = gates.get(room_id.as_str()) {
                 Arc::clone(existing)
             } else {
                 if gates.len() >= self.capacity {
-                    // Drop the gates nobody is waiting on, then re-check.
-                    gates.retain(|_, gate| Arc::strong_count(gate) > 1);
+                    // Drop the gates nobody is waiting on or holding, then re-check.
+                    gates.retain(|_, gate| gate.active.load(Ordering::Acquire) != 0);
                     if gates.len() >= self.capacity {
                         return None;
                     }
                 }
-                let created = Arc::new(AsyncMutex::new(()));
+                let created = Arc::new(Gate::new());
                 gates.insert(room_id.as_str().to_owned(), Arc::clone(&created));
                 created
-            }
+            };
+            // Mark the caller active before releasing the map lock: pruning
+            // must see it and keep this gate until the returned guard drops.
+            let lease = GateLease::new(Arc::clone(&gate));
+            (gate, lease)
         };
-        // `lock_owned` on an `Arc<AsyncMutex>` keeps the gate alive for as long
-        // as the guard exists, even if the map drops its reference meanwhile.
-        Some(gate.lock_owned().await)
+        // If this acquire is cancelled while waiting, `lease` drops and the
+        // gate becomes prunable. While it is held, both the lease and tokio guard
+        // keep the entry accounted for.
+        let guard = Arc::clone(&gate.mutex).lock_owned().await;
+        Some(GateGuard {
+            _guard: guard,
+            _lease: lease,
+        })
     }
 
     /// A poisoned map is recovered, never a panic: the map holds no invariants
     /// that a panic mid-insert could have broken.
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<AsyncMutex<()>>>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Gate>>> {
         self.gates.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -277,6 +329,51 @@ mod tests {
 
             drop(held);
             assert!(poll_once(waiter.as_mut()).is_ready());
+        });
+    }
+
+    #[test]
+    fn a_cancelled_waiter_does_not_keep_its_gate_alive() {
+        runtime().block_on(async {
+            let gates = gates(1);
+            let held = gates.acquire(key("!queued:x")).await.expect("a gate");
+            let mut waiter = Box::pin(gates.acquire(key("!queued:x")));
+
+            assert!(poll_once(waiter.as_mut()).is_pending());
+            drop(waiter);
+            assert!(gates.acquire(key("!new:x")).await.is_none());
+
+            drop(held);
+            let new = gates.acquire(key("!new:x")).await;
+            assert!(new.is_some(), "the cancelled waiter must not leak a slot");
+            assert!(!gates.lock().contains_key("!queued:x"));
+            assert_eq!(gates.len(), 1);
+        });
+    }
+
+    #[test]
+    fn an_inactive_clone_does_not_make_a_gate_immortal() {
+        runtime().block_on(async {
+            let gates = gates(2);
+            let stale_gate = {
+                let guard = gates.acquire(key("!stale:x")).await.expect("a gate");
+                drop(guard);
+                Arc::clone(gates.lock().get("!stale:x").expect("the stale gate"))
+            };
+            let held = gates.acquire(key("!live:x")).await.expect("a gate");
+
+            assert_eq!(gates.len(), 2);
+            assert!(!gates.lock().contains_key("!new:x"));
+            assert!(Arc::strong_count(&stale_gate) > 1);
+
+            assert!(
+                gates.acquire(key("!new:x")).await.is_some(),
+                "a gate with no waiter or holder must be pruned even if cloned"
+            );
+            assert!(!gates.lock().contains_key("!stale:x"));
+            assert_eq!(gates.len(), 2);
+
+            drop(held);
         });
     }
 
