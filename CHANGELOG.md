@@ -24,6 +24,9 @@ carry a `!` in the conventional-commit subject.
   must enforce. Closes #20.
 - The `reqwest` transport now bounds Matrix response bodies at
   `MAX_RESPONSE_BODY_BYTES` before returning them. Closes #55.
+- Per-room outbound ordering now uses a bounded `moka` async cache instead of a
+  blocking `std::sync::Mutex<HashMap<..>>`, so full-cache pressure no longer
+  scans the whole map under a lock. Closes #70.
 - The `cargo-deny` gate now resolves all features, so default-off dependencies
   such as the `matrix-out` HTTP stack are covered by advisory checks. Closes #17.
 - **The body ceiling is now a per-adapter property.** `Adapter` gains

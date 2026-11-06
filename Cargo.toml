@@ -25,6 +25,7 @@ matrix = ["dep:html5ever"]
 matrix-out = [
     "dep:exponential-backoff",
     "dep:futures-util",
+    "dep:moka",
     "dep:percent-encoding",
     "dep:reqwest",
     "dep:tokio",
@@ -64,6 +65,11 @@ futures-util = { version = "0.3", default-features = false, features = [
 tokio = { version = "1", default-features = false, features = [
     "sync",
     "time",
+], optional = true }
+# Bounded async cache for per-room ordering gates. The `future` feature provides
+# the async cache API and keeps the sync cache out of the default-off path.
+moka = { version = "0.12", default-features = false, features = [
+    "future",
 ], optional = true }
 # Parses `application/x-www-form-urlencoded` query strings: `+` is a space,
 # `%` needs decoding and a key may legally repeat. The Meta handshake is the one
