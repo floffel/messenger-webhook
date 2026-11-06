@@ -24,7 +24,8 @@ fn client_with(
             .with_user_id("@bot:m.example")
             .with_sleeper(sleeper.clone()),
     );
-    let client = MatrixClient::new(transport.clone(), config, "syt").expect("valid client");
+    let client =
+        MatrixClient::new(transport.clone(), config, "syt_token_123456").expect("valid client");
     (client, transport, sleeper)
 }
 
@@ -457,7 +458,7 @@ fn a_trailing_slash_on_the_homeserver_never_doubles_in_a_path() {
     let client = MatrixClient::new(
         transport.clone(),
         ClientConfig::new("https://m.example///").expect("valid"),
-        "syt",
+        "syt_token_123456",
     )
     .expect("valid");
     transport.push_json(200, r#"{"event_id":"$1"}"#);

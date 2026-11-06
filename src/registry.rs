@@ -22,7 +22,7 @@ use crate::{check_body, Adapter, Headers};
 /// use messenger_webhook::{Adapter, Channel, Registry, WhatsAppAdapter};
 ///
 /// let mut registry = Registry::new();
-/// registry.register(WhatsAppAdapter::new("app-secret"));
+/// registry.register(WhatsAppAdapter::new("app-secret-app-secret")?);
 ///
 /// assert_eq!(registry.get(&Channel::WhatsApp)?.channel(), Channel::WhatsApp);
 /// assert!(registry.get(&Channel::Matrix).is_err());
@@ -56,15 +56,16 @@ impl Registry {
     ///
     /// ```
     /// # #[cfg(all(feature = "whatsapp", feature = "telegram"))]
-    /// # fn demo() {
+    /// # fn demo() -> Result<(), messenger_webhook::Error> {
     /// use messenger_webhook::{Adapter, Channel, Registry, TelegramAdapter, WhatsAppAdapter};
     ///
     /// let mut registry = Registry::new();
     /// registry
-    ///     .register(WhatsAppAdapter::new("app-secret"))
-    ///     .register(TelegramAdapter::new("bot-token"));
+    ///     .register(WhatsAppAdapter::new("app-secret-app-secret")?)
+    ///     .register(TelegramAdapter::new("bot-token-bot-token")?);
     ///
     /// assert_eq!(registry.len(), 2);
+    /// # Ok(())
     /// # }
     /// ```
     pub fn register<A: Adapter + 'static>(&mut self, adapter: A) -> &mut Self {
@@ -85,7 +86,7 @@ impl Registry {
     /// use std::sync::Arc;
     /// use messenger_webhook::{Adapter, Channel, MatrixAdapter, Registry};
     ///
-    /// let adapter: Arc<dyn Adapter> = Arc::new(MatrixAdapter::new("token"));
+    /// let adapter: Arc<dyn Adapter> = Arc::new(MatrixAdapter::new("token-123456789")?);
     /// let mut registry = Registry::new();
     /// registry.register_shared(adapter);
     ///
@@ -114,10 +115,10 @@ impl Registry {
     /// use messenger_webhook::{Channel, Error, MatrixAdapter, Registry};
     ///
     /// let mut registry = Registry::new();
-    /// registry.try_register(MatrixAdapter::new("token"))?;
+    /// registry.try_register(MatrixAdapter::new("secret-secret-secret")?)?;
     ///
     /// let error = registry
-    ///     .try_register(MatrixAdapter::new("other-token"))
+    ///     .try_register(MatrixAdapter::new("other-token-other-token")?)
     ///     .unwrap_err();
     /// assert!(matches!(error, Error::ChannelAlreadyRegistered(Channel::Matrix)));
     /// # Ok(())
@@ -169,12 +170,13 @@ impl Registry {
     ///
     /// ```
     /// # #[cfg(feature = "whatsapp")]
-    /// # fn demo() {
+    /// # fn demo() -> Result<(), messenger_webhook::Error> {
     /// use messenger_webhook::{Channel, Registry, WhatsAppAdapter};
     ///
     /// let mut registry = Registry::new();
-    /// registry.register(WhatsAppAdapter::new("s"));
+    /// registry.register(WhatsAppAdapter::new("secret-secret-secret")?);
     /// assert_eq!(registry.channels(), vec![Channel::WhatsApp]);
+    /// # Ok(())
     /// # }
     /// ```
     #[must_use]

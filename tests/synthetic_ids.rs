@@ -10,15 +10,15 @@ use serde_json::{json, Value};
 use messenger_webhook::{Adapter, NormalizedMessage, SYNTHETIC_ID_PREFIX};
 
 fn whatsapp() -> impl Adapter {
-    messenger_webhook::WhatsAppAdapter::new("app-secret")
+    messenger_webhook::WhatsAppAdapter::new("app-secret-app-secret").expect("adapter")
 }
 
 fn telegram() -> impl Adapter {
-    messenger_webhook::TelegramAdapter::new("bot-secret")
+    messenger_webhook::TelegramAdapter::new("bot-secret-bot-secret").expect("adapter")
 }
 
 fn matrix() -> impl Adapter {
-    messenger_webhook::MatrixAdapter::new("hs-token")
+    messenger_webhook::MatrixAdapter::new("hs-token-hs-token").expect("adapter")
 }
 
 fn adapt(adapter: &dyn Adapter, body: &Value) -> Vec<NormalizedMessage> {

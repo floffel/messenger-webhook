@@ -33,7 +33,8 @@ fn harness(configure: impl FnOnce(ClientConfig) -> ClientConfig) -> Harness {
             .with_user_id("@bot:example.org")
             .with_sleeper(sleeper.clone()),
     );
-    let client = MatrixClient::new(transport.clone(), config, "syt_TOKEN").expect("a valid client");
+    let client =
+        MatrixClient::new(transport.clone(), config, "syt_token_123456").expect("a valid client");
     Harness {
         client,
         transport,
@@ -79,7 +80,10 @@ fn a_text_send_is_one_put_with_a_bearer_token_and_a_json_body() {
             outcome.txn_id
         )
     );
-    assert_eq!(request.header("authorization"), Some("Bearer syt_TOKEN"));
+    assert_eq!(
+        request.header("authorization"),
+        Some("Bearer syt_token_123456")
+    );
     assert_eq!(request.header("content-type"), Some("application/json"));
     assert_eq!(request.header("accept"), Some("application/json"));
     assert_eq!(
@@ -477,7 +481,7 @@ fn typing_without_a_configured_user_id_is_a_configuration_error() {
     let client = MatrixClient::new(
         transport.clone(),
         ClientConfig::new("https://m.example").expect("valid"),
-        "syt",
+        "syt_token_123456",
     )
     .expect("valid");
 

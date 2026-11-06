@@ -23,7 +23,7 @@ fn client(transport: Arc<dyn Transport>) -> MatrixClient {
         ClientConfig::new("https://m.example")
             .expect("valid")
             .with_user_id("@bot:m.example"),
-        "syt",
+        "syt_token_123456",
     )
     .expect("valid client")
 }
@@ -320,7 +320,7 @@ async fn ordering_off_admits_concurrent_sends_into_one_room() {
             ClientConfig::new("https://m.example")
                 .expect("valid")
                 .with_per_room_ordering(false),
-            "syt",
+            "syt_token_123456",
         )
         .expect("valid"),
     );
@@ -387,7 +387,7 @@ async fn a_retry_sleep_does_not_hold_the_room_gate() {
             ClientConfig::new("https://m.example")
                 .expect("valid")
                 .with_sleeper(sleeper.clone()),
-            "syt",
+            "syt_token_123456",
         )
         .expect("valid client"),
     );

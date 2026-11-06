@@ -14,28 +14,30 @@ use messenger_webhook::{
 };
 
 fuzz_target!(|data: &[u8]| {
-    let whatsapp = WhatsAppAdapter::new("fuzz-secret");
-    let telegram = TelegramAdapter::new("fuzz-secret");
-    let matrix = MatrixAdapter::new("fuzz-secret");
+    let whatsapp = WhatsAppAdapter::new("fuzz-secret-fuzz-secret").expect("adapter");
+    let telegram = TelegramAdapter::new("fuzz-secret-fuzz-secret").expect("adapter");
+    let matrix = MatrixAdapter::new("fuzz-secret-fuzz-secret").expect("adapter");
 
     // A valid signature for exactly this body, so verification succeeds and
     // the parser is reached on every iteration.
-    let signature = meta_signature(&Secret::new("fuzz-secret"), data).unwrap_or_default();
+    let signature = meta_signature(&Secret::new("fuzz-secret-fuzz-secret").expect("secret"), data).unwrap_or_default();
     let mut authentic = Headers::new();
     authentic.insert("x-hub-signature-256", signature).unwrap();
     authentic
-        .insert("x-telegram-bot-api-secret-token", "fuzz-secret")
+        .insert("x-telegram-bot-api-secret-token", "fuzz-secret-fuzz-secret")
         .unwrap();
     authentic
-        .insert("authorization", "Bearer fuzz-secret")
+        .insert("authorization", "Bearer fuzz-secret-fuzz-secret")
         .unwrap();
 
     let mut forged = Headers::new();
     forged.insert("x-hub-signature-256", "sha256=00").unwrap();
     forged
-        .insert("x-telegram-bot-api-secret-token", "wrong")
+        .insert("x-telegram-bot-api-secret-token", "wrong-secret-value")
         .unwrap();
-    forged.insert("authorization", "Bearer wrong").unwrap();
+    forged
+        .insert("authorization", "Bearer wrong-secret-value")
+        .unwrap();
 
     for adapter in [&whatsapp as &dyn Adapter, &telegram, &matrix] {
         let _ = adapter.verify(&authentic, data);

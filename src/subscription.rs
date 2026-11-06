@@ -28,13 +28,13 @@
 //! use messenger_webhook::{subscription::meta_subscription_challenge, Error, Secret};
 //!
 //! // The request Meta sends when the webhook URL is saved in the app dashboard.
-//! let query = "hub.mode=subscribe&hub.challenge=1158201444&hub.verify_token=meatyhamhock";
-//! let challenge = meta_subscription_challenge(&Secret::new("meatyhamhock"), query)?;
+//! let query = "hub.mode=subscribe&hub.challenge=1158201444&hub.verify_token=meatyhamhock-meatyhamhock";
+//! let challenge = meta_subscription_challenge(&Secret::new("meatyhamhock-meatyhamhock").expect("secret"), query)?;
 //! assert_eq!(challenge, "1158201444");
 //!
 //! // Answer with the challenge — and nothing else — as `text/plain`.
 //! // A different token is rejected with a typed error.
-//! let error = meta_subscription_challenge(&Secret::new("wrong"), query).unwrap_err();
+//! let error = meta_subscription_challenge(&Secret::new("wrong-secret-value").expect("secret"), query).unwrap_err();
 //! assert!(matches!(error, Error::BadSignature { .. }));
 //! # Ok::<(), messenger_webhook::Error>(())
 //! ```
@@ -119,8 +119,8 @@ const PHP_VERIFY_TOKEN_PARAM: &str = "hub_verify_token";
 /// ```
 /// use messenger_webhook::{subscription::meta_subscription_challenge, Secret};
 ///
-/// let secret = Secret::new("meatyhamhock");
-/// let query = "hub.mode=subscribe&hub.challenge=1158201444&hub.verify_token=meatyhamhock";
+/// let secret = Secret::new("meatyhamhock-meatyhamhock").expect("secret");
+/// let query = "hub.mode=subscribe&hub.challenge=1158201444&hub.verify_token=meatyhamhock-meatyhamhock";
 ///
 /// assert_eq!(meta_subscription_challenge(&secret, query)?, "1158201444");
 ///
@@ -210,22 +210,23 @@ fn malformed(reason: &str) -> Error {
 mod tests {
     use super::*;
 
-    /// The sample request from Meta's *Getting Started* page.
-    const DOCS_QUERY: &str =
-        "hub.mode=subscribe&hub.challenge=1158201444&hub.verify_token=meatyhamhock";
-
     #[test]
     fn the_documented_request_is_accepted() {
-        let challenge = meta_subscription_challenge(&Secret::new("meatyhamhock"), DOCS_QUERY)
-            .expect("challenge");
+        let secret = Secret::new("meatyhamhock-meatyhamhock").expect("secret");
+        let query = "hub.mode=subscribe&hub.challenge=1158201444&hub.verify_token=meatyhamhock-meatyhamhock";
+        let challenge = meta_subscription_challenge(&secret, query).expect("challenge");
         assert_eq!(challenge, "1158201444");
     }
 
     #[test]
     fn the_challenge_is_the_only_thing_returned() {
         // Nothing from the query is concatenated into the answer.
-        let query = "hub.mode=subscribe&hub.challenge=42&hub.verify_token=t";
-        let challenge = meta_subscription_challenge(&Secret::new("t"), query).expect("challenge");
+        let query = "hub.mode=subscribe&hub.challenge=42&hub.verify_token=secret-secret-secret";
+        let challenge = meta_subscription_challenge(
+            &Secret::new("secret-secret-secret").expect("secret"),
+            query,
+        )
+        .expect("challenge");
         assert_eq!(challenge, "42");
         assert!(!challenge.contains('t'));
     }

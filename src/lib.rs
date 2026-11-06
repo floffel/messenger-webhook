@@ -40,7 +40,7 @@
 //! use messenger_webhook::{signature::meta_signature, Headers, Secret};
 //!
 //! // What a provider-side test harness does, or what a mock server returns.
-//! let secret = Secret::new("app-secret");
+//! let secret = Secret::new("app-secret-app-secret")?;
 //! let body = br#"{"entry":[]}"#;
 //! let mut headers = Headers::new();
 //! headers.insert("X-Hub-Signature-256", meta_signature(&secret, body)?)?;

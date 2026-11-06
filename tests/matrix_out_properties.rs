@@ -215,7 +215,7 @@ proptest! {
             ClientConfig::new("https://m.example")
                 .expect("valid")
                 .with_sleeper(sleeper.clone()),
-            "syt",
+            "syt_token_123456",
         )
         .expect("valid");
         for index in 0..failures {
@@ -262,7 +262,7 @@ proptest! {
                         .with_max_attempts(max_attempts)
                         .expect("valid"),
                 ),
-            "syt",
+            "syt_token_123456",
         )
         .expect("valid");
         for _ in 0..max_attempts {
@@ -288,7 +288,7 @@ proptest! {
         let client = MatrixClient::new(
             transport.clone(),
             ClientConfig::new("https://m.example").expect("valid"),
-            "syt",
+            "syt_token_123456",
         )
         .expect("valid");
         // `{"msgtype":"m.text","body":""}` is exactly 30 bytes of envelope, so

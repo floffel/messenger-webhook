@@ -54,7 +54,7 @@
 //! let client = MatrixClient::new(
 //!     transport.clone(),
 //!     ClientConfig::new("https://matrix.example.org")?,
-//!     "syt_access_token",
+//!     "syt_access_token_123",
 //! )?;
 //!
 //! let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -577,7 +577,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     Arc::new(StubTransport::new()),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt_token",
+    ///     "syt_token_123456",
     /// )?;
     /// assert_eq!(client.config().homeserver(), "https://m.example");
     /// # Ok(())
@@ -588,13 +588,9 @@ impl MatrixClient {
         config: ClientConfig,
         access_token: impl Into<String>,
     ) -> OutboundResult<Self> {
-        let token = Secret::new(access_token);
-        if token.is_empty() {
-            return Err(OutboundError::InvalidConfig {
-                reason: "the access token is empty (Matrix would answer 401 M_MISSING_TOKEN)"
-                    .to_owned(),
-            });
-        }
+        let token = Secret::new(access_token).map_err(|error| OutboundError::InvalidConfig {
+            reason: error.to_string(),
+        })?;
         if config.max_upload_bytes == 0 {
             return Err(OutboundError::InvalidConfig {
                 reason: "max_upload_bytes is 0, which refuses every upload".to_owned(),
@@ -623,7 +619,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     Arc::new(StubTransport::new()),
     ///     ClientConfig::new("https://m.example")?.with_user_id("@bot:m.example"),
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     /// assert_eq!(client.config().user_id(), Some("@bot:m.example"));
     /// # Ok(())
@@ -652,7 +648,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -692,7 +688,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let txn = TxnId::new("order-42")?;
@@ -747,7 +743,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -787,7 +783,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -846,7 +842,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -918,7 +914,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -983,7 +979,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?.with_user_id("@bot:m.example"),
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -1020,7 +1016,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?.with_user_id("@bot:m.example"),
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -1074,7 +1070,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -1118,7 +1114,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -1169,7 +1165,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -1228,7 +1224,7 @@ impl MatrixClient {
     /// let client = MatrixClient::new(
     ///     transport.clone(),
     ///     ClientConfig::new("https://m.example")?,
-    ///     "syt",
+    ///     "syt_token_123456",
     /// )?;
     ///
     /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -1850,12 +1846,25 @@ mod tests {
         let config = || ClientConfig::new("https://m.example").expect("valid");
 
         assert!(MatrixClient::new(transport.clone(), config(), "").is_err());
-        let zero_uploads = config().with_max_upload_bytes(0);
-        assert!(MatrixClient::new(transport.clone(), zero_uploads, "t").is_err());
-        assert!(MatrixClient::new(transport.clone(), config().with_user_id("bot"), "t").is_err());
-        let client = MatrixClient::new(transport, config().with_user_id("@bot:m.example"), "t")
-            .expect("valid");
-        assert!(!format!("{client:?}").contains("t="));
+        assert!(MatrixClient::new(
+            transport.clone(),
+            config().with_max_upload_bytes(0),
+            "matrix-access-token"
+        )
+        .is_err());
+        assert!(MatrixClient::new(
+            transport.clone(),
+            config().with_user_id("bot"),
+            "matrix-access-token"
+        )
+        .is_err());
+        let client = MatrixClient::new(
+            transport,
+            config().with_user_id("@bot:m.example"),
+            "matrix-access-token",
+        )
+        .expect("valid");
+        assert!(!format!("{client:?}").contains("matrix-access-token"));
     }
 
     #[test]
@@ -1863,11 +1872,11 @@ mod tests {
         let client = MatrixClient::new(
             Arc::new(StubTransport::new()),
             ClientConfig::new("https://m.example").expect("valid"),
-            "syt_very_secret",
+            "syt_very_secret_token",
         )
         .expect("valid");
         let rendered = format!("{client:?}");
-        assert!(!rendered.contains("syt_very_secret"), "{rendered}");
+        assert!(!rendered.contains("syt_very_secret_token"), "{rendered}");
         assert!(rendered.contains("<redacted>"), "{rendered}");
     }
 }

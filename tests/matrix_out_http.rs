@@ -155,7 +155,7 @@ fn client_with(base: &str, retry: RetryPolicy, timeout: Duration) -> MatrixClien
             .expect("a valid URL")
             .with_user_id("@bot:m.example")
             .with_retry(retry),
-        "syt_loopback",
+        "syt_loopback_token",
     )
     .expect("a valid client")
 }
@@ -178,7 +178,7 @@ async fn a_real_request_reaches_the_server_with_the_token_and_the_json_body() {
     assert_eq!(outcome.attempts, 1);
     assert_eq!(
         seen.authorization.lock().expect("log").as_slice(),
-        ["Bearer syt_loopback".to_owned()]
+        ["Bearer syt_loopback_token".to_owned()]
     );
     // Compare parsed JSON: key order is not part of the wire contract.
     let body: serde_json::Value =

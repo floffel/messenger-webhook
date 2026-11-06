@@ -18,11 +18,17 @@ const MATRIX_UNKNOWN: &[u8] = include_bytes!("../fuzz/corpus/normalize/matrix_un
 fn adapters() -> Vec<Box<dyn Adapter>> {
     let mut adapters: Vec<Box<dyn Adapter>> = Vec::new();
     #[cfg(feature = "whatsapp")]
-    adapters.push(Box::new(messenger_webhook::WhatsAppAdapter::new("secret")));
+    adapters.push(Box::new(
+        messenger_webhook::WhatsAppAdapter::new("secret-secret-secret").expect("adapter"),
+    ));
     #[cfg(feature = "telegram")]
-    adapters.push(Box::new(messenger_webhook::TelegramAdapter::new("secret")));
+    adapters.push(Box::new(
+        messenger_webhook::TelegramAdapter::new("secret-secret-secret").expect("adapter"),
+    ));
     #[cfg(feature = "matrix")]
-    adapters.push(Box::new(messenger_webhook::MatrixAdapter::new("secret")));
+    adapters.push(Box::new(
+        messenger_webhook::MatrixAdapter::new("secret-secret-secret").expect("adapter"),
+    ));
     adapters
 }
 

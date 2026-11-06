@@ -17,13 +17,13 @@ const APP_SECRET: &str = "app-secret-from-the-meta-dashboard";
 const BODY: &[u8] = br#"{"object":"whatsapp_business_account","entry":[{"id":"1","changes":[{"field":"messages","value":{"metadata":{"display_phone_number":"1","phone_number_id":"2"},"messages":[{"id":"wamid.1","from":"4915112345678","timestamp":"1729600000","type":"text","text":{"body":"Hallo"}}]}}]}]}"#;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let adapter = WhatsAppAdapter::new(APP_SECRET);
+    let adapter = WhatsAppAdapter::new(APP_SECRET).expect("adapter");
 
     // In a real service both values come off the HTTP request: the raw body bytes
     // and the `X-Hub-Signature-256` header. Verify before anything parses the body.
     let headers = Headers::from_pairs([(
         "x-hub-signature-256",
-        meta_signature(&Secret::new(APP_SECRET), BODY)?,
+        meta_signature(&Secret::new(APP_SECRET).expect("secret"), BODY)?,
     )]);
     adapter.verify(&headers, BODY)?;
 

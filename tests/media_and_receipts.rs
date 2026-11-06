@@ -10,7 +10,7 @@ mod whatsapp {
     };
 
     fn adapter() -> WhatsAppAdapter {
-        WhatsAppAdapter::new("secret")
+        WhatsAppAdapter::new("secret-secret-secret").expect("adapter")
     }
 
     fn inbound(body: &str) -> Vec<NormalizedMessage> {
@@ -209,7 +209,7 @@ mod telegram {
     };
 
     fn adapter() -> TelegramAdapter {
-        TelegramAdapter::new("secret")
+        TelegramAdapter::new("secret-secret-secret").expect("adapter")
     }
 
     #[test]
@@ -290,7 +290,7 @@ mod matrix {
     };
 
     fn adapter() -> MatrixAdapter {
-        MatrixAdapter::new("secret")
+        MatrixAdapter::new("secret-secret-secret").expect("adapter")
     }
 
     fn event(content: &str) -> Vec<NormalizedMessage> {

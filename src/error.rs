@@ -76,6 +76,28 @@ pub enum Error {
         channel: Channel,
     },
 
+    /// The configured secret is shorter than the crate's documented minimum.
+    ///
+    /// ```
+    /// use messenger_webhook::Error;
+    ///
+    /// let error = Error::WeakSecret {
+    ///     actual: 15,
+    ///     minimum: 16,
+    /// };
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     "secret length is 15 bytes, below the 16 byte minimum"
+    /// );
+    /// ```
+    #[error("secret length is {actual} bytes, below the {minimum} byte minimum")]
+    WeakSecret {
+        /// Actual secret length in bytes.
+        actual: usize,
+        /// Minimum accepted secret length in bytes.
+        minimum: usize,
+    },
+
     /// The verification header is absent.
     #[error("{channel} request carries no {header:?} header")]
     MissingVerificationHeader {

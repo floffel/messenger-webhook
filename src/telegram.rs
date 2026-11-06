@@ -11,7 +11,7 @@
 //! ```
 //! use messenger_webhook::{Adapter, Channel, OutboundMessage, TelegramAdapter};
 //!
-//! let adapter = TelegramAdapter::new("bot-secret");
+//! let adapter = TelegramAdapter::new("bot-secret-bot-secret")?;
 //! let message = OutboundMessage::text(Channel::Telegram, "-1001", "Hallo");
 //! assert_eq!(adapter.encode(&message)?.json()?["text"], "Hallo");
 //!
@@ -62,11 +62,13 @@ const MAX_PHOTO_DIMENSION: u64 = u32::MAX as u64;
 /// ```
 /// use messenger_webhook::{Adapter, Headers, TelegramAdapter};
 ///
-/// let adapter = TelegramAdapter::new("bot-secret");
+/// let adapter = TelegramAdapter::new("bot-secret-bot-secret")?;
 /// let body = br#"{"update_id":1,"message":{"message_id":7,"from":{"id":42},
 ///     "chat":{"id":-1001},"date":1729600000,"text":"Hallo"}}"#;
 ///
-/// let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "bot-secret")]);
+/// let headers = Headers::from_iter([
+///     ("x-telegram-bot-api-secret-token", "bot-secret-bot-secret"),
+/// ]);
 /// adapter.verify(&headers, body)?;
 /// assert_eq!(adapter.adapt(body)?[0].conversation_id, "-1001");
 /// # Ok::<(), messenger_webhook::Error>(())
@@ -80,16 +82,32 @@ impl TelegramAdapter {
     /// Creates an adapter that verifies with the `secret_token` given to
     /// `setWebhook`.
     ///
+    /// # Errors
+    ///
+    /// [`Error::MissingSecret`] when `secret_token` is empty, and
+    /// [`Error::WeakSecret`] when it is shorter than [`crate::secret::MIN_SECRET_BYTES`].
+    ///
     /// ```
     /// use messenger_webhook::{Adapter, TelegramAdapter};
     ///
-    /// assert_eq!(TelegramAdapter::new("s").channel().as_str(), "telegram");
+    /// assert_eq!(
+    ///     TelegramAdapter::new("bot-secret-bot-secret")?
+    ///         .channel()
+    ///         .as_str(),
+    ///     "telegram"
+    /// );
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
-    #[must_use]
-    pub fn new(secret_token: impl Into<String>) -> Self {
-        Self {
-            secret: Secret::new(secret_token),
+    pub fn new(secret_token: impl Into<String>) -> Result<Self> {
+        let secret_token = secret_token.into();
+        if secret_token.is_empty() {
+            return Err(Error::MissingSecret {
+                channel: Channel::Telegram,
+            });
         }
+        Ok(Self {
+            secret: Secret::new(secret_token)?,
+        })
     }
 
     /// The header the secret token arrives in.

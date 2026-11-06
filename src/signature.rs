@@ -28,11 +28,11 @@ const DIGEST_LEN: usize = 32;
 /// ```
 /// use messenger_webhook::{signature::meta_signature, Secret};
 ///
-/// // RFC 4231 test case 2.
-/// let value = meta_signature(&Secret::new("Jefe"), b"what do ya want for nothing?")?;
+/// // RFC 4231 test case 2 key, padded to the crate's 16-byte minimum.
+/// let value = meta_signature(&Secret::new("JefeJefeJefeJefe")?, b"what do ya want for nothing?")?;
 /// assert_eq!(
 ///     value,
-///     "sha256=5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+///     "sha256=2ccd85dfc8d18cb5d84fef4b198554699fece6e8692c9147b0da983f5b7bd413"
 /// );
 /// # Ok::<(), messenger_webhook::Error>(())
 /// ```
@@ -56,13 +56,13 @@ pub fn meta_signature(secret: &Secret, body: &[u8]) -> Result<String> {
 /// ```
 /// use messenger_webhook::{signature, Secret};
 ///
-/// let secret = Secret::new("app-secret");
+/// let secret = Secret::new("app-secret-app-secret").expect("secret");
 /// let header = signature::meta_signature(&secret, b"{}")?;
 /// signature::verify_meta(&secret, &header, b"{}")?;
 /// assert!(signature::verify_meta(&secret, &header, b"{\"a\":1}").is_err());
 ///
-/// // An unset secret fails closed instead of verifying with an empty key.
-/// assert!(signature::verify_meta(&Secret::new(""), &header, b"{}").is_err());
+/// // An unset or weak secret cannot even be constructed.
+/// assert!(Secret::new("").is_err());
 /// # Ok::<(), messenger_webhook::Error>(())
 /// ```
 ///
@@ -173,20 +173,17 @@ mod tests {
     }
 
     #[test]
-    fn hmac_sha256_refuses_empty_secret_at_the_primitive() {
-        assert!(matches!(
-            hmac_sha256(&Secret::new(""), b"{}"),
-            Err(Error::MissingSecret {
-                channel: Channel::WhatsApp
-            })
-        ));
-
-        // HMAC itself accepts the empty key; the guard above is what keeps it
+    fn hmac_sha256_edge_keys_are_handled_by_the_typed_secret() {
+        // HMAC itself accepts the empty key; the constructor is what keeps it
         // out of the crate-facing primitive.
         assert!(hmac_sha256_bytes(b"", b"{}").is_ok());
 
-        let digest = hmac_sha256(&Secret::new("x"), b"{}").expect("one-byte key hashes");
-        assert_eq!(digest, hmac_sha256_bytes(b"x", b"{}").expect("raw hmac"));
+        let minimum = Secret::new("x".repeat(crate::secret::MIN_SECRET_BYTES)).expect("minimum");
+        let digest = hmac_sha256(&minimum, b"{}").expect("minimum key hashes");
+        assert_eq!(
+            digest,
+            hmac_sha256_bytes(b"xxxxxxxxxxxxxxxx", b"{}").expect("raw hmac")
+        );
     }
 
     #[test]
@@ -228,16 +225,16 @@ mod tests {
 
     #[test]
     fn secret_comparison_is_constant_time_and_length_aware() {
-        let secret = Secret::new("abc");
-        assert!(secret.ct_eq(b"abc"));
-        assert!(!secret.ct_eq(b"abd"));
-        assert!(!secret.ct_eq(b"ab"));
+        let secret = Secret::new("abc-abc-abc-abcd").expect("secret");
+        assert!(secret.ct_eq(b"abc-abc-abc-abcd"));
+        assert!(!secret.ct_eq(b"abc-abc-abc-abce"));
+        assert!(!secret.ct_eq(b"abc-abc-abc-abc"));
         assert!(!secret.ct_eq(b""));
     }
 
     #[test]
     fn verify_meta_classifies_malformed_headers_and_bad_signatures() {
-        let secret = Secret::new("app-secret");
+        let secret = Secret::new("app-secret-app-secret").expect("secret");
         let malformed_prefix = "expected sha256=<64 hex digits>".to_owned();
         let malformed_digest = "signature digest is not 64 hex digits".to_owned();
         let cases = [
