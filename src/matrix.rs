@@ -137,13 +137,10 @@ impl Adapter for MatrixAdapter {
     }
 
     fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
-        let room = recipient(Channel::Matrix, message)?;
-        if !room.starts_with('!') {
-            return Err(Error::InvalidMessage {
-                channel: Channel::Matrix,
-                reason: format!("Matrix room ids start with '!', got {room:?}"),
-            });
-        }
+        // The room id lives in the URL, not the content, but it is still the
+        // recipient, so it goes through the shared validator before anything is
+        // built.
+        recipient(Channel::Matrix, message)?;
 
         let text = message.text.as_deref().unwrap_or_default();
         let mut content = if let Some(attachment) = message.first_attachment() {

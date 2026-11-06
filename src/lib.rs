@@ -134,6 +134,19 @@ pub use subscription::meta_subscription_challenge;
 /// ```
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 
+/// Hard ceiling on an outbound recipient id, in bytes.
+///
+/// Every provider accepts conversation ids far shorter than this. The cap
+/// bounds the id an outbound message can be addressed to, so a caller cannot
+/// turn a `1 MiB` string into a provider request body.
+///
+/// ```
+/// use messenger_webhook::MAX_RECIPIENT_BYTES;
+///
+/// assert_eq!(MAX_RECIPIENT_BYTES, 256);
+/// ```
+pub const MAX_RECIPIENT_BYTES: usize = 256;
+
 /// Turns provider payloads into normalised messages.
 ///
 /// Implementations are `Send + Sync + Debug` (with redacted secrets), hold no
@@ -277,17 +290,93 @@ pub(crate) fn json_payload(
     ))
 }
 
-/// The recipient a message is addressed to, rejecting an empty one.
+/// The recipient a message is addressed to, validated per channel.
+///
+/// The rules are shared so every adapter inherits them:
+///
+/// - the trimmed id must not be empty, longer than [`MAX_RECIPIENT_BYTES`]
+///   bytes, or carry a character that is not printable;
+/// - `WhatsApp` takes E.164 digits only, Telegram a signed integer chat id and
+///   Matrix a room id that starts with `!`.
 #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
 pub(crate) fn recipient(channel: Channel, message: &NormalizedMessage) -> Result<&str> {
     let id = message.conversation_id.trim();
     if id.is_empty() {
-        Err(Error::InvalidMessage {
+        return Err(invalid_recipient(channel, "conversation_id is empty"));
+    }
+    if id.len() > MAX_RECIPIENT_BYTES {
+        return Err(invalid_recipient(
             channel,
-            reason: "conversation_id is empty".to_owned(),
-        })
-    } else {
-        Ok(id)
+            format!(
+                "conversation_id is {} bytes, the ceiling is {MAX_RECIPIENT_BYTES}",
+                id.len()
+            ),
+        ));
+    }
+    if id.chars().any(|c| !is_graphic(c)) {
+        return Err(invalid_recipient(
+            channel,
+            "conversation_id contains a non-printable character",
+        ));
+    }
+    match channel {
+        Channel::WhatsApp => {
+            if !id.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(invalid_recipient(
+                    channel,
+                    format!("WhatsApp recipients are E.164 digits, got {id:?}"),
+                ));
+            }
+        }
+        Channel::Telegram => {
+            if id.parse::<i64>().is_err() {
+                return Err(invalid_recipient(
+                    channel,
+                    format!("Telegram chat ids are integers, got {id:?}"),
+                ));
+            }
+        }
+        Channel::Matrix => {
+            if !id.starts_with('!') {
+                return Err(invalid_recipient(
+                    channel,
+                    format!("Matrix room ids start with '!', got {id:?}"),
+                ));
+            }
+        }
+        Channel::Other(_) => {}
+    }
+    Ok(id)
+}
+
+/// Whether `character` is one a reader would see, as opposed to a control,
+/// format, surrogate, private-use, unassigned or separator code point.
+///
+/// Separators and controls cover whitespace, so a space, tab or newline is not
+/// printable by this definition.
+#[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+fn is_graphic(character: char) -> bool {
+    use unicode_general_category::{get_general_category, GeneralCategory};
+
+    !matches!(
+        get_general_category(character),
+        GeneralCategory::Control
+            | GeneralCategory::Format
+            | GeneralCategory::Surrogate
+            | GeneralCategory::PrivateUse
+            | GeneralCategory::Unassigned
+            | GeneralCategory::LineSeparator
+            | GeneralCategory::ParagraphSeparator
+            | GeneralCategory::SpaceSeparator
+    )
+}
+
+/// Builds the shared [`Error::InvalidMessage`] for a rejected recipient.
+#[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+fn invalid_recipient(channel: Channel, reason: impl Into<String>) -> Error {
+    Error::InvalidMessage {
+        channel,
+        reason: reason.into(),
     }
 }
 

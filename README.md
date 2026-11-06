@@ -91,12 +91,16 @@ produced:
 | `WhatsApp` caption | 1024 **bytes** | `Error::MessageTooLong` |
 | Telegram text | 4096 **UTF-16 units** | `Error::MessageTooLong` |
 | Telegram caption | 1024 **UTF-16 units** | `Error::MessageTooLong` |
+| Recipient id | 256 **bytes** (`MAX_RECIPIENT_BYTES`) | `Error::InvalidMessage` |
 | Matrix | none documented | — |
 
-Messages the provider cannot express (empty recipient, no text and no media,
-unsupported media kind, non-numeric Telegram ids, non-`mxc://` Matrix urls,
-edits) fail with `Error::InvalidMessage` instead of being sent as something the
-provider would reject.
+Every recipient id is validated before it is embedded in a provider request:
+the trimmed value must be printable and within `MAX_RECIPIENT_BYTES`, and each
+channel adds its own shape rule (`WhatsApp` E.164 digits, Telegram a signed
+integer chat id, Matrix a `!`-prefixed room id). Messages the provider cannot
+express (no text and no media, unsupported media kind, non-`mxc://` Matrix
+urls, edits) fail with `Error::InvalidMessage` instead of being sent as
+something the provider would reject.
 
 ## Matrix outbound client (`matrix-out`)
 
