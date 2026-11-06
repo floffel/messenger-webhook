@@ -6,10 +6,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(dead_code, unused_imports, unused_mut, unused_variables)]
 
+use std::collections::{BTreeSet, HashSet};
+
 use messenger_webhook::{
     signature, Attachment, AttachmentKind, Channel, DeliveryStatus, Error, Headers, IdempotencyKey,
     NormalizedMessage, OutboundMessage, ProviderMethod, ProviderPayload, Reaction, Registry,
-    RetryPolicy, Secret, MAX_BODY_BYTES, MAX_BODY_READ_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
+    RetryPolicy, Secret, MAX_BODY_BYTES, MAX_BODY_READ_BYTES, MAX_CHANNEL_NAME_BYTES,
+    MAX_IDEMPOTENCY_KEY_BYTES,
 };
 
 #[test]
@@ -18,11 +21,59 @@ fn channel_names_and_display() {
     assert_eq!(Channel::Telegram.as_str(), "telegram");
     assert_eq!(Channel::Matrix.as_str(), "matrix");
     assert_eq!(Channel::Other("signal".to_owned()).as_str(), "signal");
+    assert_eq!(
+        Channel::other("signal").unwrap(),
+        Channel::Other("signal".into())
+    );
+    assert_eq!(Channel::other("rss-feed").unwrap().as_str(), "rss-feed");
+    assert_eq!(MAX_CHANNEL_NAME_BYTES, 255);
 
     assert_eq!(Channel::WhatsApp.to_string(), "whatsapp");
     assert_eq!(Channel::Telegram.to_string(), "telegram");
     assert_eq!(Channel::Matrix.to_string(), "matrix");
     assert_eq!(Channel::Other("signal".to_owned()).to_string(), "signal");
+}
+
+#[test]
+fn channel_identity_follows_the_canonical_name() {
+    assert_eq!(Channel::Other("whatsapp".to_owned()), Channel::WhatsApp);
+    assert_eq!(Channel::Other("telegram".to_owned()), Channel::Telegram);
+    assert_eq!(Channel::Other("matrix".to_owned()), Channel::Matrix);
+
+    let mut hashed = HashSet::new();
+    hashed.insert(Channel::Other("whatsapp".to_owned()));
+    assert!(!hashed.insert(Channel::WhatsApp));
+
+    let sorted = BTreeSet::from([
+        Channel::Other("z-custom".to_owned()),
+        Channel::Telegram,
+        Channel::Other("whatsapp".to_owned()),
+        Channel::Matrix,
+        Channel::WhatsApp,
+    ]);
+    assert_eq!(
+        sorted
+            .into_iter()
+            .map(|channel| channel.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        vec!["matrix", "telegram", "whatsapp", "z-custom"]
+    );
+}
+
+#[test]
+fn custom_channel_names_are_bounded_and_unreserved() {
+    assert!(Channel::other("").is_err());
+    assert!(Channel::other("a".repeat(MAX_CHANNEL_NAME_BYTES)).is_ok());
+    assert!(Channel::other("a".repeat(MAX_CHANNEL_NAME_BYTES + 1)).is_err());
+    assert!(Channel::other("has space").is_err());
+    assert!(Channel::other("UPPER").is_err());
+    assert!(Channel::other("whatsapp").is_err());
+    assert!(Channel::other("telegram").is_err());
+    assert!(Channel::other("matrix").is_err());
+
+    for name in ["a", "rss-feed", "sms_v2"] {
+        assert_eq!(Channel::other(name).unwrap().as_str(), name);
+    }
 }
 
 #[test]
@@ -402,6 +453,9 @@ fn every_error_variant_renders_without_panicking() {
             unit: "UTF-16 units",
         },
         Error::InvalidIdempotencyKey {
+            reason: "empty".to_owned(),
+        },
+        Error::InvalidChannelName {
             reason: "empty".to_owned(),
         },
         Error::UnknownChannel(Channel::Other("signal".to_owned())),

@@ -156,6 +156,21 @@ pub enum Error {
         reason: String,
     },
 
+    /// A custom channel name is invalid.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, Error};
+    ///
+    /// let error = Channel::other("").unwrap_err();
+    /// assert!(matches!(error, Error::InvalidChannelName { .. }));
+    /// assert_eq!(error.to_string(), "invalid channel name: channel name is empty");
+    /// ```
+    #[error("invalid channel name: {reason}")]
+    InvalidChannelName {
+        /// Why the name was rejected.
+        reason: String,
+    },
+
     /// No adapter is registered for the requested channel.
     #[error("no adapter registered for channel {0}")]
     UnknownChannel(Channel),

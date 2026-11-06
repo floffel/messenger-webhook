@@ -118,7 +118,7 @@ pub use model::SYNTHETIC_ID_PREFIX;
 pub use model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, IdempotencyKey, NormalizedMessage,
     OutboundMessage, ProviderMethod, ProviderPayload, Reaction, RetryPolicy,
-    MAX_IDEMPOTENCY_KEY_BYTES,
+    MAX_CHANNEL_NAME_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
 };
 pub use registry::Registry;
 pub use rich::{SpanError, TextFormat, TextSpan};

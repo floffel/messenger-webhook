@@ -7,7 +7,9 @@
 use proptest::prelude::*;
 use serde_json::{Map, Value};
 
-use messenger_webhook::{Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage};
+use messenger_webhook::{
+    Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, MAX_CHANNEL_NAME_BYTES,
+};
 
 /// Arbitrary JSON of bounded depth, including wrong types in every position.
 fn arb_json() -> impl Strategy<Value = Value> {
@@ -105,6 +107,27 @@ proptest! {
             .collect();
         for adapter in adapters() {
             prop_assert!(adapter.verify(&headers, &body).is_err());
+        }
+    }
+
+    /// Custom channel construction accepts exactly the documented grammar:
+    /// lower-case ASCII letters, digits, `_`, `-`, non-empty, bounded, and not
+    /// reserved for a built-in channel.
+    #[test]
+    fn custom_channel_names_accept_exactly_the_documented_grammar(name in ".*") {
+        match Channel::other(name.clone()) {
+            Ok(channel) => {
+                prop_assert_eq!(channel.as_str(), name.as_str());
+                prop_assert!(!name.is_empty());
+                prop_assert!(name.len() <= MAX_CHANNEL_NAME_BYTES);
+                prop_assert!(name.bytes().all(|byte| matches!(
+                    byte,
+                    b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'
+                )));
+                prop_assert!(!matches!(name.as_str(), "whatsapp" | "telegram" | "matrix"));
+            }
+            Err(Error::InvalidChannelName { .. }) => {}
+            Err(other) => prop_assert!(false, "unexpected error: {other:?}"),
         }
     }
 
