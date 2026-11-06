@@ -102,7 +102,9 @@ pub use types::{
 // `MAX_TXN_ID_BYTES` and friends are declared in `types` and re-exported above.
 
 use crate::matrix_out::ordering::RoomGates;
-use crate::matrix_out::transport::{Body, BoxFuture, Method, Request, Response, TransportError};
+use crate::matrix_out::transport::{
+    Body, BoxFuture, Method, Request, Response, TransportError, TransportErrorKind,
+};
 use crate::Secret;
 
 /// How the client waits between attempts.
@@ -1491,6 +1493,9 @@ fn transport_failure(
     attempts: u32,
 ) -> OutboundError {
     let reason = error.to_string();
+    if error.kind == TransportErrorKind::TestHarness {
+        return OutboundError::TestHarness { reason };
+    }
     if error.kind.is_before_write() || (operation.is_repeatable() && txn.is_none()) {
         return OutboundError::Transport { attempts, reason };
     }

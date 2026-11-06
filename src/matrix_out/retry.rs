@@ -320,6 +320,7 @@ impl RetryPolicy {
                 self.retry_or_exhausted(attempt)
             }
             TransportErrorKind::Timeout | TransportErrorKind::Other => Verdict::Ambiguous,
+            TransportErrorKind::TestHarness => Verdict::Rejected,
         }
     }
 

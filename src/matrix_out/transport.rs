@@ -536,6 +536,9 @@ pub enum TransportErrorKind {
     /// The connection broke mid-flight, or the transport could not express the
     /// request. Treat as "may have been applied".
     Other,
+    /// A test transport received a request it was not scripted to answer. This
+    /// is a broken test, not a homeserver or network outcome.
+    TestHarness,
 }
 
 impl TransportErrorKind {
@@ -552,6 +555,7 @@ impl TransportErrorKind {
             Self::Connect => "connect",
             Self::Timeout => "timeout",
             Self::Other => "other",
+            Self::TestHarness => "test-harness",
         }
     }
 
@@ -566,6 +570,20 @@ impl TransportErrorKind {
     #[must_use]
     pub const fn is_before_write(self) -> bool {
         matches!(self, Self::Connect)
+    }
+
+    /// Whether this kind marks a test-wiring failure rather than a real HTTP
+    /// outcome.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::transport::TransportErrorKind;
+    ///
+    /// assert!(TransportErrorKind::TestHarness.is_test_harness());
+    /// assert!(!TransportErrorKind::Connect.is_test_harness());
+    /// ```
+    #[must_use]
+    pub const fn is_test_harness(self) -> bool {
+        matches!(self, Self::TestHarness)
     }
 }
 
@@ -713,9 +731,18 @@ mod tests {
             (TransportError::connect("c"), "connect", true),
             (TransportError::timeout("t"), "timeout", false),
             (TransportError::other("o"), "other", false),
+            (
+                TransportError {
+                    kind: TransportErrorKind::TestHarness,
+                    message: "not scripted".to_owned(),
+                },
+                "test-harness",
+                false,
+            ),
         ] {
             assert_eq!(error.kind.as_str(), kind);
             assert_eq!(error.kind.is_before_write(), before);
+            assert_eq!(error.kind.is_test_harness(), kind == "test-harness");
             assert_eq!(error.kind, error.kind.clone());
             assert!(error.to_string().contains(kind));
             assert!(error.to_string().contains(&error.message));

@@ -39,7 +39,7 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::matrix_out::transport::{
-    Body, BoxFuture, Method, Request, Response, Transport, TransportError,
+    Body, BoxFuture, Method, Request, Response, Transport, TransportError, TransportErrorKind,
 };
 use crate::matrix_out::Sleeper;
 
@@ -310,13 +310,16 @@ impl Transport for StubTransport {
                     body => body.as_bytes().to_vec(),
                 },
             };
+            let method = recorded.method;
+            let url = recorded.url.clone();
             self.lock_recorded().push(recorded);
             match self.lock_script().pop_front() {
                 Some(Outcome::Response(response)) => Ok(response),
                 Some(Outcome::Failure(error)) => Err(error),
-                None => Err(TransportError::other(
-                    "stub transport ran out of scripted responses",
-                )),
+                None => Err(TransportError {
+                    kind: TransportErrorKind::TestHarness,
+                    message: format!("{method} {url} ran out of scripted responses"),
+                }),
             }
         })
     }
@@ -442,8 +445,9 @@ mod tests {
         let second = call(&stub).expect_err("second");
         assert_eq!(second.kind, TransportErrorKind::Connect);
         let third = call(&stub).expect_err("past the end of the script");
-        assert_eq!(third.kind, TransportErrorKind::Other);
+        assert_eq!(third.kind, TransportErrorKind::TestHarness);
         assert!(third.message.contains("ran out"));
+        assert!(third.message.contains("PUT https://example.org/x"));
         assert_eq!(stub.remaining(), 0);
         assert_eq!(stub.call_count(), 3);
     }

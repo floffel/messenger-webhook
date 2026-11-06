@@ -136,6 +136,7 @@ src/matrix_out/transport.rs:impl TransportError:fn other
 src/matrix_out/transport.rs:impl TransportError:fn timeout
 src/matrix_out/transport.rs:impl TransportErrorKind:fn as_str
 src/matrix_out/transport.rs:impl TransportErrorKind:fn is_before_write
+src/matrix_out/transport.rs:impl TransportErrorKind:fn is_test_harness
 src/matrix_out/transport.rs:struct Request
 src/matrix_out/transport.rs:struct Response
 src/matrix_out/transport.rs:struct TransportError
