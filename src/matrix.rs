@@ -129,11 +129,11 @@ impl Adapter for MatrixAdapter {
             Some(transaction) => transaction.iter().collect(),
             None => vec![&root],
         };
-        Ok(events
+        events
             .into_iter()
             .filter(|entry| is_event(entry))
             .map(normalize_event)
-            .collect())
+            .collect()
     }
 
     fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
@@ -274,9 +274,9 @@ fn apply_relations(content: &mut serde_json::Map<String, Value>, message: &Norma
 }
 
 /// Maps one Matrix event of any type.
-fn normalize_event(event: &Value) -> NormalizedMessage {
+fn normalize_event(event: &Value) -> Result<NormalizedMessage> {
     let event_type = json::string(event, "type").unwrap_or("unknown");
-    let external_id = id::identify(event, "event_id", &Channel::Matrix, "event");
+    let external_id = id::identify(event, "event_id", &Channel::Matrix, "event")?;
     let conversation_id = json::id(event, "room_id").unwrap_or_default();
     let sender_id = json::id(event, "sender").unwrap_or_default();
     let content = json::child(event, "content")
@@ -324,7 +324,7 @@ fn normalize_event(event: &Value) -> NormalizedMessage {
         _ => {}
     }
 
-    normalized
+    Ok(normalized)
 }
 
 /// Maps the `content` of an `m.room.message` (or `m.sticker`) event.
