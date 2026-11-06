@@ -77,6 +77,11 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- **`Secret` no longer claims all comparisons are constant time.** The type's
+  docs now state what is enforced: `Debug` is redacted and `Secret::ct_eq` is
+  the constant-time comparison path, while `Secret::expose_secret` returns the
+  raw `&str` as an explicit escape hatch for provider integration points.
+  Closes #110.
 - **Pre-write request validation is terminal, not ambiguous.** `ReqwestTransport`
   now reports an HTTP header it cannot express as an invalid request before a
   connection is used, and the retry classifier rejects it instead of treating a

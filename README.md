@@ -330,9 +330,12 @@ the query is parsed.
   event, so it is not covered by `Adapter::verify`; `meta_subscription_challenge`
   answers it instead — token compared in constant time, challenge echoed back
   bounded and unmodified.
-- **Constant time.** HMAC digests and provider tokens are compared with
-  `subtle`; nothing short-circuits. `Secret`'s `Debug` is redacted, so a
-  `{:?}` of an adapter never prints a credential.
+- **Constant time on the safe path.** HMAC digests and provider tokens are
+  compared with `subtle`; nothing short-circuits. Use `Secret::ct_eq` for
+  authentication comparisons. `Secret::expose_secret` returns the raw `&str`
+  for provider integration points, so comparisons on that borrow are the
+  caller's responsibility. `Secret`'s `Debug` is redacted, so a `{:?}` of an
+  adapter never prints a credential.
 - **Secrets are wiped in memory.** `Secret` keeps its bytes in a
   `zeroize::Zeroizing<String>`, and its `Clone` is a deep copy with its own
   zeroizing buffer, so the live secret is zeroed when it is dropped and a
