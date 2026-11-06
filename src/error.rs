@@ -121,6 +121,10 @@ pub enum Error {
     /// No adapter is registered for the requested channel.
     #[error("no adapter registered for channel {0}")]
     UnknownChannel(Channel),
+
+    /// A channel already has an adapter in a [`crate::Registry`].
+    #[error("adapter already registered for channel {0}")]
+    ChannelAlreadyRegistered(Channel),
 }
 
 impl Error {

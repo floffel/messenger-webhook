@@ -47,7 +47,9 @@ impl Registry {
     /// Registers `adapter` under its channel and returns `self`, so calls chain.
     ///
     /// Registering a second adapter for the same channel replaces the first;
-    /// that keeps configuration code (defaults, then overrides) simple.
+    /// that keeps configuration code (defaults, then overrides) simple. Use
+    /// [`Registry::try_register`] when a duplicate registration should be an
+    /// error instead.
     ///
     /// ```
     /// # #[cfg(all(feature = "whatsapp", feature = "telegram"))]
@@ -65,6 +67,37 @@ impl Registry {
     pub fn register<A: Adapter + 'static>(&mut self, adapter: A) -> &mut Self {
         self.adapters.insert(adapter.channel(), Box::new(adapter));
         self
+    }
+
+    /// Registers `adapter` unless its channel already has an adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ChannelAlreadyRegistered`] when `adapter`'s channel is
+    /// already present. The existing adapter is kept unchanged.
+    ///
+    /// ```
+    /// # #[cfg(feature = "matrix")]
+    /// # fn demo() -> Result<(), messenger_webhook::Error> {
+    /// use messenger_webhook::{Channel, Error, MatrixAdapter, Registry};
+    ///
+    /// let mut registry = Registry::new();
+    /// registry.try_register(MatrixAdapter::new("token"))?;
+    ///
+    /// let error = registry
+    ///     .try_register(MatrixAdapter::new("other-token"))
+    ///     .unwrap_err();
+    /// assert!(matches!(error, Error::ChannelAlreadyRegistered(Channel::Matrix)));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn try_register<A: Adapter + 'static>(&mut self, adapter: A) -> Result<()> {
+        let channel = adapter.channel();
+        if self.adapters.contains_key(&channel) {
+            return Err(Error::ChannelAlreadyRegistered(channel));
+        }
+        self.adapters.insert(channel, Box::new(adapter));
+        Ok(())
     }
 
     /// Looks the adapter for `channel` up.
@@ -240,15 +273,15 @@ impl Registry {
 impl fmt::Debug for Registry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Registry")
-            .field("channels", &DebugChannels(&self.adapters))
+            .field("adapters", &DebugAdapters(self))
             .finish()
     }
 }
 
-struct DebugChannels<'a>(&'a BTreeMap<Channel, Box<dyn Adapter>>);
+struct DebugAdapters<'a>(&'a Registry);
 
-impl fmt::Debug for DebugChannels<'_> {
+impl fmt::Debug for DebugAdapters<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.0.keys()).finish()
+        f.debug_map().entries(self.0.adapters.iter()).finish()
     }
 }

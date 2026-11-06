@@ -299,6 +299,7 @@ fn every_error_variant_renders_without_panicking() {
             reason: "empty".to_owned(),
         },
         Error::UnknownChannel(Channel::Other("signal".to_owned())),
+        Error::ChannelAlreadyRegistered(Channel::Telegram),
     ];
     for error in errors {
         let rendered = error.to_string();
@@ -325,7 +326,7 @@ fn registry_accessors() {
     assert_eq!(registry.len(), 0);
     assert!(!registry.contains(&Channel::Matrix));
     assert_eq!(registry.channels().len(), 0);
-    assert_eq!(format!("{registry:?}"), "Registry { channels: [] }");
+    assert_eq!(format!("{registry:?}"), "Registry { adapters: {} }");
 
     #[cfg(feature = "matrix")]
     {
@@ -333,5 +334,13 @@ fn registry_accessors() {
         assert!(registry.contains(&Channel::Matrix));
         assert_eq!(registry.len(), 1);
         assert!(!format!("{registry:?}").contains("t\""));
+
+        let error = registry
+            .try_register(messenger_webhook::MatrixAdapter::new("u"))
+            .expect_err("matrix is already registered");
+        assert!(matches!(
+            error,
+            Error::ChannelAlreadyRegistered(Channel::Matrix)
+        ));
     }
 }
