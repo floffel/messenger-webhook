@@ -307,6 +307,9 @@ impl AttachmentKind {
 ///
 /// Providers fill different subsets: `WhatsApp` reports an id and mime type but
 /// no size, Telegram reports size and dimensions but no mime type for photos.
+/// Location and contact cards use the typed fields below; providers with other
+/// card shapes still keep their original object in
+/// [`NormalizedMessage::raw`].
 ///
 /// ```
 /// use messenger_webhook::{Attachment, AttachmentKind};
@@ -316,6 +319,11 @@ impl AttachmentKind {
 /// photo.size_bytes = Some(48_213);
 /// assert_eq!(photo.kind, AttachmentKind::Image);
 /// assert_eq!(photo.filename, None);
+///
+/// let mut location = Attachment::new(AttachmentKind::Location);
+/// location.latitude = serde_json::Number::from_f64(48.7);
+/// location.longitude = serde_json::Number::from_f64(11.4);
+/// assert_eq!(location.latitude.as_ref().and_then(serde_json::Number::as_f64), Some(48.7));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Attachment {
@@ -339,6 +347,16 @@ pub struct Attachment {
     pub height: Option<u32>,
     /// Duration in seconds, for audio and video.
     pub duration_seconds: Option<u32>,
+    /// Latitude of a location attachment, when the provider reports one.
+    pub latitude: Option<serde_json::Number>,
+    /// Longitude of a location attachment, when the provider reports one.
+    pub longitude: Option<serde_json::Number>,
+    /// Phone number of a contact attachment, when the provider reports one.
+    pub phone_number: Option<String>,
+    /// First name of a contact attachment, when the provider reports one.
+    pub first_name: Option<String>,
+    /// Last name of a contact attachment, when the provider reports one.
+    pub last_name: Option<String>,
 }
 
 impl Attachment {

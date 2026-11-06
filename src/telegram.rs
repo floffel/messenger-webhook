@@ -187,44 +187,7 @@ impl Adapter for TelegramAdapter {
 
         let text = message.text.as_deref().unwrap_or_default();
         if let Some(attachment) = message.first_attachment() {
-            let field = match attachment.kind {
-                AttachmentKind::Image => "photo",
-                AttachmentKind::Video => "video",
-                AttachmentKind::Audio => "audio",
-                AttachmentKind::Voice => "voice",
-                AttachmentKind::Document => "document",
-                AttachmentKind::Sticker => "sticker",
-                ref other => {
-                    return Err(Error::InvalidMessage {
-                        channel: Channel::Telegram,
-                        reason: format!(
-                            "Telegram cannot send {} attachments; use a document",
-                            other.as_str()
-                        ),
-                    });
-                }
-            };
-            let reference = attachment
-                .id
-                .clone()
-                .or_else(|| attachment.url.clone())
-                .ok_or_else(|| Error::InvalidMessage {
-                    channel: Channel::Telegram,
-                    reason: "attachment has neither a file id nor a url".to_owned(),
-                })?;
-            if !text.is_empty() {
-                let length = utf16_len(text);
-                if length > MAX_CAPTION_UTF16 {
-                    return Err(Error::MessageTooLong {
-                        channel: Channel::Telegram,
-                        limit: MAX_CAPTION_UTF16,
-                        actual: length,
-                        unit: crate::LimitUnit::Utf16Units,
-                    });
-                }
-                body.insert("caption".to_owned(), Value::String(text.to_owned()));
-            }
-            body.insert(field.to_owned(), Value::String(reference));
+            telegram_attachment_fields(&mut body, attachment, text)?;
         } else {
             if text.is_empty() {
                 return Err(Error::InvalidMessage {
@@ -276,6 +239,154 @@ fn telegram_id(text: &str, field: &str) -> Result<i64> {
             channel: Channel::Telegram,
             reason: format!("{field} {text:?} is not an integer id"),
         })
+}
+
+/// Maps a media attachment onto the top-level field Telegram accepts.
+fn telegram_media_field(kind: &AttachmentKind) -> Result<&'static str> {
+    match kind {
+        AttachmentKind::Image => Ok("photo"),
+        AttachmentKind::Video => Ok("video"),
+        AttachmentKind::Audio => Ok("audio"),
+        AttachmentKind::Voice => Ok("voice"),
+        AttachmentKind::Document => Ok("document"),
+        AttachmentKind::Sticker => Ok("sticker"),
+        other => Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: format!(
+                "Telegram cannot send {} attachments; use a document",
+                other.as_str()
+            ),
+        }),
+    }
+}
+
+/// Adds the fields Telegram expects for one outbound attachment.
+fn telegram_attachment_fields(
+    body: &mut serde_json::Map<String, Value>,
+    attachment: &Attachment,
+    text: &str,
+) -> Result<()> {
+    match attachment.kind {
+        AttachmentKind::Location => {
+            if !text.is_empty() {
+                return Err(Error::InvalidMessage {
+                    channel: Channel::Telegram,
+                    reason: "Telegram location attachments cannot carry a caption".to_owned(),
+                });
+            }
+            let (latitude, longitude) = telegram_location_fields(attachment)?;
+            body.insert("latitude".to_owned(), Value::Number(latitude));
+            body.insert("longitude".to_owned(), Value::Number(longitude));
+        }
+        AttachmentKind::Contact => {
+            if !text.is_empty() {
+                return Err(Error::InvalidMessage {
+                    channel: Channel::Telegram,
+                    reason: "Telegram contact attachments cannot carry a caption".to_owned(),
+                });
+            }
+            telegram_contact_fields(body, attachment)?;
+        }
+        _ => {
+            let field = telegram_media_field(&attachment.kind)?;
+            if !text.is_empty() {
+                let length = utf16_len(text);
+                if length > MAX_CAPTION_UTF16 {
+                    return Err(Error::MessageTooLong {
+                        channel: Channel::Telegram,
+                        limit: MAX_CAPTION_UTF16,
+                        actual: length,
+                        unit: crate::LimitUnit::Utf16Units,
+                    });
+                }
+                body.insert("caption".to_owned(), Value::String(text.to_owned()));
+            }
+            let reference = attachment
+                .id
+                .clone()
+                .or_else(|| attachment.url.clone())
+                .ok_or_else(|| Error::InvalidMessage {
+                    channel: Channel::Telegram,
+                    reason: "attachment has neither a file id nor a url".to_owned(),
+                })?;
+            body.insert(field.to_owned(), Value::String(reference));
+        }
+    }
+    Ok(())
+}
+
+/// Builds the `latitude` and `longitude` fields Telegram accepts for
+/// `sendLocation`.
+fn telegram_location_fields(
+    attachment: &Attachment,
+) -> Result<(serde_json::Number, serde_json::Number)> {
+    let latitude = attachment
+        .latitude
+        .clone()
+        .ok_or_else(|| Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "location attachment has no latitude".to_owned(),
+        })?;
+    let longitude = attachment
+        .longitude
+        .clone()
+        .ok_or_else(|| Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "location attachment has no longitude".to_owned(),
+        })?;
+    let latitude_value = latitude.as_f64().ok_or_else(|| Error::InvalidMessage {
+        channel: Channel::Telegram,
+        reason: "location latitude is not a finite number".to_owned(),
+    })?;
+    if !(-90.0..=90.0).contains(&latitude_value) {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "location latitude must be between -90 and 90".to_owned(),
+        });
+    }
+    let longitude_value = longitude.as_f64().ok_or_else(|| Error::InvalidMessage {
+        channel: Channel::Telegram,
+        reason: "location longitude is not a finite number".to_owned(),
+    })?;
+    if !(-180.0..=180.0).contains(&longitude_value) {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "location longitude must be between -180 and 180".to_owned(),
+        });
+    }
+    Ok((latitude, longitude))
+}
+
+/// Adds the fields Telegram accepts for `sendContact`.
+fn telegram_contact_fields(
+    body: &mut serde_json::Map<String, Value>,
+    attachment: &Attachment,
+) -> Result<()> {
+    let phone_number = attachment
+        .phone_number
+        .as_ref()
+        .ok_or_else(|| Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "contact attachment has no phone number".to_owned(),
+        })?;
+    let first_name = attachment
+        .first_name
+        .as_ref()
+        .ok_or_else(|| Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "contact attachment has no first name".to_owned(),
+        })?;
+    let mut contact = serde_json::Map::new();
+    contact.insert(
+        "phone_number".to_owned(),
+        Value::String(phone_number.clone()),
+    );
+    contact.insert("first_name".to_owned(), Value::String(first_name.clone()));
+    if let Some(last_name) = &attachment.last_name {
+        contact.insert("last_name".to_owned(), Value::String(last_name.clone()));
+    }
+    body.extend(contact);
+    Ok(())
 }
 
 /// Maps one `Message` object.
@@ -392,11 +503,16 @@ fn attachments(message: &Value) -> Vec<Attachment> {
     if let Some(location) = json::child(message, "location") {
         let mut attachment = Attachment::new(AttachmentKind::Location);
         attachment.caption = json::string(location, "name").map(str::to_owned);
+        attachment.latitude = json::number(location, "latitude");
+        attachment.longitude = json::number(location, "longitude");
         out.push(attachment);
     }
 
     if let Some(contact) = json::child(message, "contact") {
         let mut attachment = Attachment::new(AttachmentKind::Contact);
+        attachment.phone_number = json::string(contact, "phone_number").map(str::to_owned);
+        attachment.first_name = json::string(contact, "first_name").map(str::to_owned);
+        attachment.last_name = json::string(contact, "last_name").map(str::to_owned);
         attachment.caption = json::string(contact, "first_name")
             .or_else(|| json::string(contact, "title"))
             .map(str::to_owned);
