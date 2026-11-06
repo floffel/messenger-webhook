@@ -225,7 +225,14 @@ impl fmt::Display for TxnId {
 /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MxcUri(String);
+pub struct MxcUri {
+    /// The URI exactly as it arrived, including the `mxc://` scheme.
+    full: String,
+    /// The validated server name between `mxc://` and the first `/`.
+    server: Box<str>,
+    /// The validated media id after the first `/`.
+    media: Box<str>,
+}
 
 /// Longest `mxc://` URI the client accepts, in bytes.
 ///
@@ -285,7 +292,13 @@ impl MxcUri {
         if media.is_empty() {
             return Err(invalid("the media id is empty"));
         }
-        Ok(Self(raw))
+        let server = server.to_owned().into_boxed_str();
+        let media = media.to_owned().into_boxed_str();
+        Ok(Self {
+            full: raw,
+            server,
+            media,
+        })
     }
 
     /// The URI as the homeserver spells it.
@@ -298,7 +311,7 @@ impl MxcUri {
     /// ```
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.full
     }
 
     /// The server name between `mxc://` and the media id.
@@ -311,8 +324,7 @@ impl MxcUri {
     /// ```
     #[must_use]
     pub fn server_name(&self) -> &str {
-        let rest = self.0.trim_start_matches("mxc://");
-        rest.split_once('/').map_or(rest, |(server, _)| server)
+        &self.server
     }
 
     /// The media id after the server name.
@@ -325,16 +337,13 @@ impl MxcUri {
     /// ```
     #[must_use]
     pub fn media_id(&self) -> &str {
-        self.0
-            .trim_start_matches("mxc://")
-            .split_once('/')
-            .map_or("", |(_, media)| media)
+        &self.media
     }
 }
 
 impl fmt::Display for MxcUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.full)
     }
 }
 
@@ -685,6 +694,12 @@ mod tests {
         let uri = MxcUri::parse("mxc://localhost:8008/a_b").expect("valid");
         assert_eq!(uri.server_name(), "localhost:8008");
         assert_eq!(uri.media_id(), "a_b");
+
+        // A prefix-like server name must not make the stored split disagree
+        // with the accessors: the server is `mxc:` and the media id is `/x`.
+        let uri = MxcUri::parse("mxc://mxc://x").expect("valid");
+        assert_eq!(uri.server_name(), "mxc:");
+        assert_eq!(uri.media_id(), "/x");
     }
 
     #[test]

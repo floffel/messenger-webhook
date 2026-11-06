@@ -69,6 +69,13 @@ carry a `!` in the conventional-commit subject.
   body-sized allocation, and the private helper rejects input over
   `MAX_BODY_BYTES` if it is ever reached outside the adapter's existing size
   gate.
+- **`MxcUri` now hands out the server and media id it validated.** `parse`
+  split the URI with `strip_prefix("mxc://")` but `server_name` and `media_id`
+  re-derived the split with `trim_start_matches("mxc://")`, which strips the
+  prefix repeatedly. An accepted value such as `mxc://mxc://x` therefore
+  reported `server_name() == "x"` and an empty `media_id()`, contradicting the
+  type's own invariant. The parsed split is now stored on the value and returned
+  directly, so the accessors cannot disagree with validation.
 
 ## [0.3.3] - 2026-10-27
 
