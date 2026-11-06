@@ -26,13 +26,13 @@ use crate::matrix_out::error::OutboundError;
 /// ```
 pub const MAX_TXN_ID_BYTES: usize = 255;
 
-/// Largest `content` the client will send, in bytes.
+/// The serialised `content` ceiling the client checks, in bytes.
 ///
 /// The specification's *Size limits* section: "The complete event MUST NOT be
 /// larger than 65536 bytes". The content is a strict part of that event, so a
-/// content over this bound can never be accepted — the client rejects it before
-/// the request exists. The homeserver still enforces the exact bound, because
-/// the envelope adds the sender, room, signatures and metadata on top.
+/// content at or over this bound can never be accepted — the client rejects it
+/// before the request exists. The homeserver still enforces the exact bound,
+/// because the envelope adds the sender, room, signatures and metadata on top.
 ///
 /// ```
 /// use messenger_webhook::matrix_out::MAX_CONTENT_BYTES;
