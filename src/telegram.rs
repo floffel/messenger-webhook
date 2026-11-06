@@ -396,14 +396,23 @@ fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
         .and_then(|user| json::id(user, "id"))
         .unwrap_or_else(|| conversation_id.clone());
 
-    let emoji = json::array(reaction, "new_reaction")
+    let old_reactions = reaction_keys(json::array(reaction, "old_reaction"));
+    let new_reactions = reaction_keys(json::array(reaction, "new_reaction"));
+    let emoji = new_reactions.first().cloned().unwrap_or_default();
+    let removed = matches!(
+        json::child(reaction, "new_reaction"),
+        Some(Value::Array(entries)) if entries.is_empty()
+    );
+    let added_reactions = new_reactions
         .iter()
-        .find_map(|entry| {
-            json::string(entry, "emoji")
-                .or_else(|| json::string(entry, "custom_emoji_id"))
-                .map(str::to_owned)
-        })
-        .unwrap_or_default();
+        .filter(|reaction| !old_reactions.contains(reaction))
+        .cloned()
+        .collect();
+    let removed_reactions = old_reactions
+        .iter()
+        .filter(|reaction| !new_reactions.contains(reaction))
+        .cloned()
+        .collect();
 
     let mut normalized = NormalizedMessage::carrier(
         Channel::Telegram,
@@ -414,12 +423,26 @@ fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
     normalized.timestamp = json::integer(reaction, "date");
     normalized.reaction = Some(Reaction {
         message_id,
-        removed: emoji.is_empty(),
         emoji,
+        removed,
+        added_reactions,
+        removed_reactions,
     });
     normalized.provider_type = Some("message_reaction".to_owned());
     normalized.raw = Some(reaction.clone());
     Ok(normalized)
+}
+
+/// Reads Telegram reaction entries into their emoji or custom-emoji keys.
+fn reaction_keys(entries: &[Value]) -> Vec<String> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            json::string(entry, "emoji")
+                .or_else(|| json::string(entry, "custom_emoji_id"))
+                .map(str::to_owned)
+        })
+        .collect()
 }
 
 /// Collects the formatting Telegram marks on a message.

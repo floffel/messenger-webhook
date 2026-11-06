@@ -365,17 +365,31 @@ impl Default for AttachmentKind {
 /// ```
 /// use messenger_webhook::Reaction;
 ///
-/// let reaction = Reaction { message_id: "wamid.1".into(), emoji: "👍".into(), removed: false };
+/// let reaction = Reaction {
+///     message_id: "wamid.1".into(),
+///     emoji: "👍".into(),
+///     removed: false,
+///     added_reactions: vec!["👍".into()],
+///     removed_reactions: Vec::new(),
+/// };
 /// assert!(!reaction.removed);
+/// assert_eq!(reaction.added_reactions, ["👍"]);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reaction {
     /// External id of the message being reacted to.
     pub message_id: String,
-    /// The emoji, empty when the reaction was removed.
+    /// The first current reaction key (emoji or custom emoji id), empty when
+    /// none remains or none could be parsed.
     pub emoji: String,
-    /// Whether this event removes an earlier reaction.
+    /// Whether this event leaves no reaction on the message.
     pub removed: bool,
+    /// Reaction keys (emoji or custom emoji id) present in the update but not
+    /// in the prior state.
+    pub added_reactions: Vec<String>,
+    /// Reaction keys (emoji or custom emoji id) present in the prior state but
+    /// not in the update.
+    pub removed_reactions: Vec<String>,
 }
 
 /// Delivery state of an outbound message, as reported back by the provider.

@@ -83,6 +83,12 @@ carry a `!` in the conventional-commit subject.
   deep copy that owns its own zeroizing buffer, so every value wipes its
   allocation on drop. `expose_secret` still returns a `&str` borrow, but that
   borrow cannot outlive the value that now owns a wiping buffer. Closes #108.
+- **Telegram reaction updates keep the whole state change.** `Reaction` now
+  carries `added_reactions` and `removed_reactions`, and Telegram's
+  `message_reaction` normalisation fills them from `old_reaction` and
+  `new_reaction` instead of keeping only the first emoji. `removed` now comes
+  from an empty `new_reaction` set, so an unparseable entry is no longer
+  mistaken for a removal. Closes #125.
 - **Formatting spans stay tied to their text.** `NormalizedMessage::text` and
   `NormalizedMessage::spans` are no longer independent public fields. The
   fields are now private behind checked accessors
@@ -147,6 +153,11 @@ carry a `!` in the conventional-commit subject.
 
 ### Breaking
 
+- **`Reaction` carries the complete state change.** The public struct gained
+  `added_reactions` and `removed_reactions`, so callers that build `Reaction`
+  with a field literal need to add the two lists. This is the API shape that
+  lets Telegram report every emoji added or removed by a `message_reaction`
+  update instead of only the first current emoji. Closes #125.
 - **`ProviderPayload` constructors enforce the payload contract.**
   `ProviderPayload::new` and `ProviderPayload::with_retry` now return `Result`,
   take a typed `ProviderMethod`, require `application/json`, reject non-object
