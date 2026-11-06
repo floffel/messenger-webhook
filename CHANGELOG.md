@@ -36,6 +36,7 @@ carry a `!` in the conventional-commit subject.
   `MediaSendError::Send` carrying both. `send_uploaded_media_with_txn` repeats
   only that leg, so a retry after an ambiguous media event no longer re-uploads
   the bytes or mints a second message. Closes #60.
+- **A Telegram update without a usable `chat.id` is rejected instead of normalised.** Telegram routes every inbound message by its chat, so a missing, null, empty, whitespace or non-object `chat` is now an `Error::Payload` rather than an event whose `conversation_id` is the empty string. Previously the webhook was acked and the defect only surfaced later when the caller tried to reply, past the delivery point of no return. Closes #124.
 - `OutboundError::DecodeAfterWrite` now marks a `2xx` whose write response body cannot be decoded as ambiguous and carries the transaction id when there is one; unreadable read responses remain terminal `DecodeRead`. Closes #48.
 
 ### Changed
