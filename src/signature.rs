@@ -41,8 +41,8 @@ const DIGEST_LEN: usize = 32;
 ///
 /// Returns [`Error::MissingSecret`] when `secret` is empty: HMAC accepts a
 /// zero-length key, so signing with it would produce a value anyone can forge.
-/// Returns [`Error::BadSignature`] if the HMAC construction rejects the key,
-/// which cannot happen for HMAC-SHA256 and would still fail closed.
+/// Returns [`Error::Hmac`] if the HMAC construction rejects the key, which
+/// cannot happen for HMAC-SHA256 and would still fail closed.
 pub fn meta_signature(secret: &Secret, body: &[u8]) -> Result<String> {
     let digest = hmac_sha256(secret, body)?;
     Ok(format!("{META_SIGNATURE_PREFIX}{}", encode_hex(&digest)))
@@ -74,7 +74,9 @@ pub fn meta_signature(secret: &Secret, body: &[u8]) -> Result<String> {
 /// letting an attacker sign arbitrary payloads.
 /// Returns [`Error::MalformedVerificationHeader`] when the header is not
 /// `sha256=` followed by 64 hex digits, and [`Error::BadSignature`] when the
-/// digest does not match `body`.
+/// digest does not match `body`. Returns [`Error::Hmac`] if the HMAC
+/// construction rejects the key, which cannot happen for HMAC-SHA256 and would
+/// still fail closed.
 pub fn verify_meta(secret: &Secret, header: &str, body: &[u8]) -> Result<()> {
     let actual = hmac_sha256(secret, body)?;
     let hex = header.strip_prefix(META_SIGNATURE_PREFIX).ok_or_else(|| {
@@ -103,16 +105,21 @@ pub(crate) fn hmac_sha256(secret: &Secret, message: &[u8]) -> Result<[u8; DIGEST
             channel: Channel::WhatsApp,
         });
     }
-    hmac_sha256_bytes(secret.expose_secret().as_bytes(), message).ok_or(Error::BadSignature {
-        channel: Channel::WhatsApp,
-    })
+    hmac_sha256_bytes(secret.expose_secret().as_bytes(), message).map_err(Error::from)
 }
 
 /// HMAC-SHA256 over raw key bytes.
-fn hmac_sha256_bytes(key: &[u8], message: &[u8]) -> Option<[u8; DIGEST_LEN]> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).ok()?;
+///
+/// Construction failure is surfaced as [`Error::Hmac`] rather than being
+/// folded into [`Error::BadSignature`], so an internal fault stays
+/// distinguishable from a forged request.
+fn hmac_sha256_bytes(
+    key: &[u8],
+    message: &[u8],
+) -> std::result::Result<[u8; DIGEST_LEN], hmac::digest::InvalidLength> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key)?;
     mac.update(message);
-    mac.finalize().into_bytes().as_slice().try_into().ok()
+    Ok(mac.finalize().into_bytes().into())
 }
 
 /// Lower-case hex encoding of a digest.
@@ -176,7 +183,7 @@ mod tests {
 
         // HMAC itself accepts the empty key; the guard above is what keeps it
         // out of the crate-facing primitive.
-        assert!(hmac_sha256_bytes(b"", b"{}").is_some());
+        assert!(hmac_sha256_bytes(b"", b"{}").is_ok());
 
         let digest = hmac_sha256(&Secret::new("x"), b"{}").expect("one-byte key hashes");
         assert_eq!(digest, hmac_sha256_bytes(b"x", b"{}").expect("raw hmac"));

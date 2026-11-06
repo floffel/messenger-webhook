@@ -285,6 +285,9 @@ fn every_error_variant_renders_without_panicking() {
         Error::BadSignature {
             channel: Channel::WhatsApp,
         },
+        Error::Hmac {
+            source: hmac::digest::InvalidLength,
+        },
         Error::InvalidMessage {
             channel: Channel::Matrix,
             reason: "no text".to_owned(),
@@ -307,6 +310,16 @@ fn every_error_variant_renders_without_panicking() {
         assert!(!error.is_retryable(), "every error here is terminal");
         assert!(format!("{error:?}").contains(char::is_alphabetic));
     }
+}
+
+#[test]
+fn hmac_construction_error_keeps_its_source_chain() {
+    let error = Error::Hmac {
+        source: hmac::digest::InvalidLength,
+    };
+
+    assert_eq!(error.to_string(), "could not construct HMAC-SHA256");
+    assert!(std::error::Error::source(&error).is_some());
 }
 
 #[test]
