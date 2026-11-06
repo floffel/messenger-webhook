@@ -49,9 +49,11 @@ tokio = { version = "1", default-features = false, features = [
 # place this crate reads a query string.
 form_urlencoded = { version = "1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
-# `char::is_control` does not catch format characters such as U+200B, which a
-# recipient id must not carry either. The general category is the exact tool
-# for "is this a character a reader would see"; pure data table, no code.
+# A provider id of " " or U+200B names nothing, and `char::is_control`
+# misses format characters such as U+200B either way: the general
+# category is the tool that tells a real id from a placeholder.
+# `char::is_whitespace` alone cannot (`Cf` code points are not
+# whitespace). Pure data table, no code, `no_std`, Apache-2.0.
 unicode-general-category = "1.1.0"
 
 [dev-dependencies]

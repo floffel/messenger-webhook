@@ -194,6 +194,14 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- The empty-id boundary was checked on one side only: `json::id` rejected `""`
+  but accepted any other non-empty string, so an id of `" "` or `"\u{200b}"` —
+  placeholders providers do emit for absent ids — became an `external_id`
+  verbatim, identical for every such event. The ledger then dropped every event
+  but the first, the exact failure synthesis exists to prevent. A string id is
+  now returned only when it carries at least one graphic character (the Unicode
+  general category decides, so zero-width format characters fail closed too);
+  otherwise the id is synthesised. Numbers are unaffected: `0` stays a real id.
 - `signature::verify_meta` and `signature::meta_signature` fail closed on an
   empty secret instead of verifying with a zero-length HMAC key. HMAC accepts
   `""` as a key, so an unset app secret previously accepted
