@@ -84,10 +84,12 @@ fn json_errors_preserve_source_category_and_position() {
 
 #[test]
 fn body_size_is_checked_before_hashing() {
-    let at_limit = vec![b' '; MAX_BODY_BYTES];
-    let over_limit = vec![b' '; MAX_BODY_BYTES + 1];
-
     for adapter in all_adapters() {
+        // The provider's own ceiling, reported by the adapter.
+        let limit = adapter.max_body_bytes();
+        let at_limit = vec![b' '; limit];
+        let over_limit = vec![b' '; limit + 1];
+
         // At the limit: the size gate passes, the JSON gate rejects.
         assert!(matches!(adapter.adapt(&at_limit), Err(Error::Json { .. })));
         assert!(matches!(
@@ -95,19 +97,41 @@ fn body_size_is_checked_before_hashing() {
             Err(Error::MissingVerificationHeader { .. })
         ));
 
-        // One byte over: rejected before any header or hash handling.
+        // One byte over the provider's ceiling: rejected before any header or
+        // hash handling.
         assert!(matches!(
             adapter.adapt(&over_limit),
             Err(Error::BodyTooLarge {
-                limit: MAX_BODY_BYTES,
+                limit: reported,
                 actual,
-            }) if actual == MAX_BODY_BYTES + 1
+            }) if reported == limit && actual == limit + 1
         ));
         assert!(matches!(
             adapter.verify(&Headers::new(), &over_limit),
-            Err(Error::BodyTooLarge { .. })
+            Err(Error::BodyTooLarge { limit: reported, .. }) if reported == limit
         ));
     }
+}
+
+#[test]
+#[cfg(feature = "whatsapp")]
+fn whatsapp_body_ceiling_is_three_mebibytes() {
+    use messenger_webhook::whatsapp::MAX_WEBHOOK_BODY_BYTES;
+    assert_eq!(MAX_WEBHOOK_BODY_BYTES, 3 * 1024 * 1024);
+}
+
+#[test]
+#[cfg(feature = "telegram")]
+fn telegram_body_ceiling_is_four_mebibytes() {
+    use messenger_webhook::telegram::MAX_WEBHOOK_BODY_BYTES;
+    assert_eq!(MAX_WEBHOOK_BODY_BYTES, 4 * 1024 * 1024);
+}
+
+#[test]
+#[cfg(feature = "matrix")]
+fn matrix_body_ceiling_matches_one_batch_of_max_events() {
+    use messenger_webhook::matrix::MAX_WEBHOOK_BODY_BYTES;
+    assert_eq!(MAX_WEBHOOK_BODY_BYTES, 100 * 65_536);
 }
 
 #[test]
@@ -614,7 +638,7 @@ mod whatsapp_edges {
 
     #[test]
     fn oversized_body_is_rejected_before_any_header_is_read() {
-        let over = vec![b'0'; messenger_webhook::MAX_BODY_BYTES + 1];
+        let over = vec![b'0'; messenger_webhook::whatsapp::MAX_WEBHOOK_BODY_BYTES + 1];
         let error = whatsapp().verify(&Headers::new(), &over).unwrap_err();
         assert!(matches!(error, Error::BodyTooLarge { .. }));
     }

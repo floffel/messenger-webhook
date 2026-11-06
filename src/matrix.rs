@@ -41,6 +41,22 @@ use crate::{check_body, payload, recipient, Adapter};
 /// Process-wide sequence for Matrix adapter transaction ids.
 static MATRIX_TXN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// Largest Matrix application-service transaction body this adapter accepts,
+/// in bytes.
+///
+/// The Matrix specification caps one event at 65536 bytes: *"The complete event
+/// MUST NOT be larger than 65536 bytes"* (Client-Server API, *Room Events →
+/// Size limits*). A homeserver pushes events to the application service in one
+/// transaction, and the reference implementation batches up to 100 of them per
+/// transaction (`MAX_PERSISTENT_EVENTS_PER_TRANSACTION` in Synapse's
+/// `synapse/appservice/scheduler.py`), so the ceiling is `100 × 65536`.
+/// [`MatrixAdapter`] rejects a larger body before hashing or parsing.
+///
+/// ```
+/// assert_eq!(messenger_webhook::matrix::MAX_WEBHOOK_BODY_BYTES, 100 * 65_536);
+/// ```
+pub const MAX_WEBHOOK_BODY_BYTES: usize = 100 * 65_536;
+
 /// Header carrying the application service token.
 pub const AUTHORIZATION_HEADER: &str = "authorization";
 
@@ -120,8 +136,12 @@ impl Adapter for MatrixAdapter {
         Channel::Matrix
     }
 
+    fn max_body_bytes(&self) -> usize {
+        MAX_WEBHOOK_BODY_BYTES
+    }
+
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()> {
-        check_body(body.len())?;
+        check_body(body.len(), MAX_WEBHOOK_BODY_BYTES)?;
         if self.token.is_empty() {
             return Err(Error::MissingSecret {
                 channel: Channel::Matrix,
@@ -151,7 +171,7 @@ impl Adapter for MatrixAdapter {
     }
 
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
-        check_body(payload.len())?;
+        check_body(payload.len(), MAX_WEBHOOK_BODY_BYTES)?;
         let root: Value = serde_json::from_slice(payload)?;
         if !root.is_object() {
             return Err(Error::Payload("expected a JSON object".to_owned()));

@@ -25,6 +25,10 @@
 //! Verification is part of the adapter contract, not an afterthought: an
 //! adapter cannot be constructed without a secret, and [`Adapter::verify`]
 //! fails closed on an empty secret, a missing header or an oversized body.
+//! Every provider publishes its own ceiling on a webhook body, so the limit is
+//! a property of the adapter: [`Adapter::max_body_bytes`] returns it, the
+//! shipped adapters report their provider's number, and [`Registry`] enforces
+//! the registered adapter's limit before dispatching to it.
 //!
 //! The size check cannot protect the step that happens before it: the caller
 //! has to avoid materialising an unbounded body in the first place. For that
@@ -131,19 +135,26 @@ pub use secret::Secret;
 #[cfg_attr(docsrs, doc(cfg(feature = "whatsapp")))]
 pub use subscription::meta_subscription_challenge;
 
-/// Hard ceiling on a request body, enforced before any hashing or JSON parsing.
+/// Crate-wide fallback ceiling on a request body, in bytes.
 ///
-/// Providers cap webhook bodies well below this; the point is to bound the work
-/// an unauthenticated caller can make the process do. The crate's adapters and
-/// [`Registry`] reject a body above this ceiling before dispatch, hashing or
-/// JSON parsing.
+/// This is the value [`Adapter::max_body_bytes`] returns by default and the
+/// bound [`read_body`] applies while it buffers a body whose adapter is not yet
+/// known. It is the largest ceiling any shipped adapter reports, so a caller
+/// that reads first and dispatches later never rejects a payload the provider
+/// would have delivered.
+///
+/// The ceiling is a per-adapter property, not a crate-wide one: the shipped
+/// adapters override [`Adapter::max_body_bytes`] with the number their provider
+/// publishes, and [`Registry`] enforces the registered adapter's value before
+/// dispatch, hashing or JSON parsing.
 ///
 /// ```
 /// use messenger_webhook::MAX_BODY_BYTES;
 ///
-/// assert_eq!(MAX_BODY_BYTES, 1024 * 1024);
+/// // 100 events at the Matrix per-event cap of 65536 bytes.
+/// assert_eq!(MAX_BODY_BYTES, 100 * 65_536);
 /// ```
-pub const MAX_BODY_BYTES: usize = 1024 * 1024;
+pub const MAX_BODY_BYTES: usize = 100 * 65_536;
 
 /// Hard ceiling on an outbound recipient id, in bytes.
 ///
@@ -298,12 +309,42 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     /// Which channel this adapter speaks.
     fn channel(&self) -> Channel;
 
+    /// Largest request body, in bytes, this channel's provider will deliver.
+    ///
+    /// Every provider caps a webhook body and the caps differ, so the ceiling
+    /// belongs to the adapter rather than to the crate. [`Registry`] reads this
+    /// value and rejects an oversized body before it dispatches, so an adapter
+    /// never sees a payload the provider could not have sent.
+    ///
+    /// The shipped adapters report their provider's published number. The
+    /// default returns [`MAX_BODY_BYTES`] for a custom adapter that does not
+    /// state its own; override it so a valid payload is not rejected and an
+    /// oversized one is not parsed.
+    ///
+    /// ```
+    /// # #[cfg(feature = "whatsapp")]
+    /// # fn demo() -> Result<(), messenger_webhook::Error> {
+    /// use messenger_webhook::Adapter;
+    ///
+    /// let adapter = messenger_webhook::WhatsAppAdapter::new("app-secret-app-secret")?;
+    /// assert_eq!(
+    ///     adapter.max_body_bytes(),
+    ///     messenger_webhook::whatsapp::MAX_WEBHOOK_BODY_BYTES,
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    fn max_body_bytes(&self) -> usize {
+        MAX_BODY_BYTES
+    }
+
     /// Verifies that `body` really came from the provider.
     ///
     /// # Errors
     ///
-    /// - [`Error::BodyTooLarge`] if `body` exceeds [`MAX_BODY_BYTES`], checked
-    ///   before any hashing.
+    /// - [`Error::BodyTooLarge`] if `body` exceeds the provider's ceiling as
+    ///   reported by [`Adapter::max_body_bytes`], checked before any hashing.
     /// - [`Error::MissingSecret`] if the adapter was built without a secret.
     /// - [`Error::MissingVerificationHeader`] if the provider header is absent.
     /// - [`Error::MalformedVerificationHeader`] if the header does not have the
@@ -326,9 +367,8 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     /// from another provider — is skipped rather than turned into an invented
     /// event.
     ///
-    /// The [`MAX_BODY_BYTES`] ceiling is unconditional and is checked before
-    /// JSON parsing. [`Registry`] enforces it before dispatching to a custom
-    /// adapter.
+    /// The [`Adapter::max_body_bytes`] ceiling is checked before JSON parsing.
+    /// [`Registry`] enforces it before dispatching to a custom adapter.
     ///
     /// # Errors
     ///
@@ -525,13 +565,16 @@ fn invalid_recipient(channel: Channel, reason: impl Into<String>) -> Error {
     }
 }
 
-/// Rejects bodies above the crate-wide ceiling.
-pub(crate) fn check_body(actual: usize) -> Result<()> {
-    if actual > MAX_BODY_BYTES {
-        Err(Error::BodyTooLarge {
-            limit: MAX_BODY_BYTES,
-            actual,
-        })
+/// Rejects a body above `limit`, the ceiling of the adapter being dispatched to.
+///
+/// The limit is the provider's own number, read from
+/// [`Adapter::max_body_bytes`]; the default implementation returns
+/// [`MAX_BODY_BYTES`], so a custom adapter that does not override it keeps the
+/// crate-wide fallback. A body that fits on size is the adapter's to parse; a
+/// body that does not is rejected here, before any hashing or JSON parsing.
+pub(crate) fn check_body(actual: usize, limit: usize) -> Result<()> {
+    if actual > limit {
+        Err(Error::BodyTooLarge { limit, actual })
     } else {
         Ok(())
     }
@@ -546,22 +589,34 @@ mod tests {
 
     #[test]
     fn check_body_accepts_at_limit_and_rejects_above_it() {
-        assert!(check_body(0).is_ok());
-        assert!(check_body(MAX_BODY_BYTES - 1).is_ok());
-        assert!(check_body(MAX_BODY_BYTES).is_ok());
+        assert!(check_body(0, MAX_BODY_BYTES).is_ok());
+        assert!(check_body(MAX_BODY_BYTES - 1, MAX_BODY_BYTES).is_ok());
+        assert!(check_body(MAX_BODY_BYTES, MAX_BODY_BYTES).is_ok());
         assert!(matches!(
-            check_body(MAX_BODY_BYTES + 1),
+            check_body(MAX_BODY_BYTES + 1, MAX_BODY_BYTES),
             Err(Error::BodyTooLarge {
                 limit,
                 actual,
             }) if limit == MAX_BODY_BYTES && actual == MAX_BODY_BYTES + 1
         ));
+        // The limit is the caller's number, whatever it is.
+        assert!(check_body(10, 10).is_ok());
+        assert!(matches!(
+            check_body(11, 10),
+            Err(Error::BodyTooLarge {
+                limit: 10,
+                actual: 11,
+            })
+        ));
     }
 
     proptest::proptest! {
         #[test]
-        fn check_body_accepts_exactly_values_within_the_ceiling(actual in 0usize..=(MAX_BODY_BYTES + 2)) {
-            proptest::prop_assert_eq!(check_body(actual).is_ok(), actual <= MAX_BODY_BYTES);
+        fn check_body_accepts_exactly_values_within_the_ceiling(
+            actual in 0usize..=(MAX_BODY_BYTES + 2),
+            limit in 0usize..=(MAX_BODY_BYTES + 2),
+        ) {
+            proptest::prop_assert_eq!(check_body(actual, limit).is_ok(), actual <= limit);
         }
     }
 

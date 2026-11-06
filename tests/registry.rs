@@ -331,6 +331,79 @@ fn registry_enforces_the_body_ceiling_for_custom_adapters() {
     ));
 }
 
+/// An adapter whose provider ceiling is smaller than the crate-wide fallback.
+const SMALL_LIMIT: usize = 8;
+
+#[derive(Debug)]
+struct SmallLimit;
+
+impl Adapter for SmallLimit {
+    fn channel(&self) -> Channel {
+        Channel::other("small-limit").expect("small-limit is a valid channel")
+    }
+
+    fn max_body_bytes(&self) -> usize {
+        SMALL_LIMIT
+    }
+
+    fn verify(&self, _headers: &Headers, _body: &[u8]) -> messenger_webhook::Result<()> {
+        Ok(())
+    }
+
+    fn adapt(&self, _payload: &[u8]) -> messenger_webhook::Result<Vec<NormalizedMessage>> {
+        Ok(Vec::new())
+    }
+
+    fn encode(&self, _message: &OutboundMessage) -> messenger_webhook::Result<ProviderPayload> {
+        Err(Error::InvalidMessage {
+            channel: self.channel(),
+            reason: "not used in this test".to_owned(),
+        })
+    }
+}
+
+#[test]
+fn registry_enforces_the_adapters_own_ceiling_not_the_crate_wide_one() {
+    let mut registry = Registry::new();
+    registry.register(SmallLimit);
+    let channel = Channel::other("small-limit").expect("small-limit is a valid channel");
+
+    let at_limit = vec![b' '; SMALL_LIMIT];
+    let over_limit = vec![b' '; SMALL_LIMIT + 1];
+
+    assert!(registry.adapt(&channel, &at_limit).is_ok());
+    assert!(registry
+        .verify(&channel, &Headers::new(), &at_limit)
+        .is_ok());
+    assert!(registry
+        .handle(&channel, &Headers::new(), &at_limit)
+        .is_ok());
+
+    // One byte past the adapter's own ceiling is rejected, even though it is
+    // far below the crate-wide fallback.
+    assert!(matches!(
+        registry.adapt(&channel, &over_limit),
+        Err(Error::BodyTooLarge {
+            limit: SMALL_LIMIT,
+            actual,
+        }) if actual == SMALL_LIMIT + 1
+    ));
+    assert!(matches!(
+        registry.verify(&channel, &Headers::new(), &over_limit),
+        Err(Error::BodyTooLarge {
+            limit: SMALL_LIMIT,
+            ..
+        })
+    ));
+    assert!(matches!(
+        registry.handle(&channel, &Headers::new(), &over_limit),
+        Err(Error::BodyTooLarge {
+            limit: SMALL_LIMIT,
+            ..
+        })
+    ));
+}
+
 #[test]
 fn encode_dispatches_by_channel() {
     #[cfg(feature = "matrix")]

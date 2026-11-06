@@ -45,6 +45,20 @@ pub const MAX_TEXT_BYTES: usize = 4096;
 /// ```
 pub const MAX_CAPTION_BYTES: usize = 1024;
 
+/// Largest `WhatsApp` Cloud API webhook body Meta will deliver, in bytes.
+///
+/// Meta's Cloud API webhook documentation states, under *Payload size*:
+/// "Webhook payloads can be up to 3 MB."
+/// (<https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/overview>).
+/// A body above it never arrives from Meta, so [`WhatsAppAdapter`] rejects it
+/// before hashing or parsing instead of spending work on a caller that cannot
+/// be the provider.
+///
+/// ```
+/// assert_eq!(messenger_webhook::whatsapp::MAX_WEBHOOK_BODY_BYTES, 3 * 1024 * 1024);
+/// ```
+pub const MAX_WEBHOOK_BODY_BYTES: usize = 3 * 1024 * 1024;
+
 /// Adapter for Meta's `WhatsApp` Cloud API webhooks.
 ///
 /// The constructor takes the app secret; every inbound call has to be verified
@@ -157,9 +171,13 @@ impl Adapter for WhatsAppAdapter {
         Channel::WhatsApp
     }
 
+    fn max_body_bytes(&self) -> usize {
+        MAX_WEBHOOK_BODY_BYTES
+    }
+
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()> {
         // Size before hashing: never spend work on an oversized body.
-        check_body(body.len())?;
+        check_body(body.len(), MAX_WEBHOOK_BODY_BYTES)?;
         if self.secrets.is_empty() || self.secrets.iter().any(Secret::is_empty) {
             return Err(Error::MissingSecret {
                 channel: Channel::WhatsApp,
@@ -170,7 +188,7 @@ impl Adapter for WhatsAppAdapter {
     }
 
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
-        check_body(payload.len())?;
+        check_body(payload.len(), MAX_WEBHOOK_BODY_BYTES)?;
         let root: Value = serde_json::from_slice(payload)?;
         if !root.is_object() {
             return Err(Error::Payload("expected a JSON object".to_owned()));

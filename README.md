@@ -337,7 +337,17 @@ explicit.
 
 - **Verification is not optional.** Adapters are constructed with their secret;
   `verify` is on the `Adapter` trait and fails closed on an empty secret, a
-  missing header, a malformed header or a body over `MAX_BODY_BYTES` (1 MiB).
+  missing header, a malformed header or a body over the adapter's own
+  `max_body_bytes` — the provider's published webhook ceiling.
+- **Per-adapter body limits.** Each provider publishes its own webhook body
+  ceiling, so the limit is a property of the adapter, not a crate-wide number:
+  `WhatsApp` 3 MiB (Meta: *Webhook payloads can be up to 3 MB*), Telegram 4 MiB
+  (reference Bot API server: an update batch is capped at `1 << 22` bytes) and
+  Matrix 6 MiB (`100 ×` the 65536-byte per-event cap, the reference homeserver's
+  batch size). `Adapter::max_body_bytes` reports the value and `Registry`
+  enforces it before dispatch; `MAX_BODY_BYTES` is only the fallback a custom
+  adapter inherits and the bound `read_body` applies while the adapter is not
+  yet known.
 - **Bounded reads before verification.** `verify` receives a complete body, so
   the ceiling cannot protect the read itself. Use `read_body` (or an equivalent
   `Read::take(MAX_BODY_READ_BYTES)` guard) when reading a request, and reject an
@@ -374,7 +384,7 @@ explicit.
 |-------|----------------|
 | doctests on every public item | the documented examples really run |
 | `tests/properties.rs` | arbitrary JSON (any depth/types) and arbitrary bytes never panic; encode → provider echo → normalise round-trips on all three channels; unknown fields survive; limits hold exactly at N and N+1 |
-| `tests/edge_cases.rs` | empty body, 1 MiB boundary, missing/ malformed signature headers, signature bound to the exact body, duplicate keys, unknown types, 20 recipients, unicode/NUL, numeric-vs-string ids, wrong JSON types, deep nesting |
+| `tests/edge_cases.rs` | empty body, each provider's body ceiling at N/N+1, missing/ malformed signature headers, signature bound to the exact body, duplicate keys, unknown types, 20 recipients, unicode/NUL, numeric-vs-string ids, wrong JSON types, deep nesting |
 | `tests/subscription.rs` | the Meta handshake: the documented sample request, wrong/prefix/short token, empty secret, each missing parameter, identical and conflicting duplicate parameters, mode casing, the PHP underscore spellings, percent-decoded values, `+`-as-space, challenge ceiling at N-1/N/N+1, decoded control bytes and empty challenge, no received token in the error message; plus three proptest properties |
 | `tests/synthetic_ids.rs` | an event the provider sent without an id is carried with a stable synthesised key: same body, same id across replays; different body, different id; per adapter |
 | `tests/media_and_receipts.rs` | every media kind, reaction and receipt shape in both directions |
@@ -468,8 +478,6 @@ Each of these is a decision, not an omission:
   rather than silently sending a duplicate message.
 - **No SHA-1 signatures.** Meta's deprecated `X-Hub-Signature` header is
   rejected; only `X-Hub-Signature-256` is accepted.
-- **No per-adapter body limits.** One crate-wide `MAX_BODY_BYTES` (1 MiB) keeps
-  the gate simple; providers are far below it.
 - **No event is dropped for want of an id.** A provider that omits its own id
   (a `WhatsApp` status without `id`, a Matrix event without `event_id`) still
   gets an event: the `external_id` is then synthesised — `SYNTHETIC_ID_PREFIX`

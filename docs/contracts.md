@@ -270,3 +270,41 @@ in that module against the Bot API names above.
 Unverified: the visible result of `date_time` formatting (it depends on the
 client's locale), and whether `custom_emoji` markup survives forwarding — neither
 affects the offsets this crate emits.
+
+# Webhook body ceilings
+
+Each provider publishes its own ceiling on a webhook body, so the ceiling is a
+property of the adapter (`Adapter::max_body_bytes`), not a crate-wide number.
+`Registry` reads the value from the registered adapter and rejects an oversized
+body before dispatch, hashing or JSON parsing; `MAX_BODY_BYTES` is only the
+fallback a custom adapter inherits and the bound `read_body` applies while the
+adapter is still unknown.
+
+## WhatsApp — 3 MiB
+
+Source: **WhatsApp Cloud API — Webhooks, Overview**, *Payload size*,
+<https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/overview>
+(retrieved 2026-11-06).
+
+> Webhook payloads can be up to 3 MB.
+
+`whatsapp::MAX_WEBHOOK_BODY_BYTES` is `3 * 1024 * 1024`, pinned at N/N+1 by
+`body_size_is_checked_before_hashing` and `whatsapp_body_ceiling_is_three_mebibytes`.
+
+## Telegram — 4 MiB
+
+The Bot API does not publish a webhook body ceiling. Its reference server,
+tdlib `telegram-bot-api`, caps a serialised batch of updates at `1 << 22` bytes
+and sends one update per webhook `POST`
+(`Client::JsonUpdates` in
+<https://github.com/tdlib/telegram-bot-api/blob/master/telegram-bot-api/Client.cpp>:
+`int left_len = 1 << 22;`). `telegram::MAX_WEBHOOK_BODY_BYTES` is `1 << 22`.
+
+## Matrix — 6 MiB
+
+The Matrix specification caps one event at 65536 bytes
+(see *Event size ceiling* above), and a homeserver pushes events in one
+application-service transaction, batching up to 100 of them
+(`MAX_PERSISTENT_EVENTS_PER_TRANSACTION` in Synapse's
+`synapse/appservice/scheduler.py`). `matrix::MAX_WEBHOOK_BODY_BYTES` is
+`100 * 65_536`, the largest transaction the reference implementation produces.

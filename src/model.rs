@@ -1606,7 +1606,7 @@ impl ProviderPayload {
                 "outbound payload content type must be application/json".to_owned(),
             ));
         }
-        crate::check_body(body.len())?;
+        crate::check_body(body.len(), crate::MAX_BODY_BYTES)?;
         let value: serde_json::Value = serde_json::from_slice(&body)?;
         if !value.is_object() {
             return Err(crate::Error::Payload(

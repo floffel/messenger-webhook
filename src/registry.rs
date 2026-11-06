@@ -213,8 +213,8 @@ impl Registry {
     /// # Errors
     ///
     /// [`Error::UnknownChannel`] if the channel has no adapter, plus every
-    /// error [`Adapter::verify`] reports. A body above [`crate::MAX_BODY_BYTES`]
-    /// is rejected before the adapter is called.
+    /// error [`Adapter::verify`] reports. A body above the registered adapter's
+    /// [`Adapter::max_body_bytes`] is rejected before the adapter is called.
     ///
     /// ```
     /// use messenger_webhook::{Channel, Headers, Registry};
@@ -222,8 +222,9 @@ impl Registry {
     /// assert!(Registry::new().verify(&Channel::Telegram, &Headers::new(), b"{}").is_err());
     /// ```
     pub fn verify(&self, channel: &Channel, headers: &Headers, body: &[u8]) -> Result<()> {
-        check_body(body.len())?;
-        self.get(channel)?.verify(headers, body)
+        let adapter = self.get(channel)?;
+        check_body(body.len(), adapter.max_body_bytes())?;
+        adapter.verify(headers, body)
     }
 
     /// Parses a payload with the adapter for `channel`.
@@ -231,8 +232,9 @@ impl Registry {
     /// # Errors
     ///
     /// [`Error::UnknownChannel`] if the channel has no adapter, plus every
-    /// error [`Adapter::adapt`] reports. A payload above
-    /// [`crate::MAX_BODY_BYTES`] is rejected before the adapter is called.
+    /// error [`Adapter::adapt`] reports. A payload above the registered
+    /// adapter's [`Adapter::max_body_bytes`] is rejected before the adapter is
+    /// called.
     ///
     /// ```
     /// use messenger_webhook::{Channel, Registry};
@@ -240,8 +242,9 @@ impl Registry {
     /// assert!(Registry::new().adapt(&Channel::Matrix, b"{}").is_err());
     /// ```
     pub fn adapt(&self, channel: &Channel, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
-        check_body(payload.len())?;
-        self.get(channel)?.adapt(payload)
+        let adapter = self.get(channel)?;
+        check_body(payload.len(), adapter.max_body_bytes())?;
+        adapter.adapt(payload)
     }
 
     /// Verifies, then parses — the safe default path for an inbound webhook.
@@ -252,8 +255,8 @@ impl Registry {
     ///
     /// [`Error::UnknownChannel`] if the channel has no adapter, plus every
     /// error [`Adapter::verify`] or [`Adapter::adapt`] reports. A body above
-    /// [`crate::MAX_BODY_BYTES`] is rejected before either adapter method is
-    /// called.
+    /// the registered adapter's [`Adapter::max_body_bytes`] is rejected before
+    /// either adapter method is called.
     ///
     /// ```
     /// use messenger_webhook::{Channel, Headers, Registry};
@@ -268,8 +271,8 @@ impl Registry {
         headers: &Headers,
         body: &[u8],
     ) -> Result<Vec<NormalizedMessage>> {
-        check_body(body.len())?;
         let adapter = self.get(channel)?;
+        check_body(body.len(), adapter.max_body_bytes())?;
         adapter.verify(headers, body)?;
         adapter.adapt(body)
     }
