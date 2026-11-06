@@ -447,8 +447,37 @@ mod matrix {
         let content = adapter().encode(&edit).unwrap().json().unwrap();
         assert_eq!(content["m.relates_to"]["rel_type"], "m.replace");
         assert_eq!(content["m.relates_to"]["event_id"], "$1");
+        assert_eq!(content["body"], "* fixed");
         assert_eq!(content["m.new_content"]["body"], "fixed");
         assert_eq!(content["m.new_content"]["msgtype"], "m.text");
+    }
+
+    #[test]
+    fn edit_replacement_keeps_full_media_content() {
+        let mut edit = OutboundMessage::text(Channel::Matrix, "!r:s", "");
+        edit.edit_of = Some("$1".to_owned());
+        let mut image = Attachment::new(AttachmentKind::Image);
+        image.url = Some("mxc://example.org/cat".to_owned());
+        image.mime_type = Some("image/jpeg".to_owned());
+        image.size_bytes = Some(1234);
+        image.width = Some(10);
+        image.height = Some(20);
+        image.filename = Some("cat.jpg".to_owned());
+        edit.attachments.push(image);
+
+        let content = adapter().encode(&edit).unwrap().json().unwrap();
+        assert_eq!(content["body"], "* cat.jpg");
+        assert_eq!(content["m.relates_to"]["rel_type"], "m.replace");
+        assert_eq!(content["m.relates_to"]["event_id"], "$1");
+        assert_eq!(content["m.new_content"]["msgtype"], "m.image");
+        assert_eq!(content["m.new_content"]["body"], "cat.jpg");
+        assert_eq!(content["m.new_content"]["url"], "mxc://example.org/cat");
+        assert_eq!(content["m.new_content"]["info"]["mimetype"], "image/jpeg");
+        assert_eq!(content["m.new_content"]["info"]["size"], 1234);
+        assert_eq!(content["m.new_content"]["info"]["w"], 10);
+        assert_eq!(content["m.new_content"]["info"]["h"], 20);
+        assert!(content["m.new_content"].get("m.relates_to").is_none());
+        assert!(content["m.new_content"].get("m.new_content").is_none());
     }
 
     #[test]
