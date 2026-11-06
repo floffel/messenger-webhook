@@ -29,6 +29,8 @@
 //! | [`MatrixClient::send_read_receipt`] | `POST /rooms/{roomId}/receipt/m.read/{eventId}` | state-setting |
 //! | [`MatrixClient::upload_media`] | `POST /_matrix/media/v3/upload` | **none** |
 //! | [`MatrixClient::send_media`] | upload, then `m.image`/`m.video`/`m.audio`/`m.file` | upload: none, send: transaction id |
+//! | [`MatrixClient::send_media_with_txn`] | same, caller-chosen send transaction id | upload: none, send: transaction id |
+//! | [`MatrixClient::send_uploaded_media_with_txn`] | send only, for resuming after an upload | transaction id |
 //! | [`MatrixClient::whoami`] | `GET /_matrix/client/v3/account/whoami` | read |
 //!
 //! # What is deliberately not covered
@@ -87,7 +89,7 @@ use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde_json::{json, Value};
 use url::Url;
 
-pub use error::{OutboundError, OutboundResult};
+pub use error::{MediaSendError, OutboundError, OutboundResult};
 pub use http::{ReqwestTransport, DEFAULT_REQUEST_TIMEOUT, MAX_RESPONSE_BODY_BYTES};
 pub use ordering::{OrderingSaturation, GATE_CAPACITY, GATE_WAITERS_PER_ROOM, GATE_WAIT_TIMEOUT};
 pub use retry::{
@@ -97,7 +99,7 @@ pub use retry::{
 pub use testing::{RecordedRequest, RecordingSleeper, StubCounters, StubTransport};
 pub use transport::Transport;
 pub use types::{
-    MediaKind, MediaUpload, MxcUri, SendOutcome, TxnId, DEFAULT_MAX_UPLOAD_BYTES,
+    MediaKind, MediaSendOutcome, MediaUpload, MxcUri, SendOutcome, TxnId, DEFAULT_MAX_UPLOAD_BYTES,
     DEFAULT_TYPING_TIMEOUT_MS, MAX_CONTENT_BYTES, MAX_EVENT_TYPE_BYTES, MAX_ID_BYTES,
     MAX_MXC_URI_BYTES, MAX_TXN_ID_BYTES,
 };
@@ -1234,21 +1236,151 @@ impl MatrixClient {
         media: &MediaUpload<'_>,
         caption: Option<&str>,
     ) -> OutboundResult<SendOutcome> {
-        types::validate_room_id(room_id)?;
-        let uri = self.upload_media(media).await?;
+        self.send_media_with_txn(TxnId::generate(), room_id, media, caption)
+            .await
+            .map(|outcome| outcome.send)
+            .map_err(OutboundError::from)
+    }
+
+    /// Uploads media and sends it into a room under a caller-chosen transaction id.
+    ///
+    /// The returned [`MediaSendOutcome`] carries both the upload URI and the event
+    /// send result. Keep the URI and transaction id if the send leg later fails:
+    /// [`send_uploaded_media_with_txn`](Self::send_uploaded_media_with_txn) can
+    /// resume with just those values, without re-uploading the bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`MediaSendError::Upload`] when the upload leg fails; [`MediaSendError::Send`]
+    /// when the bytes were uploaded but the event send fails. The latter carries
+    /// the `mxc://` URI and the transaction id needed to resume at the send leg.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use messenger_webhook::matrix_out::{
+    ///     ClientConfig, MatrixClient, MediaUpload, StubTransport, TxnId,
+    /// };
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let transport = Arc::new(StubTransport::new());
+    /// transport
+    ///     .push_json(200, r#"{"content_uri":"mxc://m.example/abc"}"#)
+    ///     .push_json(200, r#"{"event_id":"$img"}"#);
+    /// let client = MatrixClient::new(
+    ///     transport.clone(),
+    ///     ClientConfig::new("https://m.example")?,
+    ///     "syt_token_123456",
+    /// )?;
+    ///
+    /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// let outcome = runtime.block_on(client.send_media_with_txn(
+    ///     TxnId::new("media-1")?,
+    ///     "!r:m.example",
+    ///     &MediaUpload::new(b"\x89PNG", "image/png"),
+    ///     Some("cat"),
+    /// ))?;
+    /// assert_eq!(outcome.content_uri.as_str(), "mxc://m.example/abc");
+    /// assert_eq!(outcome.send.event_id, "$img");
+    /// assert_eq!(outcome.send.txn_id.as_str(), "media-1");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_media_with_txn(
+        &self,
+        txn_id: TxnId,
+        room_id: &str,
+        media: &MediaUpload<'_>,
+        caption: Option<&str>,
+    ) -> Result<types::MediaSendOutcome, error::MediaSendError> {
+        types::validate_room_id(room_id).map_err(|source| MediaSendError::Request {
+            source: Box::new(source),
+        })?;
+        let uri = self
+            .upload_media(media)
+            .await
+            .map_err(|source| MediaSendError::Upload {
+                source: Box::new(source),
+            })?;
+        self.send_uploaded_media_with_txn(txn_id, room_id, &uri, media, caption)
+            .await
+    }
+
+    /// Sends an already-uploaded media item into a room under a caller-chosen
+    /// transaction id.
+    ///
+    /// This is the resumable half of [`send_media_with_txn`](Self::send_media_with_txn):
+    /// call it with the `mxc://` URI and transaction id from a
+    /// [`MediaSendError::Send`] instead of re-uploading the bytes.
+    ///
+    /// # Errors
+    ///
+    /// As [`send_event_with_txn`](Self::send_event_with_txn) for the event leg.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use messenger_webhook::matrix_out::{
+    ///     ClientConfig, MatrixClient, MediaUpload, MxcUri, StubTransport, TxnId,
+    /// };
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let transport = Arc::new(StubTransport::new());
+    /// transport.push_json(200, r#"{"event_id":"$img"}"#);
+    /// let client = MatrixClient::new(
+    ///     transport.clone(),
+    ///     ClientConfig::new("https://m.example")?,
+    ///     "syt_token_123456",
+    /// )?;
+    ///
+    /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// let upload = MediaUpload::new(b"\x89PNG", "image/png");
+    /// let outcome = runtime.block_on(client.send_uploaded_media_with_txn(
+    ///     TxnId::new("media-1")?,
+    ///     "!r:m.example",
+    ///     &MxcUri::parse("mxc://m.example/abc")?,
+    ///     &upload,
+    ///     Some("cat"),
+    /// ))?;
+    /// assert_eq!(outcome.send.event_id, "$img");
+    /// assert_eq!(transport.call_count(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_uploaded_media_with_txn(
+        &self,
+        txn_id: TxnId,
+        room_id: &str,
+        content_uri: &MxcUri,
+        media: &MediaUpload<'_>,
+        caption: Option<&str>,
+    ) -> Result<types::MediaSendOutcome, error::MediaSendError> {
+        types::validate_room_id(room_id).map_err(|source| MediaSendError::Request {
+            source: Box::new(source),
+        })?;
         let body = caption
             .or(media.filename)
             .unwrap_or_else(|| media.kind.msgtype());
         let content = json!({
             "msgtype": media.kind.msgtype(),
             "body": body,
-            "url": uri.as_str(),
+            "url": content_uri.as_str(),
             "info": {
                 "mimetype": media.content_type,
                 "size": media.data.len(),
             },
         });
-        self.send_event(room_id, "m.room.message", content).await
+        let send_txn_id = txn_id.clone();
+        let send = self
+            .send_event_with_txn(send_txn_id, room_id, "m.room.message", content)
+            .await
+            .map_err(|source| MediaSendError::Send {
+                content_uri: content_uri.clone(),
+                txn_id: txn_id.clone(),
+                source: Box::new(source),
+            })?;
+        Ok(types::MediaSendOutcome {
+            content_uri: content_uri.clone(),
+            send,
+        })
     }
 
     /// The connection probe: resolves the authenticated user id.

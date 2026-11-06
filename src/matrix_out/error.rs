@@ -22,7 +22,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::matrix_out::retry::Operation;
-use crate::matrix_out::types::TxnId;
+use crate::matrix_out::types::{MxcUri, TxnId};
 
 /// Everything the outbound client can fail with.
 ///
@@ -428,6 +428,186 @@ impl OutboundError {
 /// assert_eq!(always_fine().ok(), Some(1));
 /// ```
 pub type OutboundResult<T> = Result<T, OutboundError>;
+
+/// A failure from the two-leg media send.
+///
+/// [`MatrixClient::send_media_with_txn`](crate::matrix_out::MatrixClient::send_media_with_txn)
+/// uploads first and then sends an event
+/// that references the upload. The split matters when the send leg fails after
+/// the bytes are already stored: this error retains the upload URI and the
+/// caller's transaction id so the caller can repeat only the send leg with
+/// [`MatrixClient::send_uploaded_media_with_txn`](crate::matrix_out::MatrixClient::send_uploaded_media_with_txn).
+///
+/// ```
+/// use messenger_webhook::matrix_out::{MediaSendError, MxcUri, OutboundError, TxnId};
+///
+/// let source = OutboundError::Ambiguous {
+///     txn_id: TxnId::new("media-1").ok(),
+///     attempts: 2,
+///     reason: "read timeout".into(),
+/// };
+/// let error = MediaSendError::Send {
+///     content_uri: MxcUri::parse("mxc://m.example/abc")?,
+///     txn_id: TxnId::new("media-1")?,
+///     source: Box::new(source),
+/// };
+///
+/// assert!(error.is_ambiguous());
+/// assert_eq!(error.content_uri().map(MxcUri::as_str), Some("mxc://m.example/abc"));
+/// assert_eq!(error.txn_id().map(TxnId::as_str), Some("media-1"));
+/// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum MediaSendError {
+    /// The caller's request was unusable before either leg was attempted.
+    #[error("the media send request is invalid: {source}")]
+    Request {
+        /// The validation failure.
+        #[source]
+        source: Box<OutboundError>,
+    },
+
+    /// The upload leg failed before an event send could be attempted.
+    #[error("the media upload leg failed: {source}")]
+    Upload {
+        /// The upload failure.
+        #[source]
+        source: Box<OutboundError>,
+    },
+
+    /// The upload succeeded, but sending the event that references it failed.
+    #[error("the media event leg failed for {content_uri} after upload: {source}")]
+    Send {
+        /// The upload URI to reuse when resuming at the send leg.
+        content_uri: MxcUri,
+        /// The transaction id the event send was keyed with.
+        txn_id: TxnId,
+        /// The event-send failure.
+        #[source]
+        source: Box<OutboundError>,
+    },
+}
+
+impl MediaSendError {
+    /// Whether the failed leg could succeed if it were retried unchanged.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::{MediaSendError, OutboundError};
+    ///
+    /// let error = MediaSendError::Upload {
+    ///     source: Box::new(OutboundError::Transport { attempts: 1, reason: "dns".into() }),
+    /// };
+    /// assert!(error.is_retryable());
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub const fn is_retryable(&self) -> bool {
+        match self {
+            Self::Request { source } | Self::Upload { source } | Self::Send { source, .. } => {
+                source.is_retryable()
+            }
+        }
+    }
+
+    /// Whether the failed leg may have been applied.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::{MediaSendError, OutboundError};
+    ///
+    /// let error = MediaSendError::Upload {
+    ///     source: Box::new(OutboundError::Ambiguous { txn_id: None, attempts: 2, reason: "timeout".into() }),
+    /// };
+    /// assert!(error.is_ambiguous());
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub const fn is_ambiguous(&self) -> bool {
+        match self {
+            Self::Request { source } | Self::Upload { source } | Self::Send { source, .. } => {
+                source.is_ambiguous()
+            }
+        }
+    }
+
+    /// The upload URI, when the upload leg succeeded.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::{MediaSendError, MxcUri, OutboundError, TxnId};
+    ///
+    /// let error = MediaSendError::Send {
+    ///     content_uri: MxcUri::parse("mxc://m.example/a")?,
+    ///     txn_id: TxnId::new("m1")?,
+    ///     source: Box::new(OutboundError::Ambiguous { txn_id: TxnId::new("m1").ok(), attempts: 1, reason: "x".into() }),
+    /// };
+    /// assert_eq!(error.content_uri().map(MxcUri::as_str), Some("mxc://m.example/a"));
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub const fn content_uri(&self) -> Option<&MxcUri> {
+        match self {
+            Self::Request { .. } | Self::Upload { .. } => None,
+            Self::Send { content_uri, .. } => Some(content_uri),
+        }
+    }
+
+    /// The transaction id the send leg was keyed with, when that leg was
+    /// attempted.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::{MediaSendError, OutboundError, TxnId};
+    ///
+    /// let error = MediaSendError::Upload {
+    ///     source: Box::new(OutboundError::Ambiguous { txn_id: None, attempts: 1, reason: "x".into() }),
+    /// };
+    /// assert_eq!(error.txn_id(), None);
+    ///
+    /// let txn = TxnId::new("m1")?;
+    /// let error = MediaSendError::Send {
+    ///     content_uri: messenger_webhook::matrix_out::MxcUri::parse("mxc://m.example/a")?,
+    ///     txn_id: txn.clone(),
+    ///     source: Box::new(OutboundError::Ambiguous { txn_id: Some(txn.clone()), attempts: 1, reason: "x".into() }),
+    /// };
+    /// assert_eq!(error.txn_id(), Some(&txn));
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub fn txn_id(&self) -> Option<&TxnId> {
+        match self {
+            Self::Request { source } | Self::Upload { source } => source.txn_id(),
+            Self::Send { txn_id, .. } => Some(txn_id),
+        }
+    }
+
+    /// The [`OutboundError`] from the leg that failed.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::{MediaSendError, OutboundError};
+    ///
+    /// let source = OutboundError::Transport { attempts: 1, reason: "dns".into() };
+    /// let error = MediaSendError::Upload { source: Box::new(source.clone()) };
+    /// assert_eq!(error.outbound_error(), &source);
+    /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+    /// ```
+    #[must_use]
+    pub fn outbound_error(&self) -> &OutboundError {
+        match self {
+            Self::Request { source } | Self::Upload { source } | Self::Send { source, .. } => {
+                source.as_ref()
+            }
+        }
+    }
+}
+
+impl From<MediaSendError> for OutboundError {
+    fn from(error: MediaSendError) -> Self {
+        match error {
+            MediaSendError::Request { source }
+            | MediaSendError::Upload { source }
+            | MediaSendError::Send { source, .. } => *source,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

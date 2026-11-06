@@ -497,6 +497,36 @@ pub struct SendOutcome {
     pub attempts: u32,
 }
 
+/// What a media send produced once both legs have succeeded.
+///
+/// The upload URI is returned alongside the event outcome so a later retry can
+/// address the send leg directly with
+/// [`MatrixClient::send_uploaded_media_with_txn`](crate::matrix_out::MatrixClient::send_uploaded_media_with_txn)
+/// instead of uploading the bytes a second time.
+///
+/// ```
+/// use messenger_webhook::matrix_out::{MediaSendOutcome, MxcUri, SendOutcome, TxnId};
+///
+/// let outcome = MediaSendOutcome {
+///     content_uri: MxcUri::parse("mxc://m.example/abc")?,
+///     send: SendOutcome {
+///         event_id: "$img".into(),
+///         txn_id: TxnId::new("media-1")?,
+///         attempts: 2,
+///     },
+/// };
+/// assert_eq!(outcome.content_uri.as_str(), "mxc://m.example/abc");
+/// assert_eq!(outcome.send.txn_id.as_str(), "media-1");
+/// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaSendOutcome {
+    /// The `mxc://` URI of the uploaded bytes.
+    pub content_uri: MxcUri,
+    /// The event send that references the uploaded bytes.
+    pub send: SendOutcome,
+}
+
 /// The sigil that introduces each Matrix id this client addresses.
 ///
 /// Matrix gives every identifier a leading sigil so a room, user and event id

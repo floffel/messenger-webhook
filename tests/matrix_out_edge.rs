@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use messenger_webhook::matrix_out::transport::{Response, TransportError};
 use messenger_webhook::matrix_out::{
-    ClientConfig, MatrixClient, MediaKind, MediaUpload, OutboundError, RecordingSleeper,
-    RetryPolicy, RetryPolicyError, StubTransport, TxnId, MAX_CONTENT_BYTES, MAX_EVENT_TYPE_BYTES,
-    MAX_ID_BYTES, MAX_TXN_ID_BYTES,
+    ClientConfig, MatrixClient, MediaKind, MediaSendError, MediaUpload, MxcUri, OutboundError,
+    RecordingSleeper, RetryPolicy, RetryPolicyError, StubTransport, TxnId, MAX_CONTENT_BYTES,
+    MAX_EVENT_TYPE_BYTES, MAX_ID_BYTES, MAX_TXN_ID_BYTES,
 };
 
 fn client_with(
@@ -432,6 +432,61 @@ fn an_upload_answer_that_is_not_an_mxc_uri_is_an_ambiguous_write() {
             "{body}: the bytes may be stored already"
         );
     }
+}
+
+#[test]
+fn a_media_send_upload_failure_is_the_upload_variant_and_carries_no_resume_state() {
+    let (client, transport, _) = client_with(|config| config);
+    transport.push_json(500, r#"{"errcode":"M_UNKNOWN"}"#);
+
+    let error = block_on(client.send_media_with_txn(
+        TxnId::new("media-44").expect("valid"),
+        "!r:m.example",
+        &MediaUpload::new(b"x", "text/plain"),
+        None,
+    ))
+    .expect_err("upload failed");
+
+    let MediaSendError::Upload { source } = &error else {
+        panic!("the upload leg failed first");
+    };
+    assert!(source.is_ambiguous());
+    assert!(error.content_uri().is_none());
+    assert_eq!(error.txn_id(), None, "the send leg was never attempted");
+    assert!(!error.is_retryable());
+    assert!(error.is_ambiguous());
+    assert_eq!(error.outbound_error(), source.as_ref());
+    assert_eq!(
+        transport.call_count(),
+        1,
+        "nothing was sent after a failed upload"
+    );
+}
+
+#[test]
+fn a_successful_media_send_can_be_split_at_the_send_leg_without_uploading_again() {
+    let (client, transport, _) = client_with(|config| config);
+    transport.push_json(200, r#"{"event_id":"$resumed"}"#);
+
+    let uri = MxcUri::parse("mxc://m.example/abc").expect("valid uri");
+    let outcome = block_on(client.send_uploaded_media_with_txn(
+        TxnId::new("media-45").expect("valid"),
+        "!r:m.example",
+        &uri,
+        &MediaUpload::new(b"x", "image/png").with_kind(MediaKind::Image),
+        Some("caption"),
+    ))
+    .expect("sent");
+
+    assert_eq!(outcome.content_uri, uri);
+    assert_eq!(outcome.send.event_id, "$resumed");
+    assert_eq!(outcome.send.txn_id.as_str(), "media-45");
+    assert_eq!(transport.call_count(), 1, "only the send leg ran");
+    assert!(transport
+        .last_request()
+        .expect("sent")
+        .url
+        .ends_with("/send/m.room.message/media-45"));
 }
 
 #[test]

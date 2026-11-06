@@ -47,7 +47,13 @@ src/matrix.rs:const AUTHORIZATION_HEADER
 src/matrix.rs:const MAX_WEBHOOK_BODY_BYTES
 src/matrix.rs:impl MatrixAdapter:fn new
 src/matrix.rs:struct MatrixAdapter
+src/matrix_out/error.rs:enum MediaSendError
 src/matrix_out/error.rs:enum OutboundError
+src/matrix_out/error.rs:impl MediaSendError:fn content_uri
+src/matrix_out/error.rs:impl MediaSendError:fn is_ambiguous
+src/matrix_out/error.rs:impl MediaSendError:fn is_retryable
+src/matrix_out/error.rs:impl MediaSendError:fn outbound_error
+src/matrix_out/error.rs:impl MediaSendError:fn txn_id
 src/matrix_out/error.rs:impl OutboundError:fn is_ambiguous
 src/matrix_out/error.rs:impl OutboundError:fn is_client_error
 src/matrix_out/error.rs:impl OutboundError:fn is_retryable
@@ -82,13 +88,13 @@ src/matrix_out/mod.rs:mod transport
 src/matrix_out/mod.rs:mod types
 src/matrix_out/mod.rs:struct TokioSleeper
 src/matrix_out/mod.rs:trait Sleeper
-src/matrix_out/mod.rs:use error::{OutboundError,OutboundResult}
+src/matrix_out/mod.rs:use error::{MediaSendError,OutboundError,OutboundResult}
 src/matrix_out/mod.rs:use http::{ReqwestTransport,DEFAULT_REQUEST_TIMEOUT,MAX_RESPONSE_BODY_BYTES}
 src/matrix_out/mod.rs:use ordering::{OrderingSaturation,GATE_CAPACITY,GATE_WAITERS_PER_ROOM,GATE_WAIT_TIMEOUT}
 src/matrix_out/mod.rs:use retry::{Operation,RetryPolicy,RetryPolicyError,Verdict,DEFAULT_BASE_DELAY_MS,DEFAULT_MAX_ATTEMPTS,DEFAULT_MAX_DELAY_MS,DEFAULT_MAX_RATE_LIMIT_WAIT_MS,}
 src/matrix_out/mod.rs:use testing::{RecordedRequest,RecordingSleeper,StubCounters,StubTransport}
 src/matrix_out/mod.rs:use transport::Transport
-src/matrix_out/mod.rs:use types::{MediaKind,MediaUpload,MxcUri,SendOutcome,TxnId,DEFAULT_MAX_UPLOAD_BYTES,DEFAULT_TYPING_TIMEOUT_MS,MAX_CONTENT_BYTES,MAX_EVENT_TYPE_BYTES,MAX_ID_BYTES,MAX_MXC_URI_BYTES,MAX_TXN_ID_BYTES,}
+src/matrix_out/mod.rs:use types::{MediaKind,MediaSendOutcome,MediaUpload,MxcUri,SendOutcome,TxnId,DEFAULT_MAX_UPLOAD_BYTES,DEFAULT_TYPING_TIMEOUT_MS,MAX_CONTENT_BYTES,MAX_EVENT_TYPE_BYTES,MAX_ID_BYTES,MAX_MXC_URI_BYTES,MAX_TXN_ID_BYTES,}
 src/matrix_out/ordering.rs:const GATE_CAPACITY
 src/matrix_out/ordering.rs:const GATE_WAITERS_PER_ROOM
 src/matrix_out/ordering.rs:const GATE_WAIT_TIMEOUT
@@ -196,6 +202,7 @@ src/matrix_out/types.rs:impl MxcUri:fn server_name
 src/matrix_out/types.rs:impl TxnId:fn as_str
 src/matrix_out/types.rs:impl TxnId:fn generate
 src/matrix_out/types.rs:impl TxnId:fn new
+src/matrix_out/types.rs:struct MediaSendOutcome
 src/matrix_out/types.rs:struct MediaUpload
 src/matrix_out/types.rs:struct MxcUri
 src/matrix_out/types.rs:struct SendOutcome

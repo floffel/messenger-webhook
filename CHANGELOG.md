@@ -30,6 +30,12 @@ carry a `!` in the conventional-commit subject.
   so a concurrent test can express "this send fails, that send succeeds"
   without order dependence, and `RecordedRequest` now carries a 1-based
   `attempt` index so a retried transaction is directly assertable. Closes #78.
+- **Media sends now expose a resumable send leg.** `send_media_with_txn` lets
+  the caller choose the event transaction id, returns the uploaded `mxc://`
+  URI with the send outcome, and reports a send-leg failure as
+  `MediaSendError::Send` carrying both. `send_uploaded_media_with_txn` repeats
+  only that leg, so a retry after an ambiguous media event no longer re-uploads
+  the bytes or mints a second message. Closes #60.
 - `OutboundError::DecodeAfterWrite` now marks a `2xx` whose write response body cannot be decoded as ambiguous and carries the transaction id when there is one; unreadable read responses remain terminal `DecodeRead`. Closes #48.
 
 ### Changed
