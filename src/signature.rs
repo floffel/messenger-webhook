@@ -266,6 +266,25 @@ mod tests {
         );
     }
 
+    proptest::proptest! {
+        #[test]
+        fn hex_roundtrip(bytes in proptest::prelude::any::<[u8; DIGEST_LEN]>()) {
+            proptest::prop_assert_eq!(decode_hex(&encode_hex(&bytes)), Some(bytes));
+        }
+
+        #[test]
+        fn decode_hex_accepts_exactly_64_ascii_hex_digits(text in proptest::prelude::any::<String>()) {
+            let decoded = decode_hex(&text);
+            let expected = text.len() == DIGEST_LEN * 2
+                && text.bytes().all(|byte| byte.is_ascii_hexdigit());
+
+            proptest::prop_assert_eq!(decoded.is_some(), expected);
+            if let Some(bytes) = decoded {
+                proptest::prop_assert_eq!(encode_hex(&bytes), text.to_ascii_lowercase());
+            }
+        }
+    }
+
     #[test]
     fn secret_comparison_is_constant_time_and_length_aware() {
         let secret = Secret::new("abc-abc-abc-abcd").expect("secret");

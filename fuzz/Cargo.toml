@@ -31,6 +31,10 @@ bench = false
 [[bin]]
 name = "subscription"
 path = "fuzz_targets/subscription.rs"
+
+[[bin]]
+name = "verify_meta"
+path = "fuzz_targets/verify_meta.rs"
 test = false
 doc = false
 bench = false
