@@ -10,9 +10,10 @@ use std::collections::{BTreeSet, HashSet};
 
 use messenger_webhook::{
     signature, Attachment, AttachmentKind, Channel, ChannelName, DeliveryStatus, Error, Headers,
-    IdempotencyKey, LimitUnit, NormalizedMessage, OutboundMessage, ProviderMethod, ProviderPayload,
-    Reaction, Registry, RetryPolicy, Secret, MAX_BODY_BYTES, MAX_BODY_READ_BYTES,
-    MAX_CHANNEL_NAME_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
+    IdempotencyKey, InteractiveReply, LimitUnit, NormalizedMessage, OutboundMessage,
+    ProviderMethod, ProviderPayload, Reaction, Registry, RetryPolicy, Secret, MAX_BODY_BYTES,
+    MAX_BODY_READ_BYTES, MAX_CHANNEL_NAME_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
+    MAX_INTERACTIVE_ID_BYTES, MAX_INTERACTIVE_TITLE_CHARS,
 };
 use std::str::FromStr;
 
@@ -191,6 +192,46 @@ fn normalized_message_helpers() {
     assert_eq!(reaction.added_reactions(), ["👍"]);
     assert_eq!(reaction.removed_reactions(), [] as [String; 0]);
     assert!(Reaction::add("1", "").is_err());
+
+    let reply = InteractiveReply::new("yes", "Yes").unwrap();
+    assert_eq!(reply.id(), "yes");
+    assert_eq!(reply.title(), "Yes");
+    message.interactive_reply = Some(reply.clone());
+    assert_eq!(
+        message.interactive_reply().map(InteractiveReply::id),
+        Some("yes")
+    );
+    let message = NormalizedMessage::inbound_text(Channel::WhatsApp, "8", "42", "Yes")
+        .with_interactive_reply(reply);
+    assert_eq!(
+        message.interactive_reply().map(InteractiveReply::title),
+        Some("Yes")
+    );
+}
+
+#[test]
+fn interactive_reply_boundaries() {
+    assert!(InteractiveReply::new("id", "Title").is_ok());
+
+    // Id: empty and non-graphic values are rejected, the byte ceiling holds.
+    for placeholder in ["", " ", "\t\n", "\u{200b}"] {
+        assert!(
+            matches!(
+                InteractiveReply::new(placeholder, "Title"),
+                Err(Error::InvalidInteractiveReply { .. })
+            ),
+            "{placeholder:?} must not be a reply id"
+        );
+    }
+    assert!(InteractiveReply::new("a".repeat(MAX_INTERACTIVE_ID_BYTES), "Title").is_ok());
+    assert!(InteractiveReply::new("a".repeat(MAX_INTERACTIVE_ID_BYTES + 1), "Title").is_err());
+
+    // Title: empty is rejected, the character ceiling holds on the boundary.
+    assert!(InteractiveReply::new("id", "").is_err());
+    assert!(InteractiveReply::new("id", "a".repeat(MAX_INTERACTIVE_TITLE_CHARS)).is_ok());
+    assert!(InteractiveReply::new("id", "a".repeat(MAX_INTERACTIVE_TITLE_CHARS + 1)).is_err());
+    assert_eq!(MAX_INTERACTIVE_ID_BYTES, 256);
+    assert_eq!(MAX_INTERACTIVE_TITLE_CHARS, 20);
 }
 
 #[test]
@@ -580,6 +621,9 @@ fn terminal_error_variants() -> Vec<Error> {
             reason: "empty".to_owned(),
         },
         Error::InvalidReactionKey {
+            reason: "empty".to_owned(),
+        },
+        Error::InvalidInteractiveReply {
             reason: "empty".to_owned(),
         },
         Error::UnknownChannel(Channel::other("signal").unwrap()),

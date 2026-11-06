@@ -555,6 +555,126 @@ impl Reaction {
     }
 }
 
+/// A chosen option from an interactive message.
+///
+/// When a reader taps a reply button or list row, the provider reports the
+/// option's `id` and its human-readable `title`. The id is the value a bot has
+/// to echo back to act on the choice, so it is carried alongside the title
+/// instead of being flattened into [`NormalizedMessage::text`], which only ever
+/// holds the title.
+///
+/// ```
+/// use messenger_webhook::InteractiveReply;
+///
+/// let reply = InteractiveReply::new("yes", "Yes, please")?;
+/// assert_eq!(reply.id(), "yes");
+/// assert_eq!(reply.title(), "Yes, please");
+/// # Ok::<(), messenger_webhook::Error>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractiveReply {
+    id: String,
+    title: String,
+}
+
+impl InteractiveReply {
+    /// Wraps a chosen option, validating what the provider rejects on the wire.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidInteractiveReply`] when `id` carries no
+    /// graphic character (so a tap could not be answered), when `id` is longer
+    /// than [`MAX_INTERACTIVE_ID_BYTES`], or when `title` is empty or longer
+    /// than [`MAX_INTERACTIVE_TITLE_CHARS`].
+    ///
+    /// ```
+    /// use messenger_webhook::InteractiveReply;
+    ///
+    /// let reply = InteractiveReply::new("confirm", "Confirm")?;
+    /// assert_eq!(reply.id(), "confirm");
+    /// assert!(InteractiveReply::new("", "Confirm").is_err());
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    pub fn new(id: impl Into<String>, title: impl Into<String>) -> crate::Result<Self> {
+        let id = id.into();
+        if !has_graphic(&id) {
+            return Err(crate::Error::InvalidInteractiveReply {
+                reason: "option id must contain a visible character".to_owned(),
+            });
+        }
+        if id.len() > MAX_INTERACTIVE_ID_BYTES {
+            return Err(crate::Error::InvalidInteractiveReply {
+                reason: format!(
+                    "option id is {} bytes, the ceiling is {MAX_INTERACTIVE_ID_BYTES}",
+                    id.len()
+                ),
+            });
+        }
+        let title = title.into();
+        let title_len = title.chars().count();
+        if title.is_empty() {
+            return Err(crate::Error::InvalidInteractiveReply {
+                reason: "option title is empty".to_owned(),
+            });
+        }
+        if title_len > MAX_INTERACTIVE_TITLE_CHARS {
+            return Err(crate::Error::InvalidInteractiveReply {
+                reason: format!(
+                    "option title is {title_len} characters, the ceiling is \
+                     {MAX_INTERACTIVE_TITLE_CHARS}"
+                ),
+            });
+        }
+        Ok(Self { id, title })
+    }
+
+    /// The option id the provider expects a bot to echo back.
+    ///
+    /// ```
+    /// use messenger_webhook::InteractiveReply;
+    ///
+    /// assert_eq!(InteractiveReply::new("yes", "Yes")?.id(), "yes");
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The option title that was shown to the reader.
+    ///
+    /// ```
+    /// use messenger_webhook::InteractiveReply;
+    ///
+    /// assert_eq!(InteractiveReply::new("yes", "Yes")?.title(), "Yes");
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+}
+
+/// Longest interactive option id this crate will carry, in bytes.
+///
+/// Provider limits differ; this is a local guard so an unbounded string cannot
+/// travel through a normalised message or an outbound payload.
+///
+/// ```
+/// assert_eq!(messenger_webhook::MAX_INTERACTIVE_ID_BYTES, 256);
+/// ```
+pub const MAX_INTERACTIVE_ID_BYTES: usize = 256;
+
+/// Longest interactive option title this crate will carry, in characters.
+///
+/// `WhatsApp` reply buttons cap the visible title at 20 characters, which is
+/// the tightest ceiling this crate sends against.
+///
+/// ```
+/// assert_eq!(messenger_webhook::MAX_INTERACTIVE_TITLE_CHARS, 20);
+/// ```
+pub const MAX_INTERACTIVE_TITLE_CHARS: usize = 20;
+
 /// Whether `text` holds at least one character a reader would see.
 ///
 /// A provider id of `" "` or `"\u{200b}"` names nothing, so treating it as a
@@ -835,6 +955,10 @@ pub struct NormalizedMessage {
     /// Matrix `m.receipt` events carry the receipt event's own `event_id` in
     /// [`Self::external_id`] and name the message that was read here.
     pub status_for: Option<String>,
+    /// Chosen option carried by an interactive reply, when the provider sends
+    /// one. The option id is the value a bot must echo back; it is kept
+    /// separate from [`Self::text`], which only holds the title.
+    pub interactive_reply: Option<InteractiveReply>,
     /// Formatted runs inside [`Self::text`], in provider order.
     ///
     /// Offsets are UTF-8 byte offsets into `text`, so `text[start..end]` is the
@@ -871,6 +995,7 @@ impl NormalizedMessage {
             reaction: None,
             status: None,
             status_for: None,
+            interactive_reply: None,
             spans: Vec::new(),
             provider_type: None,
             raw: None,
@@ -1135,6 +1260,39 @@ impl NormalizedMessage {
     pub fn is_formatted(&self) -> bool {
         !self.spans.is_empty()
     }
+
+    /// The chosen option carried by an interactive reply, when there is one.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, InteractiveReply, NormalizedMessage};
+    ///
+    /// let reply = InteractiveReply::new("yes", "Yes, please")?;
+    /// let mut message = NormalizedMessage::inbound_text(Channel::WhatsApp, "wamid.1", "49", "Yes, please");
+    /// message.interactive_reply = Some(reply);
+    /// assert_eq!(message.interactive_reply().map(InteractiveReply::id), Some("yes"));
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub fn interactive_reply(&self) -> Option<&InteractiveReply> {
+        self.interactive_reply.as_ref()
+    }
+
+    /// Returns this event with the chosen option set.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, InteractiveReply, NormalizedMessage};
+    ///
+    /// let reply = InteractiveReply::new("no", "No thanks")?;
+    /// let message = NormalizedMessage::inbound_text(Channel::WhatsApp, "wamid.1", "49", "No thanks")
+    ///     .with_interactive_reply(reply);
+    /// assert_eq!(message.interactive_reply().map(InteractiveReply::title), Some("No thanks"));
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub fn with_interactive_reply(mut self, reply: InteractiveReply) -> Self {
+        self.interactive_reply = Some(reply);
+        self
+    }
 }
 
 /// One outbound request, provider independent.
@@ -1175,6 +1333,11 @@ pub struct OutboundMessage {
     /// Providers that expose reactions through a separate endpoint reject this
     /// field in `encode`, just as they do for edits.
     pub reaction: Option<Reaction>,
+    /// Interactive reply button to send, when the request asks for one.
+    ///
+    /// Providers that support it render a reply button the reader can tap; the
+    /// option id travels back through [`NormalizedMessage::interactive_reply`].
+    pub interactive_reply: Option<InteractiveReply>,
     /// Formatted runs inside [`Self::text`], in caller order.
     ///
     /// Offsets are UTF-8 byte offsets into `text`, matching
@@ -1213,6 +1376,7 @@ impl OutboundMessage {
             thread_id: None,
             edit_of: None,
             reaction: None,
+            interactive_reply: None,
             spans: Vec::new(),
         }
     }

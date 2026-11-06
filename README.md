@@ -295,9 +295,17 @@ offsets are converted from UTF-8 bytes to UTF-16 code units and `parse_mode`
 stays unset. `text_mention` is rejected on the outbound path because Telegram
 requires a full `User` object, while the neutral span carries only `user_id`.
 
-The parts still open are tracked, not excluded: [WhatsApp interactive
-replies](https://github.com/floffel/messenger-webhook/issues/12) (a chosen
-button is a selection, not formatting), [Matrix
+`WhatsApp` interactive replies are not formatting, so they do not travel as
+spans: a chosen button or list row is a selection, and the option id is the
+value a bot has to echo back. `NormalizedMessage::interactive_reply` carries the
+option as `{ id, title }` for `interactive.button_reply`, `interactive.list_reply`
+and template `button` quick replies, while the title is still lifted into
+`text`. The same `InteractiveReply` round-trips outbound: set it on an
+`OutboundMessage` and `WhatsAppAdapter::encode` sends a reply button. Flow
+responses (`interactive.nfm_reply`) stay in `raw`, since the provider asks the
+application to parse the embedded `response_json` itself.
+
+The parts still open are tracked, not excluded: [Matrix
 `formatted_body`](https://github.com/floffel/messenger-webhook/issues/13) (HTML
 needs a parser this crate has to justify and bound).
 
@@ -446,12 +454,12 @@ Each of these is a decision, not an omission:
   payloads and reads webhook bodies; with it, the only I/O is the Matrix
   Client-Server legs listed above. No media download, no token refresh, no sync
   or long polling, no E2EE, no room administration (create/join/invite/state).
-- **No HTML and no interaction parsing yet.** Telegram entities are parsed
-  (#6); `WhatsApp` interactive payloads and Matrix `formatted_body` are not, and
-  they are tracked as [#12](https://github.com/floffel/messenger-webhook/issues/12)
-  and [#13](https://github.com/floffel/messenger-webhook/issues/13) rather than
-  left as a silent gap. Until then the plain text is normalised and the raw
-  object is preserved.
+- **No HTML yet.** Telegram entities are parsed (#6) and `WhatsApp` interactive
+  replies are normalised into `InteractiveReply` (#12), but Matrix
+  `formatted_body` is not, and it is tracked as
+  [#13](https://github.com/floffel/messenger-webhook/issues/13) rather than left
+  as a silent gap. Until then the plain text is normalised and the raw object is
+  preserved.
 - **No Matrix E2EE.** `m.room.encrypted` events are carried verbatim
   (`provider_type`, `raw`), never decrypted.
 - **No edits/reactions outbound.** Telegram edits require `editMessageText` on

@@ -24,8 +24,8 @@ use crate::headers::Headers;
 use crate::id;
 use crate::json;
 use crate::model::{
-    Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, OutboundMessage,
-    ProviderMethod, ProviderPayload, Reaction,
+    Attachment, AttachmentKind, Channel, DeliveryStatus, InteractiveReply, NormalizedMessage,
+    OutboundMessage, ProviderMethod, ProviderPayload, Reaction,
 };
 use crate::secret::Secret;
 use crate::signature::{self, META_SIGNATURE_HEADER};
@@ -214,7 +214,11 @@ impl Adapter for WhatsAppAdapter {
         );
         body.insert("to".to_owned(), Value::String(to.to_owned()));
 
-        if let Some(attachment) = message.first_attachment() {
+        if let Some(reply) = &message.interactive_reply {
+            let interactive = encode_reply_button(message, reply, text)?;
+            body.insert("type".to_owned(), Value::String("interactive".to_owned()));
+            body.insert("interactive".to_owned(), Value::Object(interactive));
+        } else if let Some(attachment) = message.first_attachment() {
             let field = match attachment.kind {
                 AttachmentKind::Image => "image",
                 AttachmentKind::Document => "document",
@@ -294,6 +298,64 @@ impl Adapter for WhatsAppAdapter {
             &Value::Object(body),
         )
     }
+}
+
+/// Builds the `interactive` object for a reply button, validating the request
+/// before it reaches the wire.
+fn encode_reply_button(
+    message: &OutboundMessage,
+    reply: &InteractiveReply,
+    text: &str,
+) -> Result<serde_json::Map<String, Value>> {
+    if message.first_attachment().is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::WhatsApp,
+            reason: "an interactive reply cannot carry an attachment".to_owned(),
+        });
+    }
+    if message.edit_of.is_some() || message.reaction.is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::WhatsApp,
+            reason: "edits and reactions need the Cloud API message id, not a send".to_owned(),
+        });
+    }
+    if text.is_empty() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::WhatsApp,
+            reason: "an interactive reply needs body text".to_owned(),
+        });
+    }
+    let length = text.len();
+    if length > MAX_TEXT_BYTES {
+        return Err(Error::MessageTooLong {
+            channel: Channel::WhatsApp,
+            limit: MAX_TEXT_BYTES,
+            actual: length,
+            unit: crate::LimitUnit::Bytes,
+        });
+    }
+
+    let mut interactive = serde_json::Map::new();
+    interactive.insert("type".to_owned(), Value::String("button".to_owned()));
+
+    let mut interactive_body = serde_json::Map::new();
+    interactive_body.insert("text".to_owned(), Value::String(text.to_owned()));
+    interactive.insert("body".to_owned(), Value::Object(interactive_body));
+
+    let mut reply_payload = serde_json::Map::new();
+    reply_payload.insert("id".to_owned(), Value::String(reply.id().to_owned()));
+    reply_payload.insert("title".to_owned(), Value::String(reply.title().to_owned()));
+    let mut button = serde_json::Map::new();
+    button.insert("type".to_owned(), Value::String("reply".to_owned()));
+    button.insert("reply".to_owned(), Value::Object(reply_payload));
+
+    let mut action = serde_json::Map::new();
+    action.insert(
+        "buttons".to_owned(),
+        Value::Array(vec![Value::Object(button)]),
+    );
+    interactive.insert("action".to_owned(), Value::Object(action));
+    Ok(interactive)
 }
 
 /// Maps one `messages[]` object, or drops it when it has no id to key on.
@@ -387,14 +449,57 @@ fn normalize_message(message: &Value) -> Result<NormalizedMessage> {
                 }
             }
         }
-        // Buttons, interactive replies, orders, system notices and future
-        // types keep their provider name and full payload in `raw`. If the
-        // provider included readable text, carry it instead of hiding it in
-        // the raw payload.
+        "interactive" => normalize_interactive(&mut normalized, message, &provider_type),
+        "button" => {
+            // A template quick-reply payload: `payload` (the id a bot echoes
+            // back) and `text` (the title shown to the reader).
+            if let Some(reply) = json::child(message, "button").and_then(interactive_reply) {
+                normalized.set_text(Some(reply.title().to_owned()));
+                normalized.interactive_reply = Some(reply);
+            }
+        }
+        // Orders, system notices and future types keep their provider name and
+        // full payload in `raw`. If the provider included readable text, carry
+        // it instead of hiding it in the raw payload.
         _ => normalized.set_text(unknown_text(message, &provider_type)),
     }
 
     Ok(normalized)
+}
+
+/// Fills `normalized` from an `interactive` message.
+///
+/// The chosen option lives under `interactive.button_reply` or
+/// `interactive.list_reply`. A Flow response (`interactive.nfm_reply`) carries
+/// no id + title a bot can answer, so it stays reachable through `raw`. The
+/// title is also lifted into `text` so existing consumers keep a readable
+/// fallback.
+fn normalize_interactive(normalized: &mut NormalizedMessage, message: &Value, provider_type: &str) {
+    if let Some(content) = json::child(message, "interactive") {
+        let option =
+            json::child(content, "button_reply").or_else(|| json::child(content, "list_reply"));
+        if let Some(reply) = option.and_then(interactive_reply) {
+            normalized.set_text(Some(reply.title().to_owned()));
+            normalized.interactive_reply = Some(reply);
+        }
+    }
+    if normalized.text().is_none() {
+        normalized.set_text(unknown_text(message, provider_type));
+    }
+}
+
+/// Builds a validated [`InteractiveReply`] from a `{ id, title }`-shaped
+/// provider object, or drops it when the provider sent an unusable option.
+///
+/// Inbound decoding is permissive: a button the provider could not have
+/// generated (empty id, oversized title) is not worth failing the whole batch
+/// over, so it stays reachable through `raw` while the typed field is left
+/// unset. Outbound, the same value is built through [`InteractiveReply::new`],
+/// where an invalid option is a hard error.
+fn interactive_reply(option: &Value) -> Option<InteractiveReply> {
+    let id = json::string(option, "id").or_else(|| json::string(option, "payload"))?;
+    let title = json::string(option, "title").or_else(|| json::string(option, "text"))?;
+    InteractiveReply::new(id, title).ok()
 }
 
 /// Lifts text from an unrecognised message shape without inventing media.

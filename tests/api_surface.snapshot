@@ -35,7 +35,7 @@ src/lib.rs:use error::{Error,LimitUnit,Result}
 src/lib.rs:use headers::Headers
 src/lib.rs:use matrix::MatrixAdapter
 src/lib.rs:use model::SYNTHETIC_ID_PREFIX
-src/lib.rs:use model::{Attachment,AttachmentKind,Channel,ChannelName,DeliveryStatus,IdempotencyKey,NormalizedMessage,OutboundMessage,ProviderMethod,ProviderPayload,Reaction,RetryPolicy,MAX_CHANNEL_NAME_BYTES,MAX_IDEMPOTENCY_KEY_BYTES,}
+src/lib.rs:use model::{Attachment,AttachmentKind,Channel,ChannelName,DeliveryStatus,IdempotencyKey,InteractiveReply,NormalizedMessage,OutboundMessage,ProviderMethod,ProviderPayload,Reaction,RetryPolicy,MAX_CHANNEL_NAME_BYTES,MAX_IDEMPOTENCY_KEY_BYTES,MAX_INTERACTIVE_ID_BYTES,MAX_INTERACTIVE_TITLE_CHARS,}
 src/lib.rs:use registry::Registry
 src/lib.rs:use rich::{SpanError,TextFormat,TextSpan}
 src/lib.rs:use secret::Secret
@@ -187,6 +187,8 @@ src/matrix_out/types.rs:struct SendOutcome
 src/matrix_out/types.rs:struct TxnId
 src/model.rs:const MAX_CHANNEL_NAME_BYTES
 src/model.rs:const MAX_IDEMPOTENCY_KEY_BYTES
+src/model.rs:const MAX_INTERACTIVE_ID_BYTES
+src/model.rs:const MAX_INTERACTIVE_TITLE_CHARS
 src/model.rs:const SYNTHETIC_ID_PREFIX
 src/model.rs:enum AttachmentKind
 src/model.rs:enum Channel
@@ -201,15 +203,20 @@ src/model.rs:impl ChannelName:fn as_str
 src/model.rs:impl DeliveryStatus:fn as_str
 src/model.rs:impl IdempotencyKey:fn as_str
 src/model.rs:impl IdempotencyKey:fn new
+src/model.rs:impl InteractiveReply:fn id
+src/model.rs:impl InteractiveReply:fn new
+src/model.rs:impl InteractiveReply:fn title
 src/model.rs:impl NormalizedMessage:fn first_attachment
 src/model.rs:impl NormalizedMessage:fn has_synthetic_id
 src/model.rs:impl NormalizedMessage:fn inbound_text
+src/model.rs:impl NormalizedMessage:fn interactive_reply
 src/model.rs:impl NormalizedMessage:fn is_edit
 src/model.rs:impl NormalizedMessage:fn is_formatted
 src/model.rs:impl NormalizedMessage:fn is_status_update
 src/model.rs:impl NormalizedMessage:fn span_text
 src/model.rs:impl NormalizedMessage:fn spans
 src/model.rs:impl NormalizedMessage:fn text
+src/model.rs:impl NormalizedMessage:fn with_interactive_reply
 src/model.rs:impl NormalizedMessage:fn with_spans
 src/model.rs:impl NormalizedMessage:fn with_text
 src/model.rs:impl NormalizedMessage:fn with_text_and_spans
@@ -242,6 +249,7 @@ src/model.rs:impl RetryPolicy:fn is_unsafe_without_key
 src/model.rs:struct Attachment
 src/model.rs:struct ChannelName
 src/model.rs:struct IdempotencyKey
+src/model.rs:struct InteractiveReply
 src/model.rs:struct NormalizedMessage
 src/model.rs:struct OutboundMessage
 src/model.rs:struct ProviderPayload

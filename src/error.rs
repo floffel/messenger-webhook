@@ -429,6 +429,25 @@ pub enum Error {
         reason: String,
     },
 
+    /// An interactive reply option is missing an id or shaped such that a tap
+    /// could not be answered.
+    ///
+    /// ```
+    /// use messenger_webhook::{Error, InteractiveReply};
+    ///
+    /// let error = InteractiveReply::new("", "Yes").unwrap_err();
+    /// assert!(matches!(error, Error::InvalidInteractiveReply { .. }));
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     "invalid interactive reply: option id must contain a visible character"
+    /// );
+    /// ```
+    #[error("invalid interactive reply: {reason}")]
+    InvalidInteractiveReply {
+        /// Why the option was rejected.
+        reason: String,
+    },
+
     /// No adapter is registered for the requested channel.
     #[error("no adapter registered for channel {0}")]
     UnknownChannel(Channel),
