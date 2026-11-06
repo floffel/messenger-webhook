@@ -113,6 +113,44 @@ Removing a reaction is a **redaction**, not an empty `key`; the client rejects a
 empty key instead of storing a broken annotation
 (`an_empty_reaction_key_is_refused_before_a_request_exists`).
 
+## Encrypted events (`m.room.encrypted`)
+
+Section *End-to-End Encryption → `m.room.encrypted`* (Matrix Client-Server API
+v1.19, <https://spec.matrix.org/latest/client-server-api/#mroomencrypted>):
+
+> The content of an `m.room.encrypted` event using Megolm has the following
+> format:
+>
+> ```json
+> {
+>   "content": {
+>     "algorithm": "m.megolm.v1.aes-sha2",
+>     "sender_key": "<sender_curve25519_key>",
+>     "device_id": "<sender_device_id>",
+>     "session_id": "<outbound_group_session_id>",
+>     "ciphertext": "<base64_encoded_megolm_message>"
+>   }
+> }
+> ```
+
+The `algorithm` names how the payload was encrypted and the remaining keys are
+that algorithm's content; the specification fixes `m.megolm.v1.aes-sha2` as the
+Megolm v1 messaging algorithm. The `ciphertext` and `sender_key` are base64.
+
+What the crate does with it:
+
+- [`MegolmEncryptedContent`](../src/matrix_out/types.rs) stores the four Megolm
+  fields, fixes `algorithm()` to `m.megolm.v1.aes-sha2`, and validates the
+  base64 `ciphertext`/`sender_key` plus the id lengths before the request is
+  built (pinned by the `encrypted_*` tests in `tests/matrix_out_edge.rs`).
+- [`EncryptedEventContent::Other`](../src/matrix_out/types.rs) carries any other
+  algorithm flat, with `algorithm` beside the caller's fields, so an algorithm
+  this crate does not model is sent rather than dropped.
+- [`MatrixClient::send_encrypted`](../src/matrix_out/mod.rs) is a transaction-keyed
+  send exactly like `send_text`, so it inherits the idempotency contract above.
+- Nothing here derives a key or decrypts: the crate is the wire shape, not a
+  Megolm implementation.
+
 ## Typing and receipts
 
 - `PUT /_matrix/client/v3/rooms/{roomId}/typing/{userId}` with

@@ -94,7 +94,7 @@ src/matrix_out/mod.rs:use ordering::{OrderingSaturation,GATE_CAPACITY,GATE_WAITE
 src/matrix_out/mod.rs:use retry::{Operation,RetryPolicy,RetryPolicyError,Verdict,DEFAULT_BASE_DELAY_MS,DEFAULT_MAX_ATTEMPTS,DEFAULT_MAX_DELAY_MS,DEFAULT_MAX_RATE_LIMIT_WAIT_MS,}
 src/matrix_out/mod.rs:use testing::{RecordedRequest,RecordingSleeper,StubCounters,StubTransport}
 src/matrix_out/mod.rs:use transport::Transport
-src/matrix_out/mod.rs:use types::{MediaKind,MediaSendOutcome,MediaUpload,MxcUri,SendOutcome,TxnId,DEFAULT_MAX_UPLOAD_BYTES,DEFAULT_TYPING_TIMEOUT_MS,MAX_CONTENT_BYTES,MAX_EVENT_TYPE_BYTES,MAX_ID_BYTES,MAX_MXC_URI_BYTES,MAX_TXN_ID_BYTES,}
+src/matrix_out/mod.rs:use types::{EncryptedEventContent,MediaKind,MediaSendOutcome,MediaUpload,MegolmEncryptedContent,MxcUri,SendOutcome,TxnId,DEFAULT_MAX_UPLOAD_BYTES,DEFAULT_TYPING_TIMEOUT_MS,MAX_CONTENT_BYTES,MAX_ENCRYPTED_CIPHERTEXT_BYTES,MAX_ENCRYPTED_DEVICE_ID_BYTES,MAX_ENCRYPTED_SENDER_KEY_BYTES,MAX_ENCRYPTED_SESSION_ID_BYTES,MAX_EVENT_TYPE_BYTES,MAX_ID_BYTES,MAX_MXC_URI_BYTES,MAX_TXN_ID_BYTES,MEGOLM_V1_AES_SHA2,}
 src/matrix_out/ordering.rs:const GATE_CAPACITY
 src/matrix_out/ordering.rs:const GATE_WAITERS_PER_ROOM
 src/matrix_out/ordering.rs:const GATE_WAIT_TIMEOUT
@@ -186,15 +186,29 @@ src/matrix_out/transport.rs:trait Transport
 src/matrix_out/types.rs:const DEFAULT_MAX_UPLOAD_BYTES
 src/matrix_out/types.rs:const DEFAULT_TYPING_TIMEOUT_MS
 src/matrix_out/types.rs:const MAX_CONTENT_BYTES
+src/matrix_out/types.rs:const MAX_ENCRYPTED_CIPHERTEXT_BYTES
+src/matrix_out/types.rs:const MAX_ENCRYPTED_DEVICE_ID_BYTES
+src/matrix_out/types.rs:const MAX_ENCRYPTED_SENDER_KEY_BYTES
+src/matrix_out/types.rs:const MAX_ENCRYPTED_SESSION_ID_BYTES
 src/matrix_out/types.rs:const MAX_EVENT_TYPE_BYTES
 src/matrix_out/types.rs:const MAX_ID_BYTES
 src/matrix_out/types.rs:const MAX_MXC_URI_BYTES
 src/matrix_out/types.rs:const MAX_TXN_ID_BYTES
+src/matrix_out/types.rs:const MEGOLM_V1_AES_SHA2
+src/matrix_out/types.rs:enum EncryptedEventContent
 src/matrix_out/types.rs:enum MediaKind
+src/matrix_out/types.rs:impl EncryptedEventContent:fn to_value
 src/matrix_out/types.rs:impl MediaKind:fn msgtype
 src/matrix_out/types.rs:impl MediaUpload:fn new
 src/matrix_out/types.rs:impl MediaUpload:fn with_filename
 src/matrix_out/types.rs:impl MediaUpload:fn with_kind
+src/matrix_out/types.rs:impl MegolmEncryptedContent:fn algorithm
+src/matrix_out/types.rs:impl MegolmEncryptedContent:fn ciphertext
+src/matrix_out/types.rs:impl MegolmEncryptedContent:fn device_id
+src/matrix_out/types.rs:impl MegolmEncryptedContent:fn new
+src/matrix_out/types.rs:impl MegolmEncryptedContent:fn sender_key
+src/matrix_out/types.rs:impl MegolmEncryptedContent:fn session_id
+src/matrix_out/types.rs:impl MegolmEncryptedContent:fn to_value
 src/matrix_out/types.rs:impl MxcUri:fn as_str
 src/matrix_out/types.rs:impl MxcUri:fn media_id
 src/matrix_out/types.rs:impl MxcUri:fn parse
@@ -204,6 +218,7 @@ src/matrix_out/types.rs:impl TxnId:fn generate
 src/matrix_out/types.rs:impl TxnId:fn new
 src/matrix_out/types.rs:struct MediaSendOutcome
 src/matrix_out/types.rs:struct MediaUpload
+src/matrix_out/types.rs:struct MegolmEncryptedContent
 src/matrix_out/types.rs:struct MxcUri
 src/matrix_out/types.rs:struct SendOutcome
 src/matrix_out/types.rs:struct TxnId

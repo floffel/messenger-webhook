@@ -8,8 +8,10 @@ use std::time::Duration;
 
 use messenger_webhook::matrix_out::transport::{Response, TransportError, TransportErrorKind};
 use messenger_webhook::matrix_out::{
-    ClientConfig, MatrixClient, MediaKind, MediaSendError, MediaUpload, MxcUri, OutboundError,
-    RecordingSleeper, RetryPolicy, RetryPolicyError, StubTransport, TxnId, MAX_CONTENT_BYTES,
+    ClientConfig, EncryptedEventContent, MatrixClient, MediaKind, MediaSendError, MediaUpload,
+    MegolmEncryptedContent, MxcUri, OutboundError, RecordingSleeper, RetryPolicy, RetryPolicyError,
+    StubTransport, TxnId, MAX_CONTENT_BYTES, MAX_ENCRYPTED_CIPHERTEXT_BYTES,
+    MAX_ENCRYPTED_DEVICE_ID_BYTES, MAX_ENCRYPTED_SENDER_KEY_BYTES, MAX_ENCRYPTED_SESSION_ID_BYTES,
     MAX_EVENT_TYPE_BYTES, MAX_ID_BYTES, MAX_TXN_ID_BYTES,
 };
 
@@ -594,4 +596,140 @@ fn a_control_character_in_an_event_id_or_room_id_is_refused() {
     }
     assert!(block_on(client.send_read_receipt("!r:m.example", "$a\u{0}b")).is_err());
     assert_eq!(transport.call_count(), 0);
+}
+
+#[test]
+fn encrypted_ciphertext_is_accepted_just_inside_the_ceiling_and_refused_at_it() {
+    // A Megolm ciphertext is base64, so 4 base64 characters encode 3 bytes; a
+    // length that is a multiple of 4 (with padding) is the valid shape. The
+    // ceiling is exact: `MAX_ENCRYPTED_CIPHERTEXT_BYTES` is accepted and one
+    // quarter-step past it is not.
+    let exact = "A".repeat(MAX_ENCRYPTED_CIPHERTEXT_BYTES / 4 * 4);
+    assert!(
+        MegolmEncryptedContent::new(&exact, "AAAA", "DEV", "SESS").is_ok(),
+        "just inside the ceiling"
+    );
+
+    let over = "A".repeat(MAX_ENCRYPTED_CIPHERTEXT_BYTES + 4);
+    let error =
+        MegolmEncryptedContent::new(&over, "AAAA", "DEV", "SESS").expect_err("past the ceiling");
+    assert!(error.to_string().contains("60000"), "{error}");
+    assert!(matches!(error, OutboundError::InvalidRequest { .. }));
+}
+
+#[test]
+fn encrypted_sender_key_is_accepted_just_inside_the_ceiling_and_refused_at_it() {
+    let exact = "A".repeat(MAX_ENCRYPTED_SENDER_KEY_BYTES / 4 * 4);
+    assert!(
+        MegolmEncryptedContent::new("AAAA", &exact, "DEV", "SESS").is_ok(),
+        "just inside the ceiling"
+    );
+
+    let over = "A".repeat(MAX_ENCRYPTED_SENDER_KEY_BYTES + 4);
+    let error =
+        MegolmEncryptedContent::new("AAAA", &over, "DEV", "SESS").expect_err("past the ceiling");
+    assert!(error.to_string().contains("255"), "{error}");
+}
+
+#[test]
+fn encrypted_session_id_and_device_id_are_accepted_at_the_ceiling_and_refused_past_it() {
+    let session = "s".repeat(MAX_ENCRYPTED_SESSION_ID_BYTES);
+    let device = "d".repeat(MAX_ENCRYPTED_DEVICE_ID_BYTES);
+    assert!(MegolmEncryptedContent::new("AAAA", "AAAA", &device, &session).is_ok());
+
+    let long_session = "s".repeat(MAX_ENCRYPTED_SESSION_ID_BYTES + 1);
+    assert!(MegolmEncryptedContent::new("AAAA", "AAAA", "DEV", &long_session).is_err());
+
+    let long_device = "d".repeat(MAX_ENCRYPTED_DEVICE_ID_BYTES + 1);
+    assert!(MegolmEncryptedContent::new("AAAA", "AAAA", &long_device, "SESS").is_err());
+}
+
+#[test]
+fn encrypted_content_rejects_non_base64_and_empty_fields() {
+    for (ciphertext, sender_key) in [("!!!!", "AAAA"), ("AAAA", "!!!!")] {
+        assert!(
+            MegolmEncryptedContent::new(ciphertext, sender_key, "DEV", "SESS").is_err(),
+            "{ciphertext:?}/{sender_key:?} is not base64"
+        );
+    }
+    assert!(MegolmEncryptedContent::new("", "AAAA", "DEV", "SESS").is_err());
+    assert!(MegolmEncryptedContent::new("AAAA", "", "DEV", "SESS").is_err());
+    assert!(MegolmEncryptedContent::new("AAAA", "AAAA", "", "SESS").is_err());
+    assert!(MegolmEncryptedContent::new("AAAA", "AAAA", "DEV", "").is_err());
+}
+
+#[test]
+fn encrypted_send_reaches_the_wire_with_the_megolm_shape() {
+    let (client, transport, _) = client_with(|config| config);
+    transport.push_json(200, r#"{"event_id":"$enc"}"#);
+
+    let content = MegolmEncryptedContent::new(
+        "AwgAEnB1cnBvc2U",
+        "3C5BFWi2Y8MaVvjM8M22DBmh24PmgR0n",
+        "JLAFKJWSCS",
+        "lEuiRJBit0IG6nUf5pUzWTUEsRVVe/HJToXO1DfK7Jg",
+    )
+    .expect("valid Megolm content");
+
+    let outcome = block_on(client.send_encrypted("!r:m.example", content.into())).expect("sent");
+    assert_eq!(outcome.event_id, "$enc");
+
+    let sent = transport.last_request().expect("sent");
+    assert!(sent.url.contains("/send/m.room.encrypted/"), "{}", sent.url);
+    let body = sent.json().expect("json");
+    assert_eq!(body["algorithm"], "m.megolm.v1.aes-sha2");
+    assert_eq!(body["ciphertext"], "AwgAEnB1cnBvc2U");
+    assert_eq!(body["sender_key"], "3C5BFWi2Y8MaVvjM8M22DBmh24PmgR0n");
+    assert_eq!(body["device_id"], "JLAFKJWSCS");
+    assert_eq!(
+        body["session_id"],
+        "lEuiRJBit0IG6nUf5pUzWTUEsRVVe/HJToXO1DfK7Jg"
+    );
+    assert_eq!(transport.call_count(), 1);
+}
+
+#[test]
+fn encrypted_other_algorithm_merges_flat_and_validates_before_the_wire() {
+    let (client, transport, _) = client_with(|config| config);
+    transport.push_json(200, r#"{"event_id":"$custom"}"#);
+
+    let content = EncryptedEventContent::Other {
+        algorithm: "org.example.cipher".to_owned(),
+        fields: serde_json::json!({ "blob": "x" , "algorithm": "spoofed" }),
+    };
+    let outcome = block_on(client.send_encrypted("!r:m.example", content)).expect("sent");
+    assert_eq!(outcome.event_id, "$custom");
+    let body = transport
+        .last_request()
+        .expect("sent")
+        .json()
+        .expect("json");
+    // Flat per the spec, and the caller cannot override the validated name.
+    assert_eq!(body["algorithm"], "org.example.cipher");
+    assert_eq!(body["blob"], "x");
+
+    // An empty algorithm, a control character, or non-object fields never reach
+    // the wire.
+    for bad in [
+        EncryptedEventContent::Other {
+            algorithm: String::new(),
+            fields: serde_json::json!({}),
+        },
+        EncryptedEventContent::Other {
+            algorithm: "bad\nalg".to_owned(),
+            fields: serde_json::json!({}),
+        },
+        EncryptedEventContent::Other {
+            algorithm: "org.example.cipher".to_owned(),
+            fields: serde_json::json!("not an object"),
+        },
+    ] {
+        let error = block_on(client.send_encrypted("!r:m.example", bad))
+            .expect_err("rejected before the wire");
+        assert!(
+            matches!(error, OutboundError::InvalidRequest { .. }),
+            "{error:?}"
+        );
+    }
+    assert_eq!(transport.call_count(), 1);
 }

@@ -23,6 +23,7 @@ matrix = ["dep:html5ever"]
 # runtime (tokio's sync + time primitives). A webhook-only consumer must not
 # inherit either, so the whole `matrix_out` module sits behind this feature.
 matrix-out = [
+    "dep:base64",
     "dep:exponential-backoff",
     "dep:futures-util",
     "dep:percent-encoding",
@@ -73,6 +74,11 @@ uuid = { version = "1", features = ["v4"], optional = true }
 # WHATWG URL parsing for the homeserver base URL: an origin plus an optional
 # path prefix, without userinfo, query or fragment.
 url = { version = "2.5.8", optional = true }
+# Validates the base64 `ciphertext` an `m.room.encrypted` event carries before
+# the wire, so a malformed payload is rejected locally instead of as a
+# homeserver `M_BAD_JSON`. Already in the tree through reqwest; direct because
+# rustc needs the path. Apache-2.0 OR MIT.
+base64 = { version = "0.23.1", default-features = false, features = ["std"], optional = true }
 # `RetryPolicy` uses the crate's deterministic iterator for `backoff()` and its
 # default jittered iterator for runtime retry decisions, so the exponential
 # schedule and jitter stay maintained code.
