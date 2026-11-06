@@ -297,11 +297,83 @@ impl TextSpan {
 /// always a non-empty byte range that [`TextSpan::new`] accepts.
 ///
 /// Crate-private: the Telegram adapter is the only caller, and its tests
-/// exercise the conversion through a real update body.
+/// exercise the conversion through a real update body. The batch form returns
+/// one slot per input range in provider order.
 // Only the Telegram adapter counts units today; a Matrix or WhatsApp entity
 // source would need the same helper, so it stays in one place.
 #[cfg_attr(not(feature = "telegram"), allow(dead_code))]
-pub(crate) fn utf16_to_byte_range(text: &str, offset: u64, length: u64) -> Option<(usize, usize)> {
+pub(crate) fn utf16_to_byte_ranges<I>(text: &str, ranges: I) -> Vec<Option<(usize, usize)>>
+where
+    I: IntoIterator<Item = Option<(u64, u64)>>,
+{
+    let ranges = ranges.into_iter().collect::<Vec<_>>();
+    if let [Some((offset, length))] = ranges.as_slice() {
+        return vec![utf16_to_byte_range(text, *offset, *length)];
+    }
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+
+    let mut boundaries = Vec::with_capacity(ranges.len().saturating_mul(2));
+    for &(offset, length) in ranges.iter().flatten() {
+        if let Some(end_unit) = offset.checked_add(length) {
+            if end_unit <= offset {
+                continue;
+            }
+            boundaries.push(offset);
+            boundaries.push(end_unit);
+        }
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    let mut positions = Vec::with_capacity(boundaries.len());
+    let mut next_boundary = 0;
+    if boundaries.first() == Some(&0) {
+        positions.push((0_u64, 0_usize));
+        next_boundary = 1;
+    }
+
+    let mut units = 0_u64;
+    for (byte, character) in text.char_indices() {
+        units += if character.len_utf16() == 2 { 2 } else { 1 };
+        let next_byte = byte + character.len_utf8();
+        while let Some(&boundary) = boundaries.get(next_boundary) {
+            if boundary > units {
+                break;
+            }
+            if boundary == units {
+                positions.push((boundary, next_byte));
+            }
+            next_boundary += 1;
+        }
+        if next_boundary == boundaries.len() {
+            break;
+        }
+    }
+
+    let byte_at = |unit| {
+        positions
+            .binary_search_by_key(&unit, |&(boundary, _)| boundary)
+            .ok()
+            .map(|index| positions[index].1)
+    };
+
+    ranges
+        .into_iter()
+        .map(|range| {
+            let (offset, length) = range?;
+            let end_unit = offset.checked_add(length)?;
+            if end_unit <= offset {
+                return None;
+            }
+            Some((byte_at(offset)?, byte_at(end_unit)?))
+        })
+        .collect()
+}
+
+/// Converts one UTF-16 range by walking the text once.
+fn utf16_to_byte_range(text: &str, offset: u64, length: u64) -> Option<(usize, usize)> {
     let end_unit = offset.checked_add(length)?;
     if end_unit <= offset {
         return None;
@@ -329,7 +401,7 @@ pub(crate) fn utf16_to_byte_range(text: &str, offset: u64, length: u64) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{utf16_to_byte_range, SpanError, TextFormat, TextSpan};
+    use super::{utf16_to_byte_range, utf16_to_byte_ranges, SpanError, TextFormat, TextSpan};
     use proptest::strategy::Strategy;
 
     fn any_text() -> impl proptest::strategy::Strategy<Value = String> {
@@ -399,6 +471,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn batched_conversion_matches_single_conversion() {
+        let text = "a😀b€";
+        assert_eq!(
+            utf16_to_byte_ranges(
+                text,
+                [
+                    Some((0, 5)),
+                    Some((1, 2)),
+                    Some((1, 4)),
+                    Some((3, 1)),
+                    Some((2, 1)),
+                    Some((5, 1)),
+                    Some((u64::MAX, 2)),
+                    None,
+                ],
+            ),
+            vec![
+                Some((0, 9)),
+                Some((1, 5)),
+                Some((1, 9)),
+                Some((5, 6)),
+                None,
+                None,
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn batched_conversion_handles_empty_and_single_ranges() {
+        assert_eq!(
+            utf16_to_byte_ranges("abc", [None::<(u64, u64)>; 0]),
+            Vec::<Option<(usize, usize)>>::new()
+        );
+        assert_eq!(
+            utf16_to_byte_ranges("abc", [Some((0, 3))]),
+            vec![Some((0, 3))]
+        );
+    }
+
+    #[test]
+    fn batched_conversion_accepts_zero_and_duplicate_boundaries() {
+        assert_eq!(
+            utf16_to_byte_ranges(
+                "😀x",
+                [
+                    Some((0, 0)),
+                    Some((0, 2)),
+                    Some((1, 1)),
+                    Some((0, 3)),
+                    Some((3, 0)),
+                ],
+            ),
+            vec![None, Some((0, 4)), None, Some((0, 5)), None]
+        );
+        assert_eq!(
+            utf16_to_byte_ranges("a😀b", [Some((1, 2)), Some((1, 1)), Some((2, 1))]),
+            vec![Some((1, 5)), None, None]
+        );
     }
 
     #[test]
