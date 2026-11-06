@@ -6,10 +6,10 @@
 //! [`NormalizedMessage::raw`].
 
 use std::cmp::Ordering;
-use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use crate::rich::TextSpan;
+use strum::{AsRefStr, Display, EnumString};
 
 /// Which messenger a message came from.
 ///
@@ -28,20 +28,24 @@ use crate::rich::TextSpan;
 /// assert_eq!(Channel::Other("signal".into()).as_str(), "signal");
 /// assert_eq!(Channel::Other("whatsapp".into()), Channel::WhatsApp);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, AsRefStr, Display, EnumString)]
 #[non_exhaustive]
 pub enum Channel {
     /// `WhatsApp` Cloud API.
+    #[strum(serialize = "whatsapp")]
     WhatsApp,
     /// Telegram Bot API.
+    #[strum(serialize = "telegram")]
     Telegram,
     /// Matrix client-server or application-service events.
+    #[strum(serialize = "matrix")]
     Matrix,
     /// Anything else, verbatim.
     ///
     /// Prefer [`Channel::other`] for caller-supplied channel names. This variant
     /// is public for compatibility and for carrying provider strings, and is not
     /// validated on direct construction.
+    #[strum(default, transparent)]
     Other(String),
 }
 
@@ -77,12 +81,7 @@ impl Channel {
     /// ```
     #[must_use]
     pub fn as_str(&self) -> &str {
-        match self {
-            Self::WhatsApp => "whatsapp",
-            Self::Telegram => "telegram",
-            Self::Matrix => "matrix",
-            Self::Other(name) => name,
-        }
+        self.as_ref()
     }
 }
 
@@ -151,12 +150,6 @@ fn validate_channel_name(name: &str) -> crate::Result<()> {
     Ok(())
 }
 
-impl fmt::Display for Channel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 /// What kind of media an attachment is, independent of provider naming.
 ///
 /// ```
@@ -165,26 +158,35 @@ impl fmt::Display for Channel {
 /// assert_eq!(AttachmentKind::Audio.as_str(), "audio");
 /// assert_eq!(AttachmentKind::Other("poll".into()).as_str(), "poll");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, AsRefStr, Display, EnumString)]
 #[non_exhaustive]
 pub enum AttachmentKind {
     /// Still image.
+    #[strum(serialize = "image")]
     Image,
     /// Video, including round video notes and animations.
+    #[strum(serialize = "video")]
     Video,
     /// Audio file.
+    #[strum(serialize = "audio")]
     Audio,
     /// Voice note / push-to-talk recording.
+    #[strum(serialize = "voice")]
     Voice,
     /// Arbitrary file.
+    #[strum(serialize = "document")]
     Document,
     /// Sticker.
+    #[strum(serialize = "sticker")]
     Sticker,
     /// Geographic location.
+    #[strum(serialize = "location")]
     Location,
     /// Contact card.
+    #[strum(serialize = "contact")]
     Contact,
     /// Anything the provider sends that this crate does not model.
+    #[strum(default, transparent)]
     Other(String),
 }
 
@@ -198,17 +200,7 @@ impl AttachmentKind {
     /// ```
     #[must_use]
     pub fn as_str(&self) -> &str {
-        match self {
-            Self::Image => "image",
-            Self::Video => "video",
-            Self::Audio => "audio",
-            Self::Voice => "voice",
-            Self::Document => "document",
-            Self::Sticker => "sticker",
-            Self::Location => "location",
-            Self::Contact => "contact",
-            Self::Other(name) => name,
-        }
+        self.as_ref()
     }
 }
 
@@ -300,20 +292,26 @@ pub struct Reaction {
 /// assert_eq!(DeliveryStatus::Read.as_str(), "read");
 /// assert_eq!(DeliveryStatus::Unknown("queued".into()).as_str(), "queued");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, AsRefStr, Display, EnumString)]
 #[non_exhaustive]
 pub enum DeliveryStatus {
     /// Accepted by the provider.
+    #[strum(serialize = "sent")]
     Sent,
     /// Delivered to the recipient's device.
+    #[strum(serialize = "delivered")]
     Delivered,
     /// Read by the recipient.
+    #[strum(serialize = "read")]
     Read,
     /// Delivery failed.
+    #[strum(serialize = "failed")]
     Failed,
     /// Deleted by the sender.
+    #[strum(serialize = "deleted")]
     Deleted,
     /// A state this crate does not model, carried verbatim.
+    #[strum(default, transparent)]
     Unknown(String),
 }
 
@@ -327,14 +325,7 @@ impl DeliveryStatus {
     /// ```
     #[must_use]
     pub fn as_str(&self) -> &str {
-        match self {
-            Self::Sent => "sent",
-            Self::Delivered => "delivered",
-            Self::Read => "read",
-            Self::Failed => "failed",
-            Self::Deleted => "deleted",
-            Self::Unknown(name) => name,
-        }
+        self.as_ref()
     }
 }
 
@@ -476,8 +467,8 @@ impl IdempotencyKey {
     }
 }
 
-impl fmt::Display for IdempotencyKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for IdempotencyKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }
