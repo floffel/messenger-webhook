@@ -15,12 +15,13 @@ use messenger_webhook::matrix_out::{
 };
 
 fn policy() -> RetryPolicy {
-    RetryPolicy {
-        max_attempts: 4,
-        base_delay: Duration::from_millis(100),
-        max_delay: Duration::from_secs(1),
-        max_rate_limit_wait: Duration::from_secs(60),
-    }
+    RetryPolicy::new(
+        4,
+        Duration::from_millis(100),
+        Duration::from_secs(1),
+        Duration::from_secs(60),
+    )
+    .expect("valid")
 }
 
 proptest! {
@@ -93,7 +94,7 @@ proptest! {
                         let base = policy().backoff(attempt);
                         prop_assert!(delay >= base.mul_f64(0.7), "{delay:?} under {base:?}");
                         prop_assert!(
-                            delay <= base.mul_f64(1.3).min(policy().max_delay),
+                            delay <= base.mul_f64(1.3).min(policy().max_delay()),
                             "{delay:?} over {base:?}"
                         );
                     }
@@ -168,22 +169,17 @@ proptest! {
     ) {
         let base = Duration::from_millis(base_ms);
         let max = Duration::from_millis(max_ms);
-        let policy = RetryPolicy {
-            max_attempts: 8,
-            base_delay: base.min(max),
-            max_delay: max,
-            max_rate_limit_wait: max,
-        };
+        let policy = RetryPolicy::new(8, base.min(max), max, max).expect("valid");
         let delay = policy.backoff(attempt);
         prop_assert!(delay <= max, "{delay:?} over {max:?}");
-        prop_assert!(delay >= policy.base_delay, "{delay:?} under {:?}", policy.base_delay);
+        prop_assert!(delay >= policy.base_delay(), "{delay:?} under {:?}", policy.base_delay());
         if attempt > 1 {
             prop_assert!(policy.backoff(attempt - 1) <= delay, "backoff must not shrink");
         }
         // Below the cap the growth is exactly doubling.
         let expected_exponent = attempt.saturating_sub(1).min(31);
         let doubling = policy
-            .base_delay
+            .base_delay()
             .checked_mul(1u32 << expected_exponent)
             .unwrap_or(max);
         prop_assert_eq!(delay, doubling.min(max));
@@ -261,7 +257,11 @@ proptest! {
             transport.clone(),
             ClientConfig::new("https://m.example")
                 .expect("valid")
-                .with_retry(RetryPolicy { max_attempts, ..RetryPolicy::default() }),
+                .with_retry(
+                    RetryPolicy::default()
+                        .with_max_attempts(max_attempts)
+                        .expect("valid"),
+                ),
             "syt",
         )
         .expect("valid");

@@ -91,7 +91,7 @@ pub use error::{OutboundError, OutboundResult};
 pub use http::{ReqwestTransport, DEFAULT_REQUEST_TIMEOUT};
 pub use ordering::GATE_CAPACITY;
 pub use retry::{
-    Operation, RetryPolicy, Verdict, DEFAULT_BASE_DELAY_MS, DEFAULT_MAX_ATTEMPTS,
+    Operation, RetryPolicy, RetryPolicyError, Verdict, DEFAULT_BASE_DELAY_MS, DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_DELAY_MS, DEFAULT_MAX_RATE_LIMIT_WAIT_MS,
 };
 pub use testing::{RecordedRequest, RecordingSleeper, StubTransport};
@@ -172,18 +172,15 @@ impl Sleeper for TokioSleeper {
 ///     .with_user_id("@bot:example.org")
 ///     .with_max_upload_bytes(10_000_000)
 ///     .with_per_room_ordering(false)
-///     .with_retry(RetryPolicy {
-///         max_attempts: 2,
-///         ..RetryPolicy::default()
-///     });
+///     .with_retry(RetryPolicy::default().with_max_attempts(2).expect("valid"));
 ///
 /// // The trailing slash is normalised away, so paths never double up.
 /// assert_eq!(config.homeserver(), "https://matrix.example.org");
 /// assert_eq!(config.user_id(), Some("@bot:example.org"));
 /// assert_eq!(config.max_upload_bytes(), 10_000_000);
 /// assert!(!config.per_room_ordering());
-/// assert_eq!(config.retry().max_attempts, 2);
-/// assert_eq!(Duration::from_millis(500), RetryPolicy::default().base_delay);
+/// assert_eq!(config.retry().max_attempts(), 2);
+/// assert_eq!(Duration::from_millis(500), RetryPolicy::default().base_delay());
 /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
 /// ```
 #[derive(Clone)]
@@ -262,8 +259,8 @@ impl ClientConfig {
     /// use messenger_webhook::matrix_out::{ClientConfig, RetryPolicy};
     ///
     /// let config = ClientConfig::new("https://m.example")?
-    ///     .with_retry(RetryPolicy { max_attempts: 1, ..RetryPolicy::default() });
-    /// assert_eq!(config.retry().max_attempts, 1);
+    ///     .with_retry(RetryPolicy::default().with_max_attempts(1).expect("valid"));
+    /// assert_eq!(config.retry().max_attempts(), 1);
     /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
     /// ```
     #[must_use]
@@ -351,7 +348,7 @@ impl ClientConfig {
     /// ```
     /// use messenger_webhook::matrix_out::ClientConfig;
     ///
-    /// assert_eq!(ClientConfig::new("https://m.example")?.retry().max_attempts, 3);
+    /// assert_eq!(ClientConfig::new("https://m.example")?.retry().max_attempts(), 3);
     /// # Ok::<(), messenger_webhook::matrix_out::OutboundError>(())
     /// ```
     #[must_use]
@@ -568,9 +565,9 @@ impl MatrixClient {
     /// # Errors
     ///
     /// [`OutboundError::InvalidConfig`] when the access token is empty, the
-    /// retry policy is unusable (`max_attempts == 0`, or a `base_delay` longer
-    /// than `max_delay`), the media ceiling is `0`, or a configured user id is
-    /// not a Matrix user id.
+    /// media ceiling is `0`, or a configured user id is not a Matrix user id.
+    /// A retry policy is validated when it is built by [`RetryPolicy::new`] or
+    /// one of its `with_*` methods.
     ///
     /// ```
     /// use std::sync::Arc;
@@ -597,9 +594,6 @@ impl MatrixClient {
                 reason: "the access token is empty (Matrix would answer 401 M_MISSING_TOKEN)"
                     .to_owned(),
             });
-        }
-        if let Err(reason) = config.retry.validate() {
-            return Err(OutboundError::InvalidConfig { reason });
         }
         if config.max_upload_bytes == 0 {
             return Err(OutboundError::InvalidConfig {
@@ -1856,14 +1850,8 @@ mod tests {
         let config = || ClientConfig::new("https://m.example").expect("valid");
 
         assert!(MatrixClient::new(transport.clone(), config(), "").is_err());
-        let no_attempts = config().with_retry(RetryPolicy {
-            max_attempts: 0,
-            ..RetryPolicy::default()
-        });
-        assert!(MatrixClient::new(transport.clone(), no_attempts, "t").is_err());
-        assert!(
-            MatrixClient::new(transport.clone(), config().with_max_upload_bytes(0), "t").is_err()
-        );
+        let zero_uploads = config().with_max_upload_bytes(0);
+        assert!(MatrixClient::new(transport.clone(), zero_uploads, "t").is_err());
         assert!(MatrixClient::new(transport.clone(), config().with_user_id("bot"), "t").is_err());
         let client = MatrixClient::new(transport, config().with_user_id("@bot:m.example"), "t")
             .expect("valid");

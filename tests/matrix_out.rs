@@ -126,10 +126,11 @@ fn a_429_without_a_retry_after_falls_back_to_the_backoff() {
 #[test]
 fn a_429_asking_for_more_than_the_budget_stops_without_waiting() {
     let harness = harness(|config| {
-        config.with_retry(RetryPolicy {
-            max_rate_limit_wait: Duration::from_secs(5),
-            ..RetryPolicy::default()
-        })
+        config.with_retry(
+            RetryPolicy::default()
+                .with_max_rate_limit_wait(Duration::from_secs(5))
+                .expect("valid"),
+        )
     });
     harness.transport.push_json(
         429,
@@ -285,10 +286,7 @@ fn a_pre_write_request_error_on_an_upload_is_terminal_not_ambiguous() {
 #[test]
 fn a_connection_that_never_opened_is_retryable_not_ambiguous() {
     let harness = harness(|config| {
-        config.with_retry(RetryPolicy {
-            max_attempts: 2,
-            ..RetryPolicy::default()
-        })
+        config.with_retry(RetryPolicy::default().with_max_attempts(2).expect("valid"))
     });
     harness
         .transport
@@ -308,10 +306,7 @@ fn a_connection_that_never_opened_is_retryable_not_ambiguous() {
 #[test]
 fn a_read_timeout_on_a_send_is_retried_and_then_ambiguous() {
     let harness = harness(|config| {
-        config.with_retry(RetryPolicy {
-            max_attempts: 2,
-            ..RetryPolicy::default()
-        })
+        config.with_retry(RetryPolicy::default().with_max_attempts(2).expect("valid"))
     });
     harness
         .transport
@@ -497,10 +492,7 @@ fn typing_without_a_configured_user_id_is_a_configuration_error() {
 #[test]
 fn an_exhausted_typing_pulse_is_a_retryable_server_error_not_ambiguous() {
     let harness = harness(|config| {
-        config.with_retry(RetryPolicy {
-            max_attempts: 1,
-            ..RetryPolicy::default()
-        })
+        config.with_retry(RetryPolicy::default().with_max_attempts(1).expect("valid"))
     });
     harness
         .transport
@@ -888,10 +880,7 @@ fn every_transport_failure_kind_is_reported_with_its_own_wording() {
         (TransportError::other("reset"), "transport failure (other)"),
     ] {
         let harness = harness(|config| {
-            config.with_retry(RetryPolicy {
-                max_attempts: 1,
-                ..RetryPolicy::default()
-            })
+            config.with_retry(RetryPolicy::default().with_max_attempts(1).expect("valid"))
         });
         harness.transport.push_failure(error);
         let error = block_on(harness.client.whoami()).expect_err("failed");
@@ -921,10 +910,7 @@ fn a_body_of_arbitrary_method_and_shape_never_panics_the_decoder() {
 fn a_room_gate_is_released_after_a_failed_send() {
     // If the gate leaked, the second send would hang forever.
     let harness = harness(|config| {
-        config.with_retry(RetryPolicy {
-            max_attempts: 1,
-            ..RetryPolicy::default()
-        })
+        config.with_retry(RetryPolicy::default().with_max_attempts(1).expect("valid"))
     });
     harness
         .transport
