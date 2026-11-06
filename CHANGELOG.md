@@ -70,6 +70,12 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- **Transport failures keep their source chain and drop the request URL.**
+  `TransportError` now retains the underlying `reqwest::Error` as its
+  `std::error::Error::source` instead of flattening it to a `String`, and the
+  mapped error is stripped with `without_url()` so a room, media or upload URL
+  no longer appears in the rendered message. The type gains
+  `TransportError::new`, and is now `#[non_exhaustive]`. Closes #57.
 - **Formatting spans stay tied to their text.** `NormalizedMessage::text` and
   `NormalizedMessage::spans` are no longer independent public fields. The
   fields are now private behind checked accessors

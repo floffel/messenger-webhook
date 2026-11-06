@@ -22,6 +22,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -638,6 +639,8 @@ impl TransportErrorKind {
     }
 }
 
+type SourceError = dyn std::error::Error + Send + Sync + 'static;
+
 /// A transport-level failure: no HTTP response was produced.
 ///
 /// ```
@@ -647,16 +650,52 @@ impl TransportErrorKind {
 /// assert!(error.kind.is_before_write());
 /// assert_eq!(error.to_string(), "transport failure (connect): dns failure");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, Error)]
 #[error("transport failure ({kind}): {message}", kind = .kind.as_str())]
+#[non_exhaustive]
 pub struct TransportError {
     /// Where the request died.
     pub kind: TransportErrorKind,
     /// The transport's own message, verbatim.
     pub message: String,
+    #[source]
+    source: Option<Arc<SourceError>>,
+}
+
+impl PartialEq for TransportError {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.message == other.message
+            && source_text(self.source.as_ref()) == source_text(other.source.as_ref())
+    }
+}
+
+impl Eq for TransportError {}
+
+fn source_text(source: Option<&Arc<SourceError>>) -> Option<String> {
+    source.map(ToString::to_string)
 }
 
 impl TransportError {
+    /// Builds a transport failure from its classification and message.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::transport::{TransportError, TransportErrorKind};
+    ///
+    /// let error = TransportError::new(TransportErrorKind::Connect, "dns");
+    /// assert_eq!(error.kind, TransportErrorKind::Connect);
+    /// assert_eq!(error.message, "dns");
+    /// assert!(std::error::Error::source(&error).is_none());
+    /// ```
+    #[must_use]
+    pub fn new(kind: TransportErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            source: None,
+        }
+    }
+
     /// A failure before anything was written.
     ///
     /// ```
@@ -666,10 +705,7 @@ impl TransportError {
     /// ```
     #[must_use]
     pub fn connect(message: impl Into<String>) -> Self {
-        Self {
-            kind: TransportErrorKind::Connect,
-            message: message.into(),
-        }
+        Self::new(TransportErrorKind::Connect, message)
     }
 
     /// A read timeout after the request was written.
@@ -681,10 +717,7 @@ impl TransportError {
     /// ```
     #[must_use]
     pub fn timeout(message: impl Into<String>) -> Self {
-        Self {
-            kind: TransportErrorKind::Timeout,
-            message: message.into(),
-        }
+        Self::new(TransportErrorKind::Timeout, message)
     }
 
     /// Anything else — assumed to be "may have been applied".
@@ -696,10 +729,15 @@ impl TransportError {
     /// ```
     #[must_use]
     pub fn other(message: impl Into<String>) -> Self {
-        Self {
-            kind: TransportErrorKind::Other,
-            message: message.into(),
-        }
+        Self::new(TransportErrorKind::Other, message)
+    }
+
+    pub(super) fn with_source<T>(mut self, source: T) -> Self
+    where
+        T: std::error::Error + Send + Sync + 'static,
+    {
+        self.source = Some(Arc::new(source));
+        self
     }
 }
 
@@ -843,10 +881,7 @@ mod tests {
             (TransportError::timeout("t"), "timeout", false),
             (TransportError::other("o"), "other", false),
             (
-                TransportError {
-                    kind: TransportErrorKind::TestHarness,
-                    message: "not scripted".to_owned(),
-                },
+                TransportError::new(TransportErrorKind::TestHarness, "not scripted"),
                 "test-harness",
                 false,
             ),
@@ -865,5 +900,27 @@ mod tests {
         fn assert_send<T: Send>(_: T) {}
         let future: BoxFuture<'static, u8> = Box::pin(async { 1 });
         assert_send(future);
+    }
+
+    #[test]
+    fn transport_error_keeps_its_source_chain() {
+        #[derive(Debug)]
+        struct Cause;
+
+        impl fmt::Display for Cause {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("the underlying failure")
+            }
+        }
+
+        impl std::error::Error for Cause {}
+
+        let without = TransportError::new(TransportErrorKind::Other, "reset");
+        assert!(std::error::Error::source(&without).is_none());
+
+        let with = TransportError::new(TransportErrorKind::Other, "reset").with_source(Cause);
+        let source = std::error::Error::source(&with).expect("a source is retained");
+        assert_eq!(source.to_string(), "the underlying failure");
+        assert_eq!(with.clone(), with);
     }
 }

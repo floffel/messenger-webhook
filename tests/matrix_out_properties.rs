@@ -135,7 +135,7 @@ proptest! {
         } else {
             Operation::NonIdempotent
         };
-        let error = TransportError { kind, message: "x".into() };
+        let error = TransportError::new(kind, "x");
         let verdict = policy().classify_transport(attempt, &error, operation);
         match (kind, kind.is_before_write(), repeatable) {
             (TransportErrorKind::TestHarness, _, _) => {

@@ -13,7 +13,7 @@ use reqwest::{Client as HttpClient, Method as HttpMethod};
 
 use crate::matrix_out::error::{OutboundError, OutboundResult};
 use crate::matrix_out::transport::{
-    Body, BoxFuture, Method, Request, Response, Transport, TransportError,
+    Body, BoxFuture, Method, Request, Response, Transport, TransportError, TransportErrorKind,
 };
 
 /// Request timeout the transport applies when the caller does not pick one.
@@ -132,10 +132,7 @@ impl Transport for ReqwestTransport {
                 builder = builder.body(body);
             }
 
-            let response = builder
-                .send()
-                .await
-                .map_err(|error| transport_error(&error))?;
+            let response = builder.send().await.map_err(transport_error)?;
             let status = response.status().as_u16();
             let headers = response
                 .headers()
@@ -147,11 +144,7 @@ impl Transport for ReqwestTransport {
                     )
                 })
                 .collect();
-            let body = response
-                .bytes()
-                .await
-                .map_err(|error| transport_error(&error))?
-                .to_vec();
+            let body = response.bytes().await.map_err(transport_error)?.to_vec();
             Ok(Response {
                 status,
                 headers,
@@ -190,18 +183,20 @@ fn header_map(headers: &[(String, String)]) -> Result<HeaderMap, TransportError>
 }
 
 /// Maps a `reqwest` failure onto the write boundary the retry policy cares about.
-fn transport_error(error: &reqwest::Error) -> TransportError {
-    // `without_url` takes ownership and a `reqwest::Error` is not `Clone`; the
-    // URL it would strip carries a room id or an upload path, never the token
-    // (that travels in a header), so keeping it in the message is harmless.
-    let message = error.to_string();
-    if error.is_connect() {
-        TransportError::connect(message)
+fn transport_error(error: reqwest::Error) -> TransportError {
+    let kind = if error.is_connect() {
+        TransportErrorKind::Connect
     } else if error.is_timeout() {
-        TransportError::timeout(message)
+        TransportErrorKind::Timeout
     } else {
-        TransportError::other(message)
-    }
+        TransportErrorKind::Other
+    };
+    // The URL can carry a room id, media id or upload path. Strip it from both
+    // the rendered message and the retained source, and keep the source chain
+    // the typed error convention requires.
+    let error = error.without_url();
+    let message = error.to_string();
+    TransportError::new(kind, message).with_source(error)
 }
 
 impl fmt::Display for ReqwestTransport {

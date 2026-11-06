@@ -15,7 +15,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post, put};
 use axum::Router;
-use messenger_webhook::matrix_out::transport::{Method, Request, Transport};
+use messenger_webhook::matrix_out::transport::{Method, Request, Transport, TransportError};
 use messenger_webhook::matrix_out::{
     ClientConfig, MatrixClient, MediaUpload, OutboundError, ReqwestTransport, RetryPolicy,
 };
@@ -306,6 +306,24 @@ async fn a_closed_port_is_a_connect_failure_not_an_ambiguous_write() {
         !error.is_ambiguous(),
         "nothing was written, so nothing is unknown"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reqwest_failure_keeps_its_source_and_drops_the_request_url() {
+    let transport = ReqwestTransport::new().expect("a client");
+    let url = "http://127.0.0.1:1/_matrix/client/v3/account/whoami";
+    let error: TransportError = transport
+        .send(Request::new(Method::Get, url))
+        .await
+        .expect_err("nothing listens on that port");
+
+    assert!(error.message.contains("error sending request"));
+    assert!(!error.message.contains(url), "{}", error.message);
+    assert!(!error.message.contains("127.0.0.1:1"), "{}", error.message);
+
+    let source = std::error::Error::source(&error).expect("the reqwest error is retained");
+    assert!(!source.to_string().contains(url), "{}", source);
+    assert!(std::error::Error::source(source).is_some(), "source chain");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
