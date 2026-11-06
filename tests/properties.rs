@@ -61,6 +61,7 @@ proptest! {
     fn provider_enum_string_round_trips(
         channel in prop_oneof![
             Just(Channel::WhatsApp),
+            Just(Channel::Messenger),
             Just(Channel::Telegram),
             Just(Channel::Matrix),
             "signal|sms|rss-feed"
@@ -174,7 +175,7 @@ proptest! {
                 )));
                 prop_assert!(!matches!(
                     normalised.as_str(),
-                    "whatsapp" | "telegram" | "matrix"
+                    "whatsapp" | "messenger" | "telegram" | "matrix"
                 ));
             }
             Err(Error::InvalidChannelName { .. }) => {}

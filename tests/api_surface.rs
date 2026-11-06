@@ -21,6 +21,7 @@ fn channel_names_and_display() {
     let signal = Channel::other("signal").unwrap();
 
     assert_eq!(Channel::WhatsApp.as_str(), "whatsapp");
+    assert_eq!(Channel::Messenger.as_str(), "messenger");
     assert_eq!(Channel::Telegram.as_str(), "telegram");
     assert_eq!(Channel::Matrix.as_str(), "matrix");
     assert_eq!(signal.as_str(), "signal");
@@ -29,11 +30,13 @@ fn channel_names_and_display() {
     assert_eq!(MAX_CHANNEL_NAME_BYTES, 255);
 
     assert_eq!(Channel::WhatsApp.to_string(), "whatsapp");
+    assert_eq!(Channel::Messenger.to_string(), "messenger");
     assert_eq!(Channel::Telegram.to_string(), "telegram");
     assert_eq!(Channel::Matrix.to_string(), "matrix");
     assert_eq!(signal.to_string(), "signal");
 
     assert_eq!(Channel::from_str("whatsapp").unwrap(), Channel::WhatsApp);
+    assert_eq!(Channel::from_str("messenger").unwrap(), Channel::Messenger);
     assert_eq!(Channel::from_str("telegram").unwrap(), Channel::Telegram);
     assert_eq!(Channel::from_str("matrix").unwrap(), Channel::Matrix);
     assert_eq!(
@@ -50,6 +53,7 @@ fn channel_identity_follows_the_canonical_name() {
 
     let sorted = BTreeSet::from([
         Channel::other("z-custom").unwrap(),
+        Channel::Messenger,
         Channel::Telegram,
         Channel::Matrix,
         Channel::WhatsApp,
@@ -59,7 +63,7 @@ fn channel_identity_follows_the_canonical_name() {
             .into_iter()
             .map(|channel| channel.as_str().to_owned())
             .collect::<Vec<_>>(),
-        vec!["matrix", "telegram", "whatsapp", "z-custom"]
+        vec!["matrix", "messenger", "telegram", "whatsapp", "z-custom"]
     );
 }
 
@@ -71,6 +75,7 @@ fn custom_channel_names_are_bounded_and_unreserved() {
     assert!(Channel::other("a".repeat(MAX_CHANNEL_NAME_BYTES + 1)).is_err());
     assert!(Channel::other("has space").is_err());
     assert!(Channel::other("whatsapp").is_err());
+    assert!(Channel::other("messenger").is_err());
     assert!(Channel::other("telegram").is_err());
     assert!(Channel::other("matrix").is_err());
 
