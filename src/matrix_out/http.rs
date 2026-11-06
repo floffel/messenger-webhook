@@ -9,6 +9,7 @@ use std::fmt;
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::Body as HttpBody;
 use reqwest::{Client as HttpClient, Method as HttpMethod};
 
 use crate::matrix_out::error::{OutboundError, OutboundResult};
@@ -125,10 +126,7 @@ impl Transport for ReqwestTransport {
             let headers = header_map(request.headers())?;
             builder = builder.headers(headers);
 
-            let body = match request.body() {
-                Body::Empty => None,
-                body => Some(body.as_bytes().to_vec()),
-            };
+            let body = request_body(request.into_body());
             if let Some(body) = body {
                 builder = builder.body(body);
             }
@@ -152,6 +150,19 @@ impl Transport for ReqwestTransport {
                 body,
             })
         })
+    }
+}
+
+/// Converts an outbound body into the type `reqwest` consumes.
+///
+/// The JSON variant already owns its bytes, so move them into `reqwest`
+/// unchanged. The borrowed media variant has no ownership to transfer, so make
+/// the one copy this transport needs. Empty maps to no request body.
+fn request_body(body: Body<'_>) -> Option<HttpBody> {
+    match body {
+        Body::Empty => None,
+        Body::Json(bytes) => Some(bytes.into()),
+        Body::Bytes(bytes) => Some(bytes.to_vec().into()),
     }
 }
 
@@ -240,6 +251,36 @@ mod tests {
         assert_eq!(http_method(Method::Get), HttpMethod::GET);
         assert_eq!(http_method(Method::Put), HttpMethod::PUT);
         assert_eq!(http_method(Method::Post), HttpMethod::POST);
+    }
+
+    #[test]
+    fn json_body_moves_its_buffer_into_reqwest() {
+        let mut source = Vec::with_capacity(128);
+        source.extend_from_slice(br#"{"body":"hallo"}"#);
+        let source_ptr = source.as_ptr();
+        let source_len = source.len();
+
+        let body = request_body(Body::Json(source)).expect("a request body");
+        let bytes = body.as_bytes().expect("reqwest keeps owned bytes reusable");
+
+        assert_eq!(bytes.as_ptr(), source_ptr);
+        assert_eq!(bytes.len(), source_len);
+        assert_eq!(bytes, br#"{"body":"hallo"}"#);
+    }
+
+    #[test]
+    fn borrowed_body_bytes_survive_the_reqwest_conversion() {
+        let source = b"\x89PNG\r\n\x1a\n";
+
+        let body = request_body(Body::Bytes(source)).expect("a request body");
+        let bytes = body.as_bytes().expect("borrowed bytes are copied once");
+
+        assert_eq!(bytes, source);
+    }
+
+    #[test]
+    fn empty_body_has_no_reqwest_body() {
+        assert!(request_body(Body::Empty).is_none());
     }
 
     #[test]
