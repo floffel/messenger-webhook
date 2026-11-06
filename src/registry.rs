@@ -203,8 +203,9 @@ impl Registry {
     ///
     /// # Errors
     ///
-    /// [`Error::UnknownChannel`] if the channel has no adapter, plus every
-    /// error [`Adapter::encode`] reports.
+    /// [`Error::UnknownChannel`] if the channel has no adapter,
+    /// [`Error::InvalidMessage`] if `message` was not normalised from the same
+    /// channel, plus every error [`Adapter::encode`] reports.
     ///
     /// ```
     /// use messenger_webhook::{Channel, NormalizedMessage, Registry};
@@ -218,7 +219,14 @@ impl Registry {
         channel: &Channel,
         message: &NormalizedMessage,
     ) -> Result<ProviderPayload> {
-        self.get(channel)?.encode(message)
+        let adapter = self.get(channel)?;
+        if message.channel != *channel {
+            return Err(Error::InvalidMessage {
+                channel: channel.clone(),
+                reason: format!("message channel is {}, not {}", message.channel, channel),
+            });
+        }
+        adapter.encode(message)
     }
 }
 

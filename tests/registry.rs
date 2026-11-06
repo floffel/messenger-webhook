@@ -148,6 +148,41 @@ fn encode_dispatches_by_channel() {
 }
 
 #[test]
+#[cfg(all(feature = "matrix", feature = "telegram"))]
+fn encode_rejects_a_message_from_another_channel() {
+    use messenger_webhook::{MatrixAdapter, NormalizedMessage, TelegramAdapter};
+
+    let mut registry = Registry::new();
+    registry
+        .register(MatrixAdapter::new("token"))
+        .register(TelegramAdapter::new("secret"));
+
+    let matrix_message = NormalizedMessage::text(Channel::Matrix, "!r:example.org", "hi");
+    let error = registry
+        .encode(&Channel::Telegram, &matrix_message)
+        .expect_err("matrix message cannot be encoded for telegram");
+    match error {
+        Error::InvalidMessage { channel, reason } => {
+            assert_eq!(channel, Channel::Telegram);
+            assert!(reason.contains("message channel is matrix, not telegram"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let telegram_message = NormalizedMessage::text(Channel::Telegram, "-1001", "hi");
+    let error = registry
+        .encode(&Channel::Matrix, &telegram_message)
+        .expect_err("telegram message cannot be encoded for matrix");
+    match error {
+        Error::InvalidMessage { channel, reason } => {
+            assert_eq!(channel, Channel::Matrix);
+            assert!(reason.contains("message channel is telegram, not matrix"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn registry_is_send_sync_and_debug_is_redacted() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Registry>();
