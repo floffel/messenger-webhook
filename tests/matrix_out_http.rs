@@ -16,7 +16,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post, put};
 use axum::Router;
 use messenger_webhook::matrix_out::transport::{
-    Method, Request, Transport, TransportError, TransportErrorKind,
+    Body, Method, Request, Transport, TransportError, TransportErrorKind,
 };
 use messenger_webhook::matrix_out::{
     ClientConfig, MatrixClient, MediaUpload, OutboundError, ReqwestTransport, RetryPolicy,
@@ -45,6 +45,7 @@ async fn server() -> (String, AppState) {
         )
         .route("/_matrix/client/v3/account/whoami", get(whoami))
         .route("/_matrix/media/v3/upload", post(upload))
+        .route("/_matrix/media/v3/upload-redirect", post(upload_redirect))
         .route(
             "/_matrix/client/v3/rooms/{room}/receipt/m.read/{event}",
             post(receipt),
@@ -132,6 +133,22 @@ async fn upload(
     (
         StatusCode::OK,
         r#"{"content_uri":"mxc://m.example/up"}"#.to_owned(),
+    )
+}
+
+async fn upload_redirect(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> (StatusCode, [(String, String); 1], String) {
+    record(&state, &headers, "/upload-redirect", &body);
+    (
+        StatusCode::TEMPORARY_REDIRECT,
+        [(
+            "location".to_owned(),
+            "/_matrix/media/v3/upload?redirected=1".to_owned(),
+        )],
+        String::new(),
     )
 }
 
@@ -344,6 +361,39 @@ async fn an_invalid_header_is_rejected_before_the_connection_is_used() {
 
     assert_eq!(error.kind, TransportErrorKind::InvalidRequest);
     assert!(error.kind.is_before_write());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_307_redirect_is_surfaced_and_a_post_is_not_replayed() {
+    let (base, seen) = server().await;
+    let transport = ReqwestTransport::new().expect("a client");
+
+    let response = transport
+        .send(
+            Request::new(
+                Method::Post,
+                format!("{base}/_matrix/media/v3/upload-redirect"),
+            )
+            .with_header("content-type", "application/octet-stream")
+            .with_body(Body::Bytes(b"payload")),
+        )
+        .await
+        .expect("a redirect response");
+
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT.as_u16());
+    assert_eq!(
+        response.header("location"),
+        Some("/_matrix/media/v3/upload?redirected=1")
+    );
+    assert_eq!(
+        seen.paths.lock().expect("log").as_slice(),
+        ["/upload-redirect".to_owned()],
+        "reqwest must not replay the POST at the redirect target"
+    );
+    assert_eq!(
+        seen.bodies.lock().expect("log").as_slice(),
+        [b"payload".to_vec()]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
