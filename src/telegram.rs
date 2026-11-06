@@ -150,6 +150,17 @@ impl Adapter for TelegramAdapter {
 
     fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
         let chat_id = recipient(Channel::Telegram, message)?;
+        if message.edit_of.is_some() {
+            let method = if message.first_attachment().is_some() {
+                "editMessageMedia or editMessageCaption"
+            } else {
+                "editMessageText"
+            };
+            return Err(Error::InvalidMessage {
+                channel: Channel::Telegram,
+                reason: format!("edits go to {method} with the original message id"),
+            });
+        }
         let mut body = serde_json::Map::new();
         body.insert("chat_id".to_owned(), Value::String(chat_id.to_owned()));
 
@@ -198,12 +209,6 @@ impl Adapter for TelegramAdapter {
                 return Err(Error::InvalidMessage {
                     channel: Channel::Telegram,
                     reason: "message has neither text nor an attachment".to_owned(),
-                });
-            }
-            if message.edit_of.is_some() {
-                return Err(Error::InvalidMessage {
-                    channel: Channel::Telegram,
-                    reason: "edits go to editMessageText with the original message id".to_owned(),
                 });
             }
             let length = utf16_len(text);
