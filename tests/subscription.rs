@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 
 use messenger_webhook::subscription::{
-    meta_subscription_challenge, MAX_CHALLENGE_BYTES, META_CHALLENGE_PARAM, META_MODE_PARAM,
-    META_SUBSCRIBE_MODE, META_VERIFY_TOKEN_PARAM,
+    meta_subscription_challenge, MAX_CHALLENGE_BYTES, MAX_QUERY_BYTES, MAX_VERIFY_TOKEN_BYTES,
+    META_CHALLENGE_PARAM, META_MODE_PARAM, META_SUBSCRIBE_MODE, META_VERIFY_TOKEN_PARAM,
 };
 use messenger_webhook::{Channel, Error, Secret};
 use proptest::prelude::*;
@@ -529,6 +529,62 @@ fn an_empty_challenge_is_rejected() {
             ..
         }
     ));
+}
+
+#[test]
+fn the_raw_query_length_is_a_pre_parse_guard() {
+    let secret = Secret::new(TOKEN).expect("secret");
+    let base = query(&[
+        (META_MODE_PARAM, META_SUBSCRIBE_MODE),
+        (META_CHALLENGE_PARAM, "1"),
+        (META_VERIFY_TOKEN_PARAM, TOKEN),
+    ]);
+    let prefix = "&padding=";
+
+    for length in [MAX_QUERY_BYTES - 1, MAX_QUERY_BYTES] {
+        let padding = "x".repeat(length - base.len() - prefix.len());
+        let query = format!("{base}{prefix}{padding}");
+        assert_eq!(query.len(), length);
+        assert_eq!(
+            meta_subscription_challenge(Channel::WhatsApp, &secret, &query)
+                .expect("at or one byte below the query ceiling"),
+            "1"
+        );
+    }
+
+    let padding = "x".repeat(MAX_QUERY_BYTES - base.len() - prefix.len() + 1);
+    let query = format!("{base}{prefix}{padding}");
+    assert_eq!(query.len(), MAX_QUERY_BYTES + 1);
+    let error = meta_subscription_challenge(Channel::Messenger, &secret, &query)
+        .expect_err("one byte past the query ceiling");
+    assert!(matches!(error, Error::MalformedVerificationRequest { .. }));
+}
+
+#[test]
+fn the_verify_token_length_is_bounded_before_comparison() {
+    for length in [MAX_VERIFY_TOKEN_BYTES - 1, MAX_VERIFY_TOKEN_BYTES] {
+        let token = "t".repeat(length);
+        let query = request_with(META_VERIFY_TOKEN_PARAM, &token);
+        assert_eq!(
+            meta_subscription_challenge(
+                Channel::WhatsApp,
+                &Secret::new(token).expect("secret"),
+                &query
+            )
+            .expect("at or one byte below the token ceiling"),
+            "1158201444"
+        );
+    }
+
+    let too_long = "t".repeat(MAX_VERIFY_TOKEN_BYTES + 1);
+    let query = request_with(META_VERIFY_TOKEN_PARAM, &too_long);
+    let error = meta_subscription_challenge(
+        Channel::Messenger,
+        &Secret::new(TOKEN).expect("secret"),
+        &query,
+    )
+    .expect_err("one byte past the token ceiling");
+    assert!(matches!(error, Error::MalformedVerificationRequest { .. }));
 }
 
 #[test]

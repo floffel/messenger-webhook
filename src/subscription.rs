@@ -26,7 +26,9 @@
 //! `application/x-www-form-urlencoded`, rather than by splitting on `&`: `+` is
 //! a space there, `%` needs decoding, and a key may legally appear twice —
 //! three behaviours worth getting from a maintained crate instead of a
-//! hand-rolled loop.
+//! hand-rolled loop. The raw query and each parameter this module recognises
+//! are bounded before their decoded values are materialised, because this is
+//! the one endpoint that is unauthenticated by definition.
 //!
 //! ```
 //! use messenger_webhook::{subscription::meta_subscription_challenge, Channel, Error, Secret};
@@ -113,6 +115,34 @@ pub const META_SUBSCRIBE_MODE: &str = "subscribe";
 /// ```
 pub const MAX_CHALLENGE_BYTES: usize = 128;
 
+/// Longest raw query string this crate parses, in bytes.
+///
+/// The subscription handshake is an unauthenticated `GET`, so the raw query is
+/// checked before [`form_urlencoded::parse`] sees it. Meta's documented request
+/// is a few dozen bytes; four KiB leaves room for proxies and diagnostics while
+/// keeping the parser's work bounded.
+///
+/// ```
+/// use messenger_webhook::subscription::MAX_QUERY_BYTES;
+///
+/// assert_eq!(MAX_QUERY_BYTES, 4 * 1024);
+/// ```
+pub const MAX_QUERY_BYTES: usize = 4 * 1024;
+
+/// Longest `hub.verify_token` this crate materialises, in bytes.
+///
+/// The token is chosen by the app operator, so this is a defensive ceiling for
+/// the unauthenticated handshake rather than a provider-documented limit. One
+/// KiB is far above normal generated tokens and keeps a single attacker-sized
+/// parameter from being decoded into a `String` before comparison.
+///
+/// ```
+/// use messenger_webhook::subscription::MAX_VERIFY_TOKEN_BYTES;
+///
+/// assert_eq!(MAX_VERIFY_TOKEN_BYTES, 1024);
+/// ```
+pub const MAX_VERIFY_TOKEN_BYTES: usize = 1024;
+
 /// The spelling PHP forces on the same parameters: `.` becomes `_`.
 const PHP_MODE_PARAM: &str = "hub_mode";
 
@@ -161,10 +191,12 @@ const PHP_VERIFY_TOKEN_PARAM: &str = "hub_verify_token";
 ///   `500`; it is server misconfiguration, not a client rejection.
 /// - [`Error::MalformedVerificationRequest`] when a parameter is missing,
 ///   appears with conflicting values, is not a single `subscribe` in
-///   `hub.mode`, or when the challenge is empty, longer than
-///   [`MAX_CHALLENGE_BYTES`] or not an unsigned 64-bit integer — it is
-///   reflected into the response, so only the canonical decimal rendering of a
-///   parsed integer is returned. Answer this case with `403`.
+///   `hub.mode`, when the query is longer than [`MAX_QUERY_BYTES`], when
+///   `hub.verify_token` is longer than [`MAX_VERIFY_TOKEN_BYTES`], or when the
+///   challenge is empty, longer than [`MAX_CHALLENGE_BYTES`] or not an unsigned
+///   64-bit integer — it is reflected into the response, so only the canonical
+///   decimal rendering of a parsed integer is returned. Answer this case with
+///   `403`.
 /// - [`Error::BadSignature`] when the token does not match. The comparison is
 ///   constant time, and the raw value never reaches the error message.
 ///   Answer this case with `403`.
@@ -179,20 +211,28 @@ pub fn meta_subscription_challenge(
     if secret.is_empty() {
         return Err(Error::MissingSecret { channel });
     }
+    if query.len() > MAX_QUERY_BYTES {
+        return Err(malformed(&channel, "query string is over the length limit"));
+    }
 
     let mut mode = None;
     let mut challenge = None;
     let mut verify_token = None;
 
     for (key, value) in form_urlencoded::parse(query.as_bytes()) {
-        let slot = match key.as_ref() {
-            META_MODE_PARAM | PHP_MODE_PARAM => &mut mode,
-            META_CHALLENGE_PARAM | PHP_CHALLENGE_PARAM => &mut challenge,
-            META_VERIFY_TOKEN_PARAM | PHP_VERIFY_TOKEN_PARAM => &mut verify_token,
+        let (slot, limit) = match key.as_ref() {
+            META_MODE_PARAM | PHP_MODE_PARAM => (&mut mode, META_SUBSCRIBE_MODE.len()),
+            META_CHALLENGE_PARAM | PHP_CHALLENGE_PARAM => (&mut challenge, MAX_CHALLENGE_BYTES),
+            META_VERIFY_TOKEN_PARAM | PHP_VERIFY_TOKEN_PARAM => {
+                (&mut verify_token, MAX_VERIFY_TOKEN_BYTES)
+            }
             // Unknown parameters are ignored: Meta adds fields to this request
             // without warning, and an extra one is not evidence of forgery.
             _ => continue,
         };
+        if value.len() > limit {
+            return Err(malformed(&channel, "a parameter is over the length limit"));
+        }
         let value = value.into_owned();
         if let Some(existing) = slot {
             if existing != &value {

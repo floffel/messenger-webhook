@@ -291,6 +291,8 @@ src/signature.rs:fn meta_signature
 src/signature.rs:fn verify_meta
 src/signature.rs:fn verify_meta_any
 src/subscription.rs:const MAX_CHALLENGE_BYTES
+src/subscription.rs:const MAX_QUERY_BYTES
+src/subscription.rs:const MAX_VERIFY_TOKEN_BYTES
 src/subscription.rs:const META_CHALLENGE_PARAM
 src/subscription.rs:const META_MODE_PARAM
 src/subscription.rs:const META_SUBSCRIBE_MODE

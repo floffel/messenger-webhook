@@ -27,6 +27,11 @@ carry a `!` in the conventional-commit subject.
 - Per-room outbound ordering now uses a bounded `moka` async cache instead of a
   blocking `std::sync::Mutex<HashMap<..>>`, so full-cache pressure no longer
   scans the whole map under a lock. Closes #70.
+- **The Meta subscription handshake now bounds the raw query and verify token
+  before decoding or comparison.** `meta_subscription_challenge` rejects a raw
+  query longer than `MAX_QUERY_BYTES` (4 KiB) before parsing and rejects a
+  `hub.verify_token` longer than `MAX_VERIFY_TOKEN_BYTES` (1 KiB) before it is
+  materialised for the constant-time comparison. Closes #117.
 - The `cargo-deny` gate now resolves all features, so default-off dependencies
   such as the `matrix-out` HTTP stack are covered by advisory checks. Closes #17.
 - **The body ceiling is now a per-adapter property.** `Adapter` gains
