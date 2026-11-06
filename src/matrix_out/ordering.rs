@@ -316,13 +316,13 @@ impl RoomGates {
                 let immediate = {
                     let mut gates = self.registry.lock();
                     if let Some(existing) = gates.get(room_id.as_str()) {
-                        Some(Ok(Arc::clone(existing)))
+                        Some(Ok::<_, OutboundError>(Arc::clone(existing)))
                     } else if let Ok(permit) =
                         Arc::clone(&self.registry.capacity).try_acquire_owned()
                     {
                         let gate = Arc::new(Gate::new(permit, self.registry.waiters_per_room));
                         gates.insert(room_id.as_str().to_owned(), Arc::clone(&gate));
-                        Some(Ok(gate))
+                        Some(Ok::<_, OutboundError>(gate))
                     } else {
                         None
                     }
