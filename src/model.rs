@@ -1290,7 +1290,8 @@ impl ProviderPayload {
     /// # Errors
     ///
     /// Returns [`crate::Error::Payload`] when `content_type` is not
-    /// `application/json` or `body` is not a JSON object, and
+    /// `application/json` or `body` is valid JSON but not an object, and
+    /// [`crate::Error::Json`] when `body` is not valid JSON. Returns
     /// [`crate::Error::BodyTooLarge`] when `body` exceeds
     /// [`crate::MAX_BODY_BYTES`].
     ///
@@ -1332,7 +1333,8 @@ impl ProviderPayload {
     /// # Errors
     ///
     /// Returns [`crate::Error::Payload`] when `content_type` is not
-    /// `application/json` or `body` is not a JSON object, and
+    /// `application/json` or `body` is valid JSON but not an object, and
+    /// [`crate::Error::Json`] when `body` is not valid JSON. Returns
     /// [`crate::Error::BodyTooLarge`] when `body` exceeds
     /// [`crate::MAX_BODY_BYTES`].
     ///
@@ -1364,8 +1366,7 @@ impl ProviderPayload {
             ));
         }
         crate::check_body(body.len())?;
-        let value: serde_json::Value = serde_json::from_slice(&body)
-            .map_err(|error| crate::Error::Payload(error.to_string()))?;
+        let value: serde_json::Value = serde_json::from_slice(&body)?;
         if !value.is_object() {
             return Err(crate::Error::Payload(
                 "outbound payload body must be a JSON object".to_owned(),
@@ -1530,7 +1531,7 @@ impl ProviderPayload {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Payload`] if the body is not valid JSON. The
+    /// Returns [`crate::Error::Json`] if the body is not valid JSON. The
     /// constructors reject malformed and non-object bodies, so this cannot
     /// fail for payloads this crate produces.
     ///
@@ -1547,6 +1548,6 @@ impl ProviderPayload {
     /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     pub fn json(&self) -> crate::Result<serde_json::Value> {
-        serde_json::from_slice(&self.body).map_err(|error| crate::Error::Payload(error.to_string()))
+        Ok(serde_json::from_slice(&self.body)?)
     }
 }

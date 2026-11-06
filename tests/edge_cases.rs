@@ -5,7 +5,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(dead_code, unused_imports, unused_mut, unused_variables)]
 
-use messenger_webhook::{read_body, Adapter, Error, Headers, MAX_BODY_BYTES, MAX_BODY_READ_BYTES};
+use messenger_webhook::{
+    read_body, Adapter, Channel, Error, Headers, ProviderMethod, ProviderPayload, MAX_BODY_BYTES,
+    MAX_BODY_READ_BYTES,
+};
 
 #[cfg(feature = "whatsapp")]
 fn whatsapp() -> messenger_webhook::WhatsAppAdapter {
@@ -36,10 +39,46 @@ fn all_adapters() -> Vec<Box<dyn Adapter>> {
 }
 
 #[test]
-fn empty_body_is_a_payload_error_not_a_panic() {
+fn empty_body_is_a_json_error_not_a_panic() {
     for adapter in all_adapters() {
-        assert!(matches!(adapter.adapt(b""), Err(Error::Payload(_))));
-        assert!(matches!(adapter.adapt(b"   "), Err(Error::Payload(_))));
+        assert!(matches!(adapter.adapt(b""), Err(Error::Json { .. })));
+        assert!(matches!(adapter.adapt(b"   "), Err(Error::Json { .. })));
+    }
+}
+
+#[test]
+fn json_errors_preserve_source_category_and_position() {
+    let error = ProviderPayload::new(
+        Channel::Telegram,
+        ProviderMethod::Post,
+        "application/json",
+        b"{".to_vec(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, Error::Json { .. }));
+    let source = std::error::Error::source(&error).expect("serde_json source");
+    let source = source
+        .downcast_ref::<serde_json::Error>()
+        .expect("source is serde_json::Error");
+    assert_eq!(source.classify(), serde_json::error::Category::Eof);
+    assert!(source.line() >= 1);
+    assert!(source.column() >= 1);
+
+    for adapter in all_adapters() {
+        let error = adapter.adapt(b"{").unwrap_err();
+        assert!(
+            matches!(&error, Error::Json { .. }),
+            "{} did not preserve the JSON error: {error:?}",
+            adapter.channel()
+        );
+        let source = std::error::Error::source(&error).expect("serde_json source");
+        let source = source
+            .downcast_ref::<serde_json::Error>()
+            .expect("source is serde_json::Error");
+        assert_eq!(source.classify(), serde_json::error::Category::Eof);
+        assert!(source.line() >= 1);
+        assert!(source.column() >= 1);
     }
 }
 
@@ -50,7 +89,7 @@ fn body_size_is_checked_before_hashing() {
 
     for adapter in all_adapters() {
         // At the limit: the size gate passes, the JSON gate rejects.
-        assert!(matches!(adapter.adapt(&at_limit), Err(Error::Payload(_))));
+        assert!(matches!(adapter.adapt(&at_limit), Err(Error::Json { .. })));
         assert!(matches!(
             adapter.verify(&Headers::new(), &at_limit),
             Err(Error::MissingVerificationHeader { .. })
@@ -176,7 +215,7 @@ fn deeply_nested_json_fails_instead_of_overflowing_the_stack() {
     for adapter in all_adapters() {
         assert!(matches!(
             adapter.adapt(deep.as_bytes()),
-            Err(Error::Payload(_))
+            Err(Error::Json { .. })
         ));
     }
 }
@@ -334,7 +373,7 @@ mod whatsapp_edges {
     fn verification_passes_on_an_empty_but_signed_body_then_parsing_fails() {
         let headers = signed(b"");
         assert!(whatsapp().verify(&headers, b"").is_ok());
-        assert!(matches!(whatsapp().adapt(b""), Err(Error::Payload(_))));
+        assert!(matches!(whatsapp().adapt(b""), Err(Error::Json { .. })));
     }
 
     #[test]

@@ -331,8 +331,9 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Payload`] when the body is not the provider's JSON
-    /// shape, and [`Error::BodyTooLarge`] for oversized bodies.
+    /// Returns [`Error::Json`] when the body is not valid JSON,
+    /// [`Error::Payload`] when it is valid JSON but not the provider's shape,
+    /// and [`Error::BodyTooLarge`] for oversized bodies.
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>>;
 
     /// Encodes `message` into the provider's outbound schema.
@@ -422,7 +423,7 @@ pub(crate) fn payload(
     retry: RetryPolicy,
     idempotency_key: Option<IdempotencyKey>,
 ) -> Result<ProviderPayload> {
-    let encoded = serde_json::to_vec(body).map_err(|error| Error::Payload(error.to_string()))?;
+    let encoded = serde_json::to_vec(body)?;
     ProviderPayload::with_retry(
         channel,
         method,

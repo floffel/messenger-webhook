@@ -73,7 +73,7 @@ pub(crate) fn synthesize(
         let mut writer = DigestWriter::new(&mut hasher, max_bytes);
         canonical_json(raw, &mut writer).map_err(|error| {
             writer.take_overflow().map_or_else(
-                || Error::Payload(error.to_string()),
+                || Error::from(error),
                 |actual| Error::BodyTooLarge {
                     limit: max_bytes,
                     actual,

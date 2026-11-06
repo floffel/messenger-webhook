@@ -299,7 +299,7 @@ fn provider_payload_rejects_non_json_content_type_and_body() {
             "application/json",
             Vec::new(),
         ),
-        Err(Error::Payload(_))
+        Err(Error::Json { .. })
     ));
     assert!(matches!(
         ProviderPayload::new(
@@ -317,7 +317,7 @@ fn provider_payload_rejects_non_json_content_type_and_body() {
             "application/json",
             b"nope".to_vec(),
         ),
-        Err(Error::Payload(_))
+        Err(Error::Json { .. })
     ));
     assert!(matches!(
         ProviderPayload::new(
@@ -486,6 +486,9 @@ fn bounded_body_read_api() {
 fn every_error_variant_renders_without_panicking() {
     let errors = [
         Error::Payload("not json".to_owned()),
+        Error::Json {
+            source: serde_json::from_slice::<serde_json::Value>(b"not json").unwrap_err(),
+        },
         Error::Io(std::io::Error::new(
             std::io::ErrorKind::ConnectionReset,
             "connection reset",

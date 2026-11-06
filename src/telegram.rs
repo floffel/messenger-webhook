@@ -144,8 +144,7 @@ impl Adapter for TelegramAdapter {
 
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
         check_body(payload.len())?;
-        let root: Value =
-            serde_json::from_slice(payload).map_err(|error| Error::Payload(error.to_string()))?;
+        let root: Value = serde_json::from_slice(payload)?;
         if !root.is_object() {
             return Err(Error::Payload("expected a JSON object".to_owned()));
         }
