@@ -193,6 +193,11 @@ What the crate does with it:
   (`MAX_CHALLENGE_BYTES`) and parsed as an integer before it is returned. Only
   canonical decimal digits can therefore be reflected, so markup, quotes, angle
   brackets, backslashes or CR/LF never reach the caller's response body.
+- The handshake is unauthenticated, so the raw query length is bounded before
+  parsing (`MAX_QUERY_BYTES`, 4 KiB) and `hub.verify_token` is bounded before it
+  reaches constant-time comparison (`MAX_VERIFY_TOKEN_BYTES`, 1 KiB). An
+  attacker cannot make the parser decode and retain an unbounded value before
+  the token check rejects the request.
 - An empty dashboard token fails closed (`Error::MissingSecret`) before the query
   is even parsed, because comparing against an unset token accepts anyone. This
   case is server misconfiguration and should be answered with `500`, not `403`,
