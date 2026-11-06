@@ -109,7 +109,7 @@ impl Adapter for MatrixAdapter {
         if !scheme.eq_ignore_ascii_case("bearer") {
             return Err(Error::MalformedVerificationHeader {
                 channel: Channel::Matrix,
-                reason: format!("unsupported authorization scheme {scheme:?}"),
+                reason: "authorization scheme is not Bearer".to_owned(),
             });
         }
         if self.token.ct_eq(token.as_bytes()) {

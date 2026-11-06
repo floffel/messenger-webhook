@@ -667,6 +667,30 @@ mod matrix_edges {
     }
 
     #[test]
+    fn malformed_authorization_scheme_is_not_echoed() {
+        let adapter = matrix();
+        let scheme = "Basic\r\nx-secret";
+        let header = format!("{scheme} hs-token");
+        let headers = Headers::from_iter([("authorization", header.as_str())]);
+
+        let error = adapter.verify(&headers, b"{}").unwrap_err();
+        let rendered = error.to_string();
+        assert!(matches!(error, Error::MalformedVerificationHeader { .. }));
+        assert!(
+            !rendered.contains(scheme),
+            "error echoed attacker text: {rendered}"
+        );
+        assert!(
+            !rendered.contains("x-secret"),
+            "error echoed attacker text: {rendered}"
+        );
+        assert_eq!(
+            rendered,
+            "matrix verification header is malformed: authorization scheme is not Bearer"
+        );
+    }
+
+    #[test]
     fn empty_token_fails_closed() {
         let adapter = MatrixAdapter::new("");
         let headers = Headers::from_iter([("authorization", "Bearer ")]);
