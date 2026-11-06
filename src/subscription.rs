@@ -113,8 +113,12 @@ const PHP_VERIFY_TOKEN_PARAM: &str = "hub_verify_token";
 /// token that was entered in the app dashboard. On success the caller answers
 /// `200` with the returned value as its body and `text/plain` as its content
 /// type. Meta documents the challenge as an integer, so this function parses it
-/// and returns the canonical decimal rendering; every error means the request
-/// is not from Meta and deserves `403`.
+/// and returns the canonical decimal rendering.
+///
+/// A verification failure means the request is not from Meta and deserves
+/// `403`; a [`Error::MissingSecret`] is the endpoint's own configuration being
+/// incomplete and deserves `500`, so Meta keeps retrying while the operator
+/// fixes it. Use [`Error::is_misconfiguration`] to make that split explicit.
 ///
 /// ```
 /// use messenger_webhook::{subscription::meta_subscription_challenge, Secret};
@@ -134,15 +138,17 @@ const PHP_VERIFY_TOKEN_PARAM: &str = "hub_verify_token";
 ///
 /// - [`Error::MissingSecret`] when `secret` is empty: comparing against an
 ///   unset token would make the handshake succeed for anyone, so the adapter
-///   fails closed instead of accepting the request.
+///   fails closed instead of accepting the request. Answer this case with
+///   `500`; it is server misconfiguration, not a client rejection.
 /// - [`Error::MalformedVerificationRequest`] when a parameter is missing,
 ///   appears with conflicting values, is not a single `subscribe` in
 ///   `hub.mode`, or when the challenge is empty, longer than
 ///   [`MAX_CHALLENGE_BYTES`] or not an unsigned 64-bit integer — it is
 ///   reflected into the response, so only the canonical decimal rendering of a
-///   parsed integer is returned.
+///   parsed integer is returned. Answer this case with `403`.
 /// - [`Error::BadSignature`] when the token does not match. The comparison is
 ///   constant time, and the raw value never reaches the error message.
+///   Answer this case with `403`.
 pub fn meta_subscription_challenge(secret: &Secret, query: &str) -> Result<String> {
     if secret.is_empty() {
         return Err(Error::MissingSecret {

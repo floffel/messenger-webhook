@@ -407,6 +407,28 @@ fn the_malformed_error_is_terminal_and_reads_sensibly() {
     assert!(!error.is_retryable());
 }
 
+#[test]
+fn subscription_errors_distinguish_rejection_from_misconfiguration() {
+    let secret = Secret::new(TOKEN).expect("secret");
+    let malformed = meta_subscription_challenge(&secret, "hub.mode=subscribe&hub.challenge=1")
+        .expect_err("missing verify token");
+    assert!(matches!(
+        malformed,
+        Error::MalformedVerificationRequest { .. }
+    ));
+    assert!(!malformed.is_misconfiguration());
+
+    let wrong_token = request_with(META_VERIFY_TOKEN_PARAM, "wrong-secret-value");
+    let bad_signature = meta_subscription_challenge(&secret, &wrong_token).expect_err("mismatch");
+    assert!(matches!(bad_signature, Error::BadSignature { .. }));
+    assert!(!bad_signature.is_misconfiguration());
+
+    let missing_secret = Error::MissingSecret {
+        channel: Channel::WhatsApp,
+    };
+    assert!(missing_secret.is_misconfiguration());
+}
+
 proptest! {
     /// The handshake succeeds exactly when the token matches, and the answer is
     /// the challenge in canonical decimal — never a value derived from anything
