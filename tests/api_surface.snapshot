@@ -77,7 +77,7 @@ src/matrix_out/mod.rs:trait Sleeper
 src/matrix_out/mod.rs:use error::{OutboundError,OutboundResult}
 src/matrix_out/mod.rs:use http::{ReqwestTransport,DEFAULT_REQUEST_TIMEOUT}
 src/matrix_out/mod.rs:use ordering::GATE_CAPACITY
-src/matrix_out/mod.rs:use retry::{Operation,RetryPolicy,Verdict,DEFAULT_BASE_DELAY_MS,DEFAULT_MAX_ATTEMPTS,DEFAULT_MAX_DELAY_MS,DEFAULT_MAX_RATE_LIMIT_WAIT_MS,}
+src/matrix_out/mod.rs:use retry::{Operation,RetryPolicy,RetryPolicyError,Verdict,DEFAULT_BASE_DELAY_MS,DEFAULT_MAX_ATTEMPTS,DEFAULT_MAX_DELAY_MS,DEFAULT_MAX_RATE_LIMIT_WAIT_MS,}
 src/matrix_out/mod.rs:use testing::{RecordedRequest,RecordingSleeper,StubTransport}
 src/matrix_out/mod.rs:use transport::Transport
 src/matrix_out/mod.rs:use types::{MediaKind,MediaUpload,MxcUri,SendOutcome,TxnId,DEFAULT_MAX_UPLOAD_BYTES,DEFAULT_TYPING_TIMEOUT_MS,MAX_CONTENT_BYTES,MAX_EVENT_TYPE_BYTES,MAX_ID_BYTES,MAX_MXC_URI_BYTES,MAX_TXN_ID_BYTES,}
@@ -87,12 +87,22 @@ src/matrix_out/retry.rs:const DEFAULT_MAX_ATTEMPTS
 src/matrix_out/retry.rs:const DEFAULT_MAX_DELAY_MS
 src/matrix_out/retry.rs:const DEFAULT_MAX_RATE_LIMIT_WAIT_MS
 src/matrix_out/retry.rs:enum Operation
+src/matrix_out/retry.rs:enum RetryPolicyError
 src/matrix_out/retry.rs:enum Verdict
 src/matrix_out/retry.rs:impl Operation:fn as_str
 src/matrix_out/retry.rs:impl Operation:fn is_repeatable
 src/matrix_out/retry.rs:impl RetryPolicy:fn backoff
+src/matrix_out/retry.rs:impl RetryPolicy:fn base_delay
 src/matrix_out/retry.rs:impl RetryPolicy:fn classify
 src/matrix_out/retry.rs:impl RetryPolicy:fn classify_transport
+src/matrix_out/retry.rs:impl RetryPolicy:fn max_attempts
+src/matrix_out/retry.rs:impl RetryPolicy:fn max_delay
+src/matrix_out/retry.rs:impl RetryPolicy:fn max_rate_limit_wait
+src/matrix_out/retry.rs:impl RetryPolicy:fn new
+src/matrix_out/retry.rs:impl RetryPolicy:fn with_base_delay
+src/matrix_out/retry.rs:impl RetryPolicy:fn with_max_attempts
+src/matrix_out/retry.rs:impl RetryPolicy:fn with_max_delay
+src/matrix_out/retry.rs:impl RetryPolicy:fn with_max_rate_limit_wait
 src/matrix_out/retry.rs:impl Verdict:fn delay
 src/matrix_out/retry.rs:impl Verdict:fn is_final
 src/matrix_out/retry.rs:struct RetryPolicy
@@ -195,10 +205,10 @@ src/model.rs:impl NormalizedMessage:fn is_status_update
 src/model.rs:impl NormalizedMessage:fn span_text
 src/model.rs:impl NormalizedMessage:fn spans
 src/model.rs:impl NormalizedMessage:fn text
-src/model.rs:impl NormalizedMessage:fn without_text
 src/model.rs:impl NormalizedMessage:fn with_spans
 src/model.rs:impl NormalizedMessage:fn with_text
 src/model.rs:impl NormalizedMessage:fn with_text_and_spans
+src/model.rs:impl NormalizedMessage:fn without_text
 src/model.rs:impl OutboundMessage:fn first_attachment
 src/model.rs:impl OutboundMessage:fn text
 src/model.rs:impl ProviderMethod:fn as_str

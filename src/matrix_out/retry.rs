@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use exponential_backoff::Backoff;
 use serde_json::Value;
+use thiserror::Error;
 
 use crate::matrix_out::transport::{Response, TransportError, TransportErrorKind};
 
@@ -182,6 +183,45 @@ impl Verdict {
     }
 }
 
+/// A retry policy could not be constructed because one of its invariants
+/// would be broken.
+///
+/// ```
+/// use std::time::Duration;
+/// use messenger_webhook::matrix_out::{RetryPolicy, RetryPolicyError};
+///
+/// let error = RetryPolicy::new(
+///     0,
+///     Duration::from_millis(100),
+///     Duration::from_secs(1),
+///     Duration::from_secs(1),
+/// )
+/// .expect_err("zero attempts is unusable");
+/// assert_eq!(error, RetryPolicyError::ZeroMaxAttempts);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum RetryPolicyError {
+    /// `max_attempts` was zero, so no operation could ever be attempted.
+    #[error("retry policy max_attempts must be at least 1")]
+    ZeroMaxAttempts,
+    /// `base_delay` was zero, so retries would spin without waiting.
+    #[error("retry policy base_delay must be greater than zero")]
+    ZeroBaseDelay,
+    /// `base_delay` was longer than `max_delay`, so the backoff could never
+    /// grow from its starting point.
+    #[error("retry policy base_delay ({base_delay:?}) is longer than max_delay ({max_delay:?})")]
+    BaseDelayExceedsMaxDelay {
+        /// The configured first delay.
+        base_delay: Duration,
+        /// The configured delay ceiling.
+        max_delay: Duration,
+    },
+    /// `max_rate_limit_wait` was zero, so every `429` would be exhausted.
+    #[error("retry policy max_rate_limit_wait must be greater than zero")]
+    ZeroMaxRateLimitWait,
+}
+
 /// How often, and how long, the client waits between attempts.
 ///
 /// The schedule is `base_delay * 2^(attempt-1)`, clamped to `max_delay`, from
@@ -190,32 +230,31 @@ impl Verdict {
 /// adds the crate's default jitter when the homeserver did not provide its own
 /// delay. A `429` overrides both with the homeserver's `retry_after_ms`.
 ///
+/// Build one with [`RetryPolicy::new`] or [`RetryPolicy::default`]; the
+/// constructor rejects values that would make one of the policy's own
+/// invariants unenforceable.
+///
 /// ```
 /// use std::time::Duration;
 /// use messenger_webhook::matrix_out::RetryPolicy;
 ///
-/// let policy = RetryPolicy {
-///     max_attempts: 4,
-///     base_delay: Duration::from_millis(250),
-///     max_delay: Duration::from_secs(5),
-///     max_rate_limit_wait: Duration::from_secs(30),
-/// };
+/// let policy = RetryPolicy::new(
+///     4,
+///     Duration::from_millis(250),
+///     Duration::from_secs(5),
+///     Duration::from_secs(30),
+/// )?;
 /// assert_eq!(policy.backoff(1), Duration::from_millis(250));
 /// assert_eq!(policy.backoff(2), Duration::from_millis(500));
 /// assert_eq!(policy.backoff(40), Duration::from_secs(5));
+/// # Ok::<(), messenger_webhook::matrix_out::RetryPolicyError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryPolicy {
-    /// Total attempts per operation, the first one included. `1` disables
-    /// retrying.
-    pub max_attempts: u32,
-    /// Delay before the second attempt; doubles for every further attempt.
-    pub base_delay: Duration,
-    /// Ceiling for the exponential backoff.
-    pub max_delay: Duration,
-    /// Longest `retry_after_ms` the client will honour. A longer demand ends
-    /// the operation with [`Verdict::Exhausted`] so the caller can requeue.
-    pub max_rate_limit_wait: Duration,
+    max_attempts: u32,
+    base_delay: Duration,
+    max_delay: Duration,
+    max_rate_limit_wait: Duration,
 }
 
 impl Default for RetryPolicy {
@@ -230,6 +269,213 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
+    /// Builds a retry policy after checking every invariant the policy relies
+    /// on.
+    ///
+    /// # Errors
+    ///
+    /// [`RetryPolicyError::ZeroMaxAttempts`] when `max_attempts` is `0`,
+    /// [`RetryPolicyError::ZeroBaseDelay`] when `base_delay` is zero,
+    /// [`RetryPolicyError::BaseDelayExceedsMaxDelay`] when `base_delay` is
+    /// longer than `max_delay`, and
+    /// [`RetryPolicyError::ZeroMaxRateLimitWait`] when `max_rate_limit_wait` is
+    /// zero.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use messenger_webhook::matrix_out::RetryPolicy;
+    ///
+    /// let policy = RetryPolicy::new(
+    ///     2,
+    ///     Duration::from_millis(100),
+    ///     Duration::from_millis(100),
+    ///     Duration::from_millis(1),
+    /// )?;
+    /// assert_eq!(policy.max_attempts(), 2);
+    /// assert_eq!(policy.max_delay(), Duration::from_millis(100));
+    /// # Ok::<(), messenger_webhook::matrix_out::RetryPolicyError>(())
+    /// ```
+    pub fn new(
+        max_attempts: u32,
+        base_delay: Duration,
+        max_delay: Duration,
+        max_rate_limit_wait: Duration,
+    ) -> Result<Self, RetryPolicyError> {
+        if max_attempts == 0 {
+            return Err(RetryPolicyError::ZeroMaxAttempts);
+        }
+        if base_delay.is_zero() {
+            return Err(RetryPolicyError::ZeroBaseDelay);
+        }
+        if base_delay > max_delay {
+            return Err(RetryPolicyError::BaseDelayExceedsMaxDelay {
+                base_delay,
+                max_delay,
+            });
+        }
+        if max_rate_limit_wait.is_zero() {
+            return Err(RetryPolicyError::ZeroMaxRateLimitWait);
+        }
+        Ok(Self {
+            max_attempts,
+            base_delay,
+            max_delay,
+            max_rate_limit_wait,
+        })
+    }
+
+    /// Replaces [`RetryPolicy::max_attempts()`], preserving the other fields.
+    ///
+    /// # Errors
+    ///
+    /// [`RetryPolicyError::ZeroMaxAttempts`] when `max_attempts` is `0`.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::RetryPolicy;
+    ///
+    /// let policy = RetryPolicy::default().with_max_attempts(2)?;
+    /// assert_eq!(policy.max_attempts(), 2);
+    /// # Ok::<(), messenger_webhook::matrix_out::RetryPolicyError>(())
+    /// ```
+    pub fn with_max_attempts(self, max_attempts: u32) -> Result<Self, RetryPolicyError> {
+        Self::new(
+            max_attempts,
+            self.base_delay,
+            self.max_delay,
+            self.max_rate_limit_wait,
+        )
+    }
+
+    /// Replaces [`RetryPolicy::base_delay()`], preserving the other fields.
+    ///
+    /// # Errors
+    ///
+    /// [`RetryPolicyError::ZeroBaseDelay`] when `base_delay` is zero, and
+    /// [`RetryPolicyError::BaseDelayExceedsMaxDelay`] when `base_delay` is
+    /// longer than the current `max_delay`.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use messenger_webhook::matrix_out::RetryPolicy;
+    ///
+    /// let policy = RetryPolicy::default().with_base_delay(Duration::from_millis(1))?;
+    /// assert_eq!(policy.base_delay(), Duration::from_millis(1));
+    /// # Ok::<(), messenger_webhook::matrix_out::RetryPolicyError>(())
+    /// ```
+    pub fn with_base_delay(self, base_delay: Duration) -> Result<Self, RetryPolicyError> {
+        Self::new(
+            self.max_attempts,
+            base_delay,
+            self.max_delay,
+            self.max_rate_limit_wait,
+        )
+    }
+
+    /// Replaces [`RetryPolicy::max_delay()`], preserving the other fields.
+    ///
+    /// # Errors
+    ///
+    /// [`RetryPolicyError::BaseDelayExceedsMaxDelay`] when the current
+    /// `base_delay` is longer than `max_delay`.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use messenger_webhook::matrix_out::RetryPolicy;
+    ///
+    /// let policy = RetryPolicy::default().with_max_delay(Duration::from_secs(10))?;
+    /// assert_eq!(policy.max_delay(), Duration::from_secs(10));
+    /// # Ok::<(), messenger_webhook::matrix_out::RetryPolicyError>(())
+    /// ```
+    pub fn with_max_delay(self, max_delay: Duration) -> Result<Self, RetryPolicyError> {
+        Self::new(
+            self.max_attempts,
+            self.base_delay,
+            max_delay,
+            self.max_rate_limit_wait,
+        )
+    }
+
+    /// Replaces [`RetryPolicy::max_rate_limit_wait()`], preserving the other
+    /// fields.
+    ///
+    /// # Errors
+    ///
+    /// [`RetryPolicyError::ZeroMaxRateLimitWait`] when `max_rate_limit_wait` is
+    /// zero.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use messenger_webhook::matrix_out::RetryPolicy;
+    ///
+    /// let policy = RetryPolicy::default().with_max_rate_limit_wait(Duration::from_secs(1))?;
+    /// assert_eq!(policy.max_rate_limit_wait(), Duration::from_secs(1));
+    /// # Ok::<(), messenger_webhook::matrix_out::RetryPolicyError>(())
+    /// ```
+    pub fn with_max_rate_limit_wait(
+        self,
+        max_rate_limit_wait: Duration,
+    ) -> Result<Self, RetryPolicyError> {
+        Self::new(
+            self.max_attempts,
+            self.base_delay,
+            self.max_delay,
+            max_rate_limit_wait,
+        )
+    }
+
+    /// Total attempts per operation, the first one included. `1` disables
+    /// retrying.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::RetryPolicy;
+    ///
+    /// assert_eq!(RetryPolicy::default().max_attempts(), 3);
+    /// ```
+    #[must_use]
+    pub const fn max_attempts(&self) -> u32 {
+        self.max_attempts
+    }
+
+    /// Delay before the second attempt; doubles for every further attempt.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use messenger_webhook::matrix_out::RetryPolicy;
+    ///
+    /// assert_eq!(RetryPolicy::default().base_delay(), Duration::from_millis(500));
+    /// ```
+    #[must_use]
+    pub const fn base_delay(&self) -> Duration {
+        self.base_delay
+    }
+
+    /// Ceiling for the exponential backoff.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use messenger_webhook::matrix_out::RetryPolicy;
+    ///
+    /// assert_eq!(RetryPolicy::default().max_delay(), Duration::from_secs(30));
+    /// ```
+    #[must_use]
+    pub const fn max_delay(&self) -> Duration {
+        self.max_delay
+    }
+
+    /// Longest `retry_after_ms` the client will honour. A longer demand ends
+    /// the operation with [`Verdict::Exhausted`] so the caller can requeue.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use messenger_webhook::matrix_out::RetryPolicy;
+    ///
+    /// assert_eq!(RetryPolicy::default().max_rate_limit_wait(), Duration::from_secs(60));
+    /// ```
+    #[must_use]
+    pub const fn max_rate_limit_wait(&self) -> Duration {
+        self.max_rate_limit_wait
+    }
+
     /// The wait before attempt `attempt + 1`, given that `attempt` attempts have
     /// failed.
     ///
@@ -243,8 +489,8 @@ impl RetryPolicy {
     /// use messenger_webhook::matrix_out::RetryPolicy;
     ///
     /// let policy = RetryPolicy::default();
-    /// assert_eq!(policy.backoff(0), policy.base_delay);
-    /// assert_eq!(policy.backoff(1), policy.base_delay);
+    /// assert_eq!(policy.backoff(0), policy.base_delay());
+    /// assert_eq!(policy.backoff(1), policy.base_delay());
     /// assert_eq!(policy.backoff(3), Duration::from_millis(2000));
     /// ```
     #[must_use]
@@ -264,10 +510,6 @@ impl RetryPolicy {
     /// delay per attempt, so `attempt` maps to the same 1-based step as the
     /// public API: `0` and `1` are the base delay, `2` doubles it, and so on.
     fn backoff_with_jitter(&self, attempt: u32, jitter: f32) -> Duration {
-        if self.base_delay > self.max_delay {
-            return self.max_delay;
-        }
-
         let exponent = attempt.saturating_sub(1).min(31);
         let mut backoff = Backoff::new(exponent.saturating_add(2), self.base_delay, self.max_delay);
         backoff.set_jitter(jitter);
@@ -374,20 +616,6 @@ impl RetryPolicy {
             }
         }
     }
-
-    /// Whether the policy can be used at all.
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.max_attempts == 0 {
-            return Err("max_attempts must be at least 1".to_owned());
-        }
-        if self.base_delay > self.max_delay {
-            return Err(format!(
-                "base_delay ({:?}) is longer than max_delay ({:?}), so the backoff could never grow",
-                self.base_delay, self.max_delay
-            ));
-        }
-        Ok(())
-    }
 }
 
 /// The pause a `429` demands, from the body's `retry_after_ms` or the
@@ -438,7 +666,7 @@ mod tests {
         match (actual, expected) {
             (Verdict::Retry { delay }, Verdict::Retry { delay: base }) => {
                 let lower = base.mul_f64(0.7);
-                let upper = base.mul_f64(1.3).min(policy.max_delay);
+                let upper = base.mul_f64(1.3).min(policy.max_delay());
                 assert!(
                     delay >= lower && delay <= upper,
                     "{delay:?} outside {lower:?}..={upper:?}"
@@ -450,12 +678,13 @@ mod tests {
 
     #[test]
     fn backoff_doubles_until_the_ceiling() {
-        let policy = RetryPolicy {
-            max_attempts: 10,
-            base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(1),
-            max_rate_limit_wait: Duration::from_secs(1),
-        };
+        let policy = RetryPolicy::new(
+            10,
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .expect("valid");
         assert_eq!(policy.backoff(0), Duration::from_millis(100));
         assert_eq!(policy.backoff(1), Duration::from_millis(100));
         assert_eq!(policy.backoff(2), Duration::from_millis(200));
@@ -475,17 +704,18 @@ mod tests {
 
     #[test]
     fn runtime_backoff_is_the_same_window_with_jitter() {
-        let policy = RetryPolicy {
-            max_attempts: 10,
-            base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(1),
-            max_rate_limit_wait: Duration::from_secs(1),
-        };
+        let policy = RetryPolicy::new(
+            10,
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .expect("valid");
         for attempt in 1..=5 {
             let deterministic = policy.backoff(attempt);
             let jittered = policy.retry_delay(attempt);
             let lower = deterministic.mul_f64(0.7);
-            let upper = deterministic.mul_f64(1.3).min(policy.max_delay);
+            let upper = deterministic.mul_f64(1.3).min(policy.max_delay());
             assert!(
                 jittered >= lower && jittered <= upper,
                 "attempt {attempt}: {jittered:?} outside {lower:?}..={upper:?}"
@@ -544,10 +774,7 @@ mod tests {
 
     #[test]
     fn the_attempt_budget_ends_in_exhausted_not_ambiguous() {
-        let policy = RetryPolicy {
-            max_attempts: 2,
-            ..RetryPolicy::default()
-        };
+        let policy = RetryPolicy::default().with_max_attempts(2).expect("valid");
         assert!(matches!(
             policy.classify(1, &response(503), Operation::Read),
             Verdict::Retry { .. }
@@ -557,10 +784,7 @@ mod tests {
             Verdict::Exhausted
         );
         // A single-attempt policy never retries.
-        let single = RetryPolicy {
-            max_attempts: 1,
-            ..RetryPolicy::default()
-        };
+        let single = RetryPolicy::default().with_max_attempts(1).expect("valid");
         assert_eq!(
             single.classify(1, &response(503), Operation::Idempotent),
             Verdict::Exhausted
@@ -569,19 +793,13 @@ mod tests {
 
     #[test]
     fn a_rate_limit_still_respects_the_attempt_budget() {
-        let single = RetryPolicy {
-            max_attempts: 1,
-            ..RetryPolicy::default()
-        };
+        let single = RetryPolicy::default().with_max_attempts(1).expect("valid");
         let response = Response::json(429, r#"{"retry_after_ms":10}"#);
         assert_eq!(
             single.classify(1, &response, Operation::Idempotent),
             Verdict::Exhausted
         );
-        let two = RetryPolicy {
-            max_attempts: 2,
-            ..RetryPolicy::default()
-        };
+        let two = RetryPolicy::default().with_max_attempts(2).expect("valid");
         assert!(matches!(
             two.classify(1, &response, Operation::Idempotent),
             Verdict::Retry { .. }
@@ -657,10 +875,9 @@ mod tests {
 
     #[test]
     fn a_rate_limit_longer_than_the_budget_is_exhausted() {
-        let policy = RetryPolicy {
-            max_rate_limit_wait: Duration::from_secs(1),
-            ..RetryPolicy::default()
-        };
+        let policy = RetryPolicy::default()
+            .with_max_rate_limit_wait(Duration::from_secs(1))
+            .expect("valid");
         let response = Response::json(429, r#"{"retry_after_ms":1001}"#);
         assert_eq!(
             policy.classify(1, &response, Operation::Read),
@@ -736,10 +953,7 @@ mod tests {
 
     #[test]
     fn an_exhausted_transport_budget_is_exhausted_for_every_operation() {
-        let policy = RetryPolicy {
-            max_attempts: 1,
-            ..RetryPolicy::default()
-        };
+        let policy = RetryPolicy::default().with_max_attempts(1).expect("valid");
         assert_eq!(
             policy.classify_transport(1, &TransportError::connect("dns"), Operation::Read),
             Verdict::Exhausted
@@ -777,18 +991,73 @@ mod tests {
     }
 
     #[test]
-    fn policy_validation_rejects_the_two_unusable_shapes() {
-        assert!(RetryPolicy::default().validate().is_ok());
-        let no_attempts = RetryPolicy {
-            max_attempts: 0,
-            ..RetryPolicy::default()
-        };
-        assert!(no_attempts.validate().is_err());
-        let inverted = RetryPolicy {
-            base_delay: Duration::from_secs(10),
-            max_delay: Duration::from_secs(1),
-            ..RetryPolicy::default()
-        };
-        assert!(inverted.validate().is_err());
+    fn policy_constructor_and_updates_enforce_boundaries() {
+        assert!(RetryPolicy::new(
+            1,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        )
+        .is_ok());
+        assert_eq!(
+            RetryPolicy::new(
+                0,
+                Duration::from_millis(1),
+                Duration::from_millis(1),
+                Duration::from_millis(1),
+            ),
+            Err(RetryPolicyError::ZeroMaxAttempts)
+        );
+        assert_eq!(
+            RetryPolicy::new(
+                1,
+                Duration::ZERO,
+                Duration::from_millis(1),
+                Duration::from_millis(1),
+            ),
+            Err(RetryPolicyError::ZeroBaseDelay)
+        );
+        assert_eq!(
+            RetryPolicy::new(
+                1,
+                Duration::from_millis(2),
+                Duration::from_millis(1),
+                Duration::from_millis(1),
+            ),
+            Err(RetryPolicyError::BaseDelayExceedsMaxDelay {
+                base_delay: Duration::from_millis(2),
+                max_delay: Duration::from_millis(1),
+            })
+        );
+        assert_eq!(
+            RetryPolicy::new(
+                1,
+                Duration::from_millis(1),
+                Duration::from_millis(1),
+                Duration::ZERO,
+            ),
+            Err(RetryPolicyError::ZeroMaxRateLimitWait)
+        );
+
+        let base = RetryPolicy::default();
+        assert_eq!(
+            base.with_max_attempts(0),
+            Err(RetryPolicyError::ZeroMaxAttempts)
+        );
+        assert_eq!(
+            base.with_base_delay(Duration::ZERO),
+            Err(RetryPolicyError::ZeroBaseDelay)
+        );
+        assert_eq!(
+            base.with_max_delay(Duration::from_millis(1)),
+            Err(RetryPolicyError::BaseDelayExceedsMaxDelay {
+                base_delay: Duration::from_millis(DEFAULT_BASE_DELAY_MS),
+                max_delay: Duration::from_millis(1),
+            })
+        );
+        assert_eq!(
+            base.with_max_rate_limit_wait(Duration::ZERO),
+            Err(RetryPolicyError::ZeroMaxRateLimitWait)
+        );
     }
 }

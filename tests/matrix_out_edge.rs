@@ -9,8 +9,8 @@ use std::time::Duration;
 use messenger_webhook::matrix_out::transport::{Response, TransportError};
 use messenger_webhook::matrix_out::{
     ClientConfig, MatrixClient, MediaKind, MediaUpload, OutboundError, RecordingSleeper,
-    RetryPolicy, StubTransport, TxnId, MAX_CONTENT_BYTES, MAX_EVENT_TYPE_BYTES, MAX_ID_BYTES,
-    MAX_TXN_ID_BYTES,
+    RetryPolicy, RetryPolicyError, StubTransport, TxnId, MAX_CONTENT_BYTES, MAX_EVENT_TYPE_BYTES,
+    MAX_ID_BYTES, MAX_TXN_ID_BYTES,
 };
 
 fn client_with(
@@ -253,12 +253,21 @@ fn a_429_without_a_hint_with_garbage_and_with_a_zero_hint() {
 }
 
 #[test]
-fn a_zero_rate_limit_budget_still_allows_a_zero_wait() {
+fn a_zero_rate_limit_budget_is_rejected_before_a_client_is_built() {
+    assert_eq!(
+        RetryPolicy::default().with_max_rate_limit_wait(Duration::ZERO),
+        Err(RetryPolicyError::ZeroMaxRateLimitWait)
+    );
+}
+
+#[test]
+fn a_minimal_rate_limit_budget_allows_only_the_boundary() {
     let (client, transport, sleeper) = client_with(|config| {
-        config.with_retry(RetryPolicy {
-            max_rate_limit_wait: Duration::ZERO,
-            ..RetryPolicy::default()
-        })
+        config.with_retry(
+            RetryPolicy::default()
+                .with_max_rate_limit_wait(Duration::from_millis(1))
+                .expect("valid"),
+        )
     });
     transport
         .push_json(429, r#"{"retry_after_ms":0}"#)
@@ -267,8 +276,17 @@ fn a_zero_rate_limit_budget_still_allows_a_zero_wait() {
     block_on(client.send_text("!r:m.example", "x")).expect("sent");
     assert_eq!(sleeper.delays(), vec![Duration::ZERO]);
 
-    // Any positive hint is over a zero budget.
-    transport.push_json(429, r#"{"retry_after_ms":1}"#);
+    transport
+        .push_json(429, r#"{"retry_after_ms":1}"#)
+        .push_json(200, r#"{"event_id":"$1"}"#);
+    block_on(client.send_text("!r:m.example", "x")).expect("sent at the boundary");
+    assert_eq!(
+        sleeper.delays(),
+        vec![Duration::ZERO, Duration::from_millis(1)]
+    );
+
+    // One millisecond over the budget is refused.
+    transport.push_json(429, r#"{"retry_after_ms":2}"#);
     let error = block_on(client.send_text("!r:m.example", "x")).expect_err("limited");
     assert!(
         matches!(error, OutboundError::RateLimited { .. }),
@@ -324,10 +342,7 @@ fn every_non_2xx_non_429_status_is_classified_once() {
 #[test]
 fn a_599_is_retried_but_a_600_is_not() {
     let (client, transport, _) = client_with(|config| {
-        config.with_retry(RetryPolicy {
-            max_attempts: 2,
-            ..RetryPolicy::default()
-        })
+        config.with_retry(RetryPolicy::default().with_max_attempts(2).expect("valid"))
     });
     transport
         .push_json(599, "{}")
@@ -344,10 +359,7 @@ fn a_599_is_retried_but_a_600_is_not() {
 #[test]
 fn a_single_attempt_policy_never_retries_anything() {
     let (client, transport, sleeper) = client_with(|config| {
-        config.with_retry(RetryPolicy {
-            max_attempts: 1,
-            ..RetryPolicy::default()
-        })
+        config.with_retry(RetryPolicy::default().with_max_attempts(1).expect("valid"))
     });
     for (status, body) in [(503, "{}"), (429, r#"{"retry_after_ms":1}"#)] {
         // Exactly one scripted answer: a second attempt would run out of script
@@ -376,10 +388,7 @@ fn a_zero_length_body_on_a_typing_leg_is_fine() {
 #[test]
 fn the_error_body_is_read_from_the_raw_bytes_when_it_is_not_json() {
     let (client, transport, _) = client_with(|config| {
-        config.with_retry(RetryPolicy {
-            max_attempts: 1,
-            ..RetryPolicy::default()
-        })
+        config.with_retry(RetryPolicy::default().with_max_attempts(1).expect("valid"))
     });
     transport.push(Response::new(
         502,
@@ -462,10 +471,7 @@ fn a_trailing_slash_on_the_homeserver_never_doubles_in_a_path() {
 #[test]
 fn a_connect_failure_on_a_read_exhausts_into_a_retryable_transport_error() {
     let (client, transport, _) = client_with(|config| {
-        config.with_retry(RetryPolicy {
-            max_attempts: 2,
-            ..RetryPolicy::default()
-        })
+        config.with_retry(RetryPolicy::default().with_max_attempts(2).expect("valid"))
     });
     transport
         .push_failure(TransportError::connect("dns"))

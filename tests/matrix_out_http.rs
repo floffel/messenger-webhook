@@ -20,6 +20,7 @@ use messenger_webhook::matrix_out::transport::{
 };
 use messenger_webhook::matrix_out::{
     ClientConfig, MatrixClient, MediaUpload, OutboundError, ReqwestTransport, RetryPolicy,
+    DEFAULT_MAX_DELAY_MS, DEFAULT_MAX_RATE_LIMIT_WAIT_MS,
 };
 
 /// What the homeserver stand-in saw, and how it should behave.
@@ -160,10 +161,7 @@ fn client_with(base: &str, retry: RetryPolicy, timeout: Duration) -> MatrixClien
 }
 
 fn one_attempt() -> RetryPolicy {
-    RetryPolicy {
-        max_attempts: 1,
-        ..RetryPolicy::default()
-    }
+    RetryPolicy::default().with_max_attempts(1).expect("valid")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -242,11 +240,13 @@ async fn a_5xx_over_the_wire_is_retried_with_the_same_transaction_id() {
     seen.fail_sends.store(true, Ordering::SeqCst);
     let client = client_with(
         &base,
-        RetryPolicy {
-            max_attempts: 2,
-            base_delay: Duration::from_millis(1),
-            ..RetryPolicy::default()
-        },
+        RetryPolicy::new(
+            2,
+            Duration::from_millis(1),
+            Duration::from_millis(DEFAULT_MAX_DELAY_MS),
+            Duration::from_millis(DEFAULT_MAX_RATE_LIMIT_WAIT_MS),
+        )
+        .expect("valid"),
         Duration::from_secs(5),
     );
 
