@@ -1,6 +1,6 @@
 //! Adapter registry — one place that maps a channel onto its adapter.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::error::{Error, Result};
@@ -28,7 +28,7 @@ use crate::{Adapter, Headers};
 /// ```
 #[derive(Default)]
 pub struct Registry {
-    adapters: HashMap<Channel, Box<dyn Adapter>>,
+    adapters: BTreeMap<Channel, Box<dyn Adapter>>,
 }
 
 impl Registry {
@@ -113,9 +113,7 @@ impl Registry {
     /// ```
     #[must_use]
     pub fn channels(&self) -> Vec<Channel> {
-        let mut channels: Vec<Channel> = self.adapters.keys().cloned().collect();
-        channels.sort();
-        channels
+        self.adapters.keys().cloned().collect()
     }
 
     /// Number of registered adapters.
@@ -227,7 +225,15 @@ impl Registry {
 impl fmt::Debug for Registry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Registry")
-            .field("channels", &self.channels())
+            .field("channels", &DebugChannels(&self.adapters))
             .finish()
+    }
+}
+
+struct DebugChannels<'a>(&'a BTreeMap<Channel, Box<dyn Adapter>>);
+
+impl fmt::Debug for DebugChannels<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.0.keys()).finish()
     }
 }
