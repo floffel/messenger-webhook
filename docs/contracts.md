@@ -255,6 +255,9 @@ What the crate does with it:
   units and `parse_mode` stays unset because Telegram treats entities and
   markdown as mutually exclusive. `text_mention` is rejected because Telegram
   requires a full `User` object, while the neutral span carries only `user_id`.
+  More than `MAX_ENTITIES` (100) runs is rejected before the wire: Telegram
+  silently discards the extra entities past that ceiling, so a larger array
+  would arrive with its tail unformatted and no error.
 
 The Telegram update/MessageEntity model is intentionally local rather than a
 maintained Telegram type crate. `frankenstein` is WTFPL, which is outside

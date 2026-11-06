@@ -484,6 +484,45 @@ fn telegram_encode_rejects_span_that_does_not_slice_text() {
 
 #[cfg(feature = "telegram")]
 #[test]
+fn telegram_encode_keeps_entities_at_the_array_ceiling() {
+    // The whole path is in-process: `encode` builds the Bot API body without
+    // opening a socket, so the mock transport is just the serialised payload.
+    let at_limit = |count: usize| {
+        let text = "a".repeat(count);
+        let spans = (0..count)
+            .map(|index| {
+                TextSpan::new(&text, index, index + 1, TextFormat::Bold).expect("one-char span")
+            })
+            .collect::<Vec<_>>();
+        OutboundMessage::text(Channel::Telegram, "-1001", text).with_spans(spans)
+    };
+
+    // Just inside: exactly the ceiling Telegram stores, all of them survive.
+    let body = encode(&at_limit(messenger_webhook::telegram::MAX_ENTITIES));
+    assert_eq!(
+        body["entities"].as_array().expect("array").len(),
+        messenger_webhook::telegram::MAX_ENTITIES
+    );
+
+    // Just outside: one more would be silently dropped by Telegram, so the
+    // encoder refuses it before the wire.
+    let over = at_limit(messenger_webhook::telegram::MAX_ENTITIES + 1);
+    let error = TelegramAdapter::new("secret-secret-secret")
+        .expect("adapter")
+        .encode(&over)
+        .expect_err("too many entities");
+    assert!(
+        matches!(
+            &error,
+            messenger_webhook::Error::InvalidMessage { reason, .. }
+                if reason.contains("at most 100 entities")
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[cfg(feature = "telegram")]
+#[test]
 fn telegram_encode_maps_every_format_or_rejects_it() {
     let text = "abc";
     let cases = [

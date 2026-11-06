@@ -50,6 +50,23 @@ pub const MAX_TEXT_UTF16: usize = 4096;
 /// ```
 pub const MAX_CAPTION_UTF16: usize = 1024;
 
+/// Most `MessageEntity` objects Telegram keeps on one message.
+///
+/// Telegram caps the array as a whole — not per entity type — and past the
+/// ceiling it silently drops the extra runs, so a message arrives with the
+/// tail unformatted and no error. The Bot API does not document a number;
+/// `python-telegram-bot` pins it as `MAX_MESSAGE_ENTITIES = 100` ("Beyond this
+/// cap telegram will simply ignore further formatting styles"), and a tdlib
+/// `telegram-bot-api` report confirms a single message supports up to 100
+/// entities
+/// (<https://github.com/tdlib/telegram-bot-api/issues/820>). [`TelegramAdapter`]
+/// rejects a larger array before the wire instead of losing formatting.
+///
+/// ```
+/// assert_eq!(messenger_webhook::telegram::MAX_ENTITIES, 100);
+/// ```
+pub const MAX_ENTITIES: usize = 100;
+
 /// Largest Telegram Bot API update body, in bytes.
 ///
 /// The Bot API does not publish a webhook body ceiling. Its reference server
@@ -362,6 +379,15 @@ fn telegram_attachment_fields(
 
 /// Encodes byte spans as Telegram `MessageEntity` objects.
 fn telegram_entities(text: &str, spans: &[TextSpan]) -> Result<Value> {
+    if spans.len() > MAX_ENTITIES {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: format!(
+                "Telegram keeps at most {MAX_ENTITIES} entities per message, got {}",
+                spans.len()
+            ),
+        });
+    }
     let ranges = byte_to_utf16_ranges(text, spans.iter().map(|span| Some((span.start, span.end))));
     let mut entities = Vec::with_capacity(spans.len());
     for (span, range) in spans.iter().zip(ranges) {
