@@ -15,6 +15,7 @@
 //! | `4xx` (other) | rejected | rejected | rejected |
 //! | connect failure | retry | retry | retry — nothing was written |
 //! | timeout / reset | retry | retry | **ambiguous** |
+//! | invalid request before write | rejected | rejected | rejected — fix the request |
 //!
 //! A send keyed by a [`TxnId`](crate::matrix_out::TxnId) counts as
 //! [`Operation::Idempotent`]: repeating it with the same transaction id returns
@@ -318,7 +319,7 @@ impl RetryPolicy {
     /// Classifies a transport failure — one that produced no HTTP response.
     ///
     /// ```
-    /// use messenger_webhook::matrix_out::transport::TransportError;
+    /// use messenger_webhook::matrix_out::transport::{TransportError, TransportErrorKind};
     /// use messenger_webhook::matrix_out::{Operation, RetryPolicy, Verdict};
     ///
     /// let policy = RetryPolicy::default();
@@ -331,6 +332,14 @@ impl RetryPolicy {
     /// assert_eq!(
     ///     policy.classify_transport(1, &TransportError::timeout("30s"), Operation::NonIdempotent),
     ///     Verdict::Ambiguous,
+    /// );
+    /// assert_eq!(
+    ///     policy.classify_transport(
+    ///         1,
+    ///         &TransportError::new(TransportErrorKind::InvalidRequest, "bad header"),
+    ///         Operation::NonIdempotent,
+    ///     ),
+    ///     Verdict::Rejected,
     /// );
     /// ```
     #[must_use]
@@ -348,7 +357,9 @@ impl RetryPolicy {
                 self.retry_or_exhausted(attempt)
             }
             TransportErrorKind::Timeout | TransportErrorKind::Other => Verdict::Ambiguous,
-            TransportErrorKind::TestHarness => Verdict::Rejected,
+            TransportErrorKind::InvalidRequest | TransportErrorKind::TestHarness => {
+                Verdict::Rejected
+            }
         }
     }
 
@@ -713,6 +724,14 @@ mod tests {
                 Verdict::Retry { .. }
             ));
         }
+        assert_eq!(
+            policy.classify_transport(
+                1,
+                &TransportError::new(TransportErrorKind::InvalidRequest, "bad header"),
+                Operation::NonIdempotent,
+            ),
+            Verdict::Rejected
+        );
     }
 
     #[test]

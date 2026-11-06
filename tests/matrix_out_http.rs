@@ -15,7 +15,9 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post, put};
 use axum::Router;
-use messenger_webhook::matrix_out::transport::{Method, Request, Transport, TransportError};
+use messenger_webhook::matrix_out::transport::{
+    Method, Request, Transport, TransportError, TransportErrorKind,
+};
 use messenger_webhook::matrix_out::{
     ClientConfig, MatrixClient, MediaUpload, OutboundError, ReqwestTransport, RetryPolicy,
 };
@@ -324,6 +326,24 @@ async fn a_reqwest_failure_keeps_its_source_and_drops_the_request_url() {
     let source = std::error::Error::source(&error).expect("the reqwest error is retained");
     assert!(!source.to_string().contains(url), "{}", source);
     assert!(std::error::Error::source(source).is_some(), "source chain");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_invalid_header_is_rejected_before_the_connection_is_used() {
+    let transport = ReqwestTransport::new().expect("a client");
+    let error = transport
+        .send(
+            Request::new(
+                Method::Get,
+                "http://127.0.0.1:1/_matrix/client/v3/account/whoami",
+            )
+            .with_header("bad header", "x"),
+        )
+        .await
+        .expect_err("HTTP cannot carry this header");
+
+    assert_eq!(error.kind, TransportErrorKind::InvalidRequest);
+    assert!(error.kind.is_before_write());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

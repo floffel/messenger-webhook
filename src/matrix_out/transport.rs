@@ -585,9 +585,18 @@ pub enum TransportErrorKind {
     /// The request was written but no response arrived in time. The homeserver
     /// may have applied it.
     Timeout,
-    /// The connection broke mid-flight, or the transport could not express the
-    /// request. Treat as "may have been applied".
+    /// The connection broke mid-flight. Treat as "may have been applied".
     Other,
+    /// The transport could not express the request before anything was written.
+    ///
+    /// ```
+    /// use messenger_webhook::matrix_out::transport::{TransportError, TransportErrorKind};
+    ///
+    /// let error = TransportError::new(TransportErrorKind::InvalidRequest, "bad header");
+    /// assert!(error.kind.is_before_write());
+    /// assert_eq!(error.kind.as_str(), "invalid-request");
+    /// ```
+    InvalidRequest,
     /// A test transport received a request it was not scripted to answer. This
     /// is a broken test, not a homeserver or network outcome.
     TestHarness,
@@ -607,6 +616,7 @@ impl TransportErrorKind {
             Self::Connect => "connect",
             Self::Timeout => "timeout",
             Self::Other => "other",
+            Self::InvalidRequest => "invalid-request",
             Self::TestHarness => "test-harness",
         }
     }
@@ -617,11 +627,12 @@ impl TransportErrorKind {
     /// use messenger_webhook::matrix_out::transport::TransportErrorKind;
     ///
     /// assert!(TransportErrorKind::Connect.is_before_write());
+    /// assert!(TransportErrorKind::InvalidRequest.is_before_write());
     /// assert!(!TransportErrorKind::Timeout.is_before_write());
     /// ```
     #[must_use]
     pub const fn is_before_write(self) -> bool {
-        matches!(self, Self::Connect)
+        matches!(self, Self::Connect | Self::InvalidRequest)
     }
 
     /// Whether this kind marks a test-wiring failure rather than a real HTTP
@@ -880,6 +891,11 @@ mod tests {
             (TransportError::connect("c"), "connect", true),
             (TransportError::timeout("t"), "timeout", false),
             (TransportError::other("o"), "other", false),
+            (
+                TransportError::new(TransportErrorKind::InvalidRequest, "bad header"),
+                "invalid-request",
+                true,
+            ),
             (
                 TransportError::new(TransportErrorKind::TestHarness, "not scripted"),
                 "test-harness",

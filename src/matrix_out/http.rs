@@ -168,14 +168,16 @@ fn header_map(headers: &[(String, String)]) -> Result<HeaderMap, TransportError>
     let mut map = HeaderMap::with_capacity(headers.len());
     for (name, value) in headers {
         let name = HeaderName::from_bytes(name.as_bytes()).map_err(|error| {
-            TransportError::other(format!(
-                "the header name {name:?} is not valid HTTP: {error}"
-            ))
+            TransportError::new(
+                TransportErrorKind::InvalidRequest,
+                format!("the header name {name:?} is not valid HTTP: {error}"),
+            )
         })?;
         let value = HeaderValue::from_str(value).map_err(|error| {
-            TransportError::other(format!(
-                "the value of header {name:?} is not valid HTTP: {error}"
-            ))
+            TransportError::new(
+                TransportErrorKind::InvalidRequest,
+                format!("the value of header {name:?} is not valid HTTP: {error}"),
+            )
         })?;
         map.insert(name, value);
     }
@@ -217,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn a_header_that_http_cannot_carry_is_a_transport_failure() {
+    fn a_header_that_http_cannot_carry_is_an_invalid_request_before_write() {
         let ok = header_map(&[("accept".to_owned(), "application/json".to_owned())])
             .expect("a valid header");
         assert_eq!(
@@ -226,9 +228,15 @@ mod tests {
         );
 
         let bad_name = header_map(&[("bad header".to_owned(), "x".to_owned())]);
-        assert!(bad_name.is_err());
+        assert_eq!(
+            bad_name.expect_err("bad header name").kind,
+            TransportErrorKind::InvalidRequest
+        );
         let bad_value = header_map(&[("accept".to_owned(), "line\r\nbreak".to_owned())]);
-        assert!(bad_value.is_err());
+        assert_eq!(
+            bad_value.expect_err("bad header value").kind,
+            TransportErrorKind::InvalidRequest
+        );
     }
 
     #[test]

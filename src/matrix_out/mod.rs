@@ -1555,6 +1555,11 @@ fn transport_failure(
     if error.kind == TransportErrorKind::TestHarness {
         return OutboundError::TestHarness { reason };
     }
+    if error.kind == TransportErrorKind::InvalidRequest {
+        return OutboundError::InvalidRequest {
+            reason: error.message.clone(),
+        };
+    }
     if error.kind.is_before_write() || (operation.is_repeatable() && txn.is_none()) {
         return OutboundError::Transport { attempts, reason };
     }

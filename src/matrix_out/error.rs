@@ -55,8 +55,9 @@ pub enum OutboundError {
         reason: String,
     },
 
-    /// The request itself cannot be addressed: an empty room id, an id of the
-    /// wrong shape, an empty message body, an unusable media type.
+    /// The request itself cannot be addressed or expressed: an empty room id,
+    /// an id of the wrong shape, an empty message body, an unusable media type,
+    /// or a header HTTP cannot carry.
     #[error("cannot send this request: {reason}")]
     InvalidRequest {
         /// What has to change before the request is sendable.
