@@ -345,8 +345,10 @@ impl Transport for StubTransport {
 /// let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 /// let outcome = runtime.block_on(client.send_text("!r:m.example", "Hallo"))?;
 /// assert_eq!(outcome.attempts, 2);
-/// // One wait, and it is the policy's first backoff step — not a guessed delay.
-/// assert_eq!(sleeper.delays(), vec![Duration::from_millis(500)]);
+/// // One wait, and it is in the policy's first jittered backoff window.
+/// let delay = sleeper.delays()[0];
+/// assert!(delay >= Duration::from_millis(350));
+/// assert!(delay <= Duration::from_millis(650));
 /// # Ok(())
 /// # }
 /// ```

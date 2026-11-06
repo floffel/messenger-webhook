@@ -23,6 +23,7 @@
 
 use std::time::Duration;
 
+use exponential_backoff::Backoff;
 use serde_json::Value;
 
 use crate::matrix_out::transport::{Response, TransportError, TransportErrorKind};
@@ -182,10 +183,11 @@ impl Verdict {
 
 /// How often, and how long, the client waits between attempts.
 ///
-/// The policy is deterministic on purpose: the backoff is
-/// `base_delay * 2^(attempt-1)` clamped to `max_delay`, with no jitter, so a
-/// caller can reason about — and test — the exact schedule a delivery will
-/// follow. A `429` overrides it with the homeserver's own `retry_after_ms`.
+/// The schedule is `base_delay * 2^(attempt-1)`, clamped to `max_delay`, from
+/// [`exponential_backoff`]. [`RetryPolicy::backoff`] exposes the deterministic
+/// schedule for callers that need to reason about or test it; classification
+/// adds the crate's default jitter when the homeserver did not provide its own
+/// delay. A `429` overrides both with the homeserver's `retry_after_ms`.
 ///
 /// ```
 /// use std::time::Duration;
@@ -232,6 +234,8 @@ impl RetryPolicy {
     ///
     /// Exponential with a ceiling: `base_delay * 2^(attempt-1)`, clamped to
     /// [`RetryPolicy::max_delay`]. `attempt` is 1-based; `0` is treated as `1`.
+    /// This method is deterministic; retry classification uses the same
+    /// schedule with jitter.
     ///
     /// ```
     /// use std::time::Duration;
@@ -244,9 +248,33 @@ impl RetryPolicy {
     /// ```
     #[must_use]
     pub fn backoff(&self, attempt: u32) -> Duration {
+        self.backoff_with_jitter(attempt, 0.0)
+    }
+
+    /// The delay to wait after a failed attempt, with the maintained crate's
+    /// jitter applied to the exponential schedule.
+    fn retry_delay(&self, attempt: u32) -> Duration {
+        self.backoff_with_jitter(attempt, 0.3)
+    }
+
+    /// Builds one delay from [`exponential_backoff`].
+    ///
+    /// `jitter` is the maintained crate's fraction. The iterator yields one
+    /// delay per attempt, so `attempt` maps to the same 1-based step as the
+    /// public API: `0` and `1` are the base delay, `2` doubles it, and so on.
+    fn backoff_with_jitter(&self, attempt: u32, jitter: f32) -> Duration {
+        if self.base_delay > self.max_delay {
+            return self.max_delay;
+        }
+
         let exponent = attempt.saturating_sub(1).min(31);
-        let factor = 1_u32 << exponent;
-        self.base_delay.saturating_mul(factor).min(self.max_delay)
+        let mut backoff = Backoff::new(exponent.saturating_add(2), self.base_delay, self.max_delay);
+        backoff.set_jitter(jitter);
+        backoff
+            .into_iter()
+            .nth(exponent as usize)
+            .flatten()
+            .unwrap_or(self.max_delay)
     }
 
     /// Classifies an HTTP response.
@@ -272,7 +300,7 @@ impl RetryPolicy {
         match response.status {
             200..=299 => Verdict::Success,
             429 => {
-                let wait = retry_after_ms(response).unwrap_or_else(|| self.backoff(attempt));
+                let wait = retry_after_ms(response).unwrap_or_else(|| self.retry_delay(attempt));
                 // A rate limit still costs an attempt: the budget bounds every
                 // request, not only the exponential ones.
                 if attempt >= self.max_attempts.max(1) || wait > self.max_rate_limit_wait {
@@ -331,7 +359,7 @@ impl RetryPolicy {
             Verdict::Exhausted
         } else {
             Verdict::Retry {
-                delay: self.backoff(attempt),
+                delay: self.retry_delay(attempt),
             }
         }
     }
@@ -395,6 +423,20 @@ mod tests {
         Response::json(status, "{}")
     }
 
+    fn assert_retry_window(policy: &RetryPolicy, actual: Verdict, expected: Verdict) {
+        match (actual, expected) {
+            (Verdict::Retry { delay }, Verdict::Retry { delay: base }) => {
+                let lower = base.mul_f64(0.7);
+                let upper = base.mul_f64(1.3).min(policy.max_delay);
+                assert!(
+                    delay >= lower && delay <= upper,
+                    "{delay:?} outside {lower:?}..={upper:?}"
+                );
+            }
+            (actual, expected) => assert_eq!(actual, expected),
+        }
+    }
+
     #[test]
     fn backoff_doubles_until_the_ceiling() {
         let policy = RetryPolicy {
@@ -421,6 +463,26 @@ mod tests {
     }
 
     #[test]
+    fn runtime_backoff_is_the_same_window_with_jitter() {
+        let policy = RetryPolicy {
+            max_attempts: 10,
+            base_delay: Duration::from_millis(100),
+            max_delay: Duration::from_secs(1),
+            max_rate_limit_wait: Duration::from_secs(1),
+        };
+        for attempt in 1..=5 {
+            let deterministic = policy.backoff(attempt);
+            let jittered = policy.retry_delay(attempt);
+            let lower = deterministic.mul_f64(0.7);
+            let upper = deterministic.mul_f64(1.3).min(policy.max_delay);
+            assert!(
+                jittered >= lower && jittered <= upper,
+                "attempt {attempt}: {jittered:?} outside {lower:?}..={upper:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_status_class_is_honoured_per_operation() {
         let policy = RetryPolicy::default();
         for (status, read, idempotent, non_idempotent) in [
@@ -432,34 +494,34 @@ mod tests {
             (
                 500,
                 Verdict::Retry {
-                    delay: Duration::from_millis(500),
+                    delay: policy.backoff(1),
                 },
                 Verdict::Retry {
-                    delay: Duration::from_millis(500),
+                    delay: policy.backoff(1),
                 },
                 Verdict::Ambiguous,
             ),
             (
                 502,
                 Verdict::Retry {
-                    delay: Duration::from_millis(500),
+                    delay: policy.backoff(1),
                 },
                 Verdict::Retry {
-                    delay: Duration::from_millis(500),
+                    delay: policy.backoff(1),
                 },
                 Verdict::Ambiguous,
             ),
         ] {
             let response = response(status);
-            assert_eq!(
+            assert_retry_window(
+                &policy,
                 policy.classify(1, &response, Operation::Read),
                 read,
-                "{status}"
             );
-            assert_eq!(
+            assert_retry_window(
+                &policy,
                 policy.classify(1, &response, Operation::Idempotent),
                 idempotent,
-                "{status}"
             );
             assert_eq!(
                 policy.classify(1, &response, Operation::NonIdempotent),
@@ -540,18 +602,20 @@ mod tests {
     fn a_429_without_retry_after_falls_back_to_the_backoff() {
         let policy = RetryPolicy::default();
         let bare = Response::json(429, r#"{"errcode":"M_LIMIT_EXCEEDED"}"#);
-        assert_eq!(
+        assert_retry_window(
+            &policy,
             policy.classify(2, &bare, Operation::Read),
             Verdict::Retry {
-                delay: Duration::from_secs(1)
-            }
+                delay: policy.backoff(2),
+            },
         );
         let garbage = Response::json(429, "not json at all");
-        assert_eq!(
+        assert_retry_window(
+            &policy,
             policy.classify(1, &garbage, Operation::Read),
             Verdict::Retry {
-                delay: Duration::from_millis(500)
-            }
+                delay: policy.backoff(1),
+            },
         );
         let empty = Response::new(429, Vec::new());
         assert!(matches!(
@@ -571,11 +635,12 @@ mod tests {
             }
         );
         let nonsense = Response::new(429, Vec::new()).with_header("retry-after", "soon");
-        assert_eq!(
+        assert_retry_window(
+            &policy,
             policy.classify(1, &nonsense, Operation::Read),
             Verdict::Retry {
-                delay: Duration::from_millis(500)
-            }
+                delay: policy.backoff(1),
+            },
         );
     }
 

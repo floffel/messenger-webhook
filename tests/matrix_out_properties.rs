@@ -87,11 +87,16 @@ proptest! {
                     "{verdict:?} for 429"
                 );
                 if let Verdict::Retry { delay } = verdict {
-                    let expected = retry_after.map_or_else(
-                        || policy().backoff(attempt),
-                        Duration::from_millis,
-                    );
-                    prop_assert_eq!(delay, expected);
+                    if let Some(ms) = retry_after {
+                        prop_assert_eq!(delay, Duration::from_millis(ms));
+                    } else {
+                        let base = policy().backoff(attempt);
+                        prop_assert!(delay >= base.mul_f64(0.7), "{delay:?} under {base:?}");
+                        prop_assert!(
+                            delay <= base.mul_f64(1.3).min(policy().max_delay),
+                            "{delay:?} over {base:?}"
+                        );
+                    }
                 }
             }
             500..=599 if !operation.is_repeatable() => {
