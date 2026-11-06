@@ -317,6 +317,26 @@ mod telegram {
             Error::InvalidMessage { .. }
         ));
     }
+
+    #[test]
+    fn edit_with_attachment_is_rejected_before_building_a_send() {
+        let mut edit = NormalizedMessage::text(Channel::Telegram, "1", "fixed");
+        edit.edit_of = Some("7".to_owned());
+        let mut photo = Attachment::new(AttachmentKind::Image);
+        photo.id = Some("AgAC-file".to_owned());
+        edit.attachments.push(photo);
+
+        let error = adapter().encode(&edit).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                Error::InvalidMessage { reason, .. }
+                    if reason.contains("editMessageMedia")
+                        && reason.contains("editMessageCaption")
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
 }
 
 #[cfg(feature = "matrix")]
