@@ -27,7 +27,7 @@ use crate::id;
 use crate::json;
 use crate::model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, IdempotencyKey, NormalizedMessage,
-    OutboundMessage, ProviderPayload, Reaction, RetryPolicy,
+    OutboundMessage, ProviderMethod, ProviderPayload, Reaction, RetryPolicy,
 };
 use crate::secret::Secret;
 use crate::{check_body, payload, recipient, Adapter};
@@ -165,7 +165,7 @@ impl Adapter for MatrixAdapter {
         apply_relations(&mut content, message);
         payload(
             Channel::Matrix,
-            "PUT",
+            ProviderMethod::Put,
             &Value::Object(content),
             RetryPolicy::Safe,
             Some(matrix_transaction_key()),

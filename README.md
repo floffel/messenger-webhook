@@ -115,7 +115,9 @@ that owns retries must not repeat those blindly after a `5xx` or timeout, or the
 send can duplicate. Matrix payloads are `Safe` because their method is `PUT`
 and `ProviderPayload::idempotency_key()` carries the transaction id the request
 path must include; repeating with that key returns the original event instead of
-creating another one.
+creating another one. `ProviderPayload::new` and `ProviderPayload::with_retry`
+also reject payloads that are not bounded JSON objects with
+`application/json` as their content type.
 
 ## Matrix outbound client (`matrix-out`)
 

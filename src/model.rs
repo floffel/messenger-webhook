@@ -665,27 +665,65 @@ impl OutboundMessage {
     }
 }
 
+/// HTTP method a provider payload uses.
+///
+/// The methods are typed so a payload cannot be built with a method the crate
+/// does not support.
+///
+/// ```
+/// use messenger_webhook::ProviderMethod;
+///
+/// assert_eq!(ProviderMethod::Post.as_str(), "POST");
+/// assert_eq!(ProviderMethod::Put.as_str(), "PUT");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ProviderMethod {
+    /// `POST`, used by the `WhatsApp` and Telegram bot APIs.
+    Post,
+    /// `PUT`, used by Matrix client-server room sends.
+    Put,
+}
+
+impl ProviderMethod {
+    /// The wire spelling of this method.
+    ///
+    /// ```
+    /// use messenger_webhook::ProviderMethod;
+    ///
+    /// assert_eq!(ProviderMethod::Post.as_str(), "POST");
+    /// ```
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Post => "POST",
+            Self::Put => "PUT",
+        }
+    }
+}
+
 /// An outbound request body for one provider, ready for the caller to send.
 ///
 /// The crate performs no I/O: the payload carries the HTTP method, the content
-/// type and the JSON body, and the application decides where to send it.
+/// type and a JSON object body, and the application decides where to send it.
 ///
 /// ```
-/// use messenger_webhook::{Channel, ProviderPayload};
+/// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload};
 ///
 /// let payload = ProviderPayload::new(
 ///     Channel::Telegram,
-///     "POST",
+///     ProviderMethod::Post,
 ///     "application/json",
 ///     br#"{"chat_id":"1","text":"hi"}"#.to_vec(),
-/// );
+/// )?;
 /// assert_eq!(payload.method(), "POST");
 /// assert_eq!(payload.json().expect("json")["text"], "hi");
+/// # Ok::<(), messenger_webhook::Error>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderPayload {
     channel: Channel,
-    method: &'static str,
+    method: ProviderMethod,
     content_type: &'static str,
     body: Vec<u8>,
     idempotency_key: Option<IdempotencyKey>,
@@ -693,21 +731,36 @@ pub struct ProviderPayload {
 }
 
 impl ProviderPayload {
-    /// Wraps a serialised body.
+    /// Wraps a serialised JSON object body.
+    ///
+    /// The content type must be `application/json`, the body must be a JSON
+    /// object, and it must fit within [`crate::MAX_BODY_BYTES`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Payload`] when `content_type` is not
+    /// `application/json` or `body` is not a JSON object, and
+    /// [`crate::Error::BodyTooLarge`] when `body` exceeds
+    /// [`crate::MAX_BODY_BYTES`].
     ///
     /// ```
-    /// use messenger_webhook::{Channel, ProviderPayload};
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload};
     ///
-    /// let payload = ProviderPayload::new(Channel::Matrix, "PUT", "application/json", b"{}".to_vec());
+    /// let payload = ProviderPayload::new(
+    ///     Channel::Matrix,
+    ///     ProviderMethod::Put,
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    /// )?;
     /// assert_eq!(payload.body(), b"{}");
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
-    #[must_use]
     pub fn new(
         channel: Channel,
-        method: &'static str,
+        method: ProviderMethod,
         content_type: &'static str,
         body: Vec<u8>,
-    ) -> Self {
+    ) -> crate::Result<Self> {
         Self::with_retry(
             channel,
             method,
@@ -718,43 +771,63 @@ impl ProviderPayload {
         )
     }
 
-    /// Wraps a serialised body together with its retry contract.
+    /// Wraps a serialised JSON object body together with its retry contract.
     ///
     /// Adapters use this constructor when they know whether repeating the
     /// request is safe. The plain [`ProviderPayload::new`] constructor keeps the
     /// conservative default: a payload is unsafe to retry unless it carries an
     /// idempotency key.
     ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Payload`] when `content_type` is not
+    /// `application/json` or `body` is not a JSON object, and
+    /// [`crate::Error::BodyTooLarge`] when `body` exceeds
+    /// [`crate::MAX_BODY_BYTES`].
+    ///
     /// ```
-    /// use messenger_webhook::{Channel, ProviderPayload, RetryPolicy};
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload, RetryPolicy};
     ///
     /// let payload = ProviderPayload::with_retry(
     ///     Channel::Other("echo".into()),
-    ///     "POST",
+    ///     ProviderMethod::Post,
     ///     "application/json",
     ///     b"{}".to_vec(),
     ///     RetryPolicy::Safe,
     ///     None,
-    /// );
+    /// )?;
     /// assert_eq!(payload.retry(), RetryPolicy::Safe);
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
-    #[must_use]
     pub fn with_retry(
         channel: Channel,
-        method: &'static str,
+        method: ProviderMethod,
         content_type: &'static str,
         body: Vec<u8>,
         retry: RetryPolicy,
         idempotency_key: Option<IdempotencyKey>,
-    ) -> Self {
-        Self {
+    ) -> crate::Result<Self> {
+        if content_type != "application/json" {
+            return Err(crate::Error::Payload(
+                "outbound payload content type must be application/json".to_owned(),
+            ));
+        }
+        crate::check_body(body.len())?;
+        let value: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|error| crate::Error::Payload(error.to_string()))?;
+        if !value.is_object() {
+            return Err(crate::Error::Payload(
+                "outbound payload body must be a JSON object".to_owned(),
+            ));
+        }
+        Ok(Self {
             channel,
             method,
             content_type,
             body,
             idempotency_key,
             retry,
-        }
+        })
     }
 
     /// The retry contract for this payload.
@@ -767,10 +840,16 @@ impl ProviderPayload {
     /// [`crate::Adapter::encode`] again.
     ///
     /// ```
-    /// use messenger_webhook::{Channel, ProviderPayload, RetryPolicy};
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload, RetryPolicy};
     ///
-    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", vec![]);
+    /// let payload = ProviderPayload::new(
+    ///     Channel::Telegram,
+    ///     ProviderMethod::Post,
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    /// )?;
     /// assert_eq!(payload.retry(), RetryPolicy::UnsafeUnlessKeyPresent);
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     #[must_use]
     pub const fn retry(&self) -> RetryPolicy {
@@ -784,11 +863,17 @@ impl ProviderPayload {
     /// Matrix send must reuse this key for every attempt.
     ///
     /// ```
-    /// use messenger_webhook::{Channel, ProviderPayload, RetryPolicy};
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload, RetryPolicy};
     ///
-    /// let payload = ProviderPayload::new(Channel::WhatsApp, "POST", "application/json", vec![]);
+    /// let payload = ProviderPayload::new(
+    ///     Channel::WhatsApp,
+    ///     ProviderMethod::Post,
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    /// )?;
     /// assert!(payload.idempotency_key().is_none());
     /// assert!(payload.retry().is_unsafe_without_key());
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     #[must_use]
     pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
@@ -798,10 +883,16 @@ impl ProviderPayload {
     /// Channel this payload is addressed to.
     ///
     /// ```
-    /// use messenger_webhook::{Channel, ProviderPayload};
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload};
     ///
-    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", vec![]);
+    /// let payload = ProviderPayload::new(
+    ///     Channel::Telegram,
+    ///     ProviderMethod::Post,
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    /// )?;
     /// assert_eq!(payload.channel(), &Channel::Telegram);
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     #[must_use]
     pub fn channel(&self) -> &Channel {
@@ -811,23 +902,35 @@ impl ProviderPayload {
     /// HTTP method the provider expects (`POST` for bot APIs, `PUT` for Matrix).
     ///
     /// ```
-    /// use messenger_webhook::{Channel, ProviderPayload};
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload};
     ///
-    /// let payload = ProviderPayload::new(Channel::Matrix, "PUT", "application/json", vec![]);
+    /// let payload = ProviderPayload::new(
+    ///     Channel::Matrix,
+    ///     ProviderMethod::Put,
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    /// )?;
     /// assert_eq!(payload.method(), "PUT");
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     #[must_use]
     pub fn method(&self) -> &'static str {
-        self.method
+        self.method.as_str()
     }
 
     /// Content type of [`ProviderPayload::body`].
     ///
     /// ```
-    /// use messenger_webhook::{Channel, ProviderPayload};
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload};
     ///
-    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", vec![]);
+    /// let payload = ProviderPayload::new(
+    ///     Channel::Telegram,
+    ///     ProviderMethod::Post,
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    /// )?;
     /// assert_eq!(payload.content_type(), "application/json");
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     #[must_use]
     pub fn content_type(&self) -> &'static str {
@@ -837,10 +940,16 @@ impl ProviderPayload {
     /// The serialised JSON body.
     ///
     /// ```
-    /// use messenger_webhook::{Channel, ProviderPayload};
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload};
     ///
-    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", b"{}".to_vec());
+    /// let payload = ProviderPayload::new(
+    ///     Channel::Telegram,
+    ///     ProviderMethod::Post,
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    /// )?;
     /// assert!(!payload.body().is_empty());
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     #[must_use]
     pub fn body(&self) -> &[u8] {
@@ -850,10 +959,16 @@ impl ProviderPayload {
     /// Consumes the payload and returns its body.
     ///
     /// ```
-    /// use messenger_webhook::{Channel, ProviderPayload};
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload};
     ///
-    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", b"{}".to_vec());
+    /// let payload = ProviderPayload::new(
+    ///     Channel::Telegram,
+    ///     ProviderMethod::Post,
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    /// )?;
     /// assert_eq!(payload.into_body(), b"{}");
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     #[must_use]
     pub fn into_body(self) -> Vec<u8> {
@@ -864,14 +979,21 @@ impl ProviderPayload {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Payload`] if the body is not valid JSON — which
-    /// cannot happen for payloads this crate produces.
+    /// Returns [`crate::Error::Payload`] if the body is not valid JSON. The
+    /// constructors reject malformed and non-object bodies, so this cannot
+    /// fail for payloads this crate produces.
     ///
     /// ```
-    /// use messenger_webhook::{Channel, ProviderPayload};
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload};
     ///
-    /// let payload = ProviderPayload::new(Channel::Telegram, "POST", "application/json", b"[1]".to_vec());
+    /// let payload = ProviderPayload::new(
+    ///     Channel::Telegram,
+    ///     ProviderMethod::Post,
+    ///     "application/json",
+    ///     br#"{"ok":true}"#.to_vec(),
+    /// )?;
     /// assert!(payload.json().is_ok());
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     pub fn json(&self) -> crate::Result<serde_json::Value> {
         serde_json::from_slice(&self.body).map_err(|error| crate::Error::Payload(error.to_string()))

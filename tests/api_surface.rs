@@ -8,8 +8,8 @@
 
 use messenger_webhook::{
     signature, Attachment, AttachmentKind, Channel, DeliveryStatus, Error, Headers, IdempotencyKey,
-    NormalizedMessage, OutboundMessage, ProviderPayload, Reaction, Registry, RetryPolicy, Secret,
-    MAX_BODY_READ_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
+    NormalizedMessage, OutboundMessage, ProviderMethod, ProviderPayload, Reaction, Registry,
+    RetryPolicy, Secret, MAX_BODY_BYTES, MAX_BODY_READ_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
 };
 
 #[test]
@@ -114,10 +114,11 @@ fn outbound_message_helpers() {
 fn provider_payload_accessors() {
     let payload = ProviderPayload::new(
         Channel::Matrix,
-        "PUT",
+        ProviderMethod::Put,
         "application/json",
         br#"{"msgtype":"m.text","body":"hi"}"#.to_vec(),
-    );
+    )
+    .unwrap();
     assert_eq!(payload.channel(), &Channel::Matrix);
     assert_eq!(payload.method(), "PUT");
     assert_eq!(payload.content_type(), "application/json");
@@ -128,8 +129,13 @@ fn provider_payload_accessors() {
 
 #[test]
 fn provider_payload_retry_contract_accessors() {
-    let unsafe_payload =
-        ProviderPayload::new(Channel::WhatsApp, "POST", "application/json", vec![]);
+    let unsafe_payload = ProviderPayload::new(
+        Channel::WhatsApp,
+        ProviderMethod::Post,
+        "application/json",
+        b"{}".to_vec(),
+    )
+    .unwrap();
     assert_eq!(unsafe_payload.retry(), RetryPolicy::UnsafeUnlessKeyPresent);
     assert!(unsafe_payload.retry().is_unsafe_without_key());
     assert!(unsafe_payload.idempotency_key().is_none());
@@ -137,12 +143,13 @@ fn provider_payload_retry_contract_accessors() {
     let key = IdempotencyKey::new("txn-1").unwrap();
     let safe_payload = ProviderPayload::with_retry(
         Channel::Matrix,
-        "PUT",
+        ProviderMethod::Put,
         "application/json",
-        vec![],
+        b"{}".to_vec(),
         RetryPolicy::Safe,
         Some(key.clone()),
-    );
+    )
+    .unwrap();
     assert_eq!(safe_payload.retry().as_str(), "safe");
     assert!(!safe_payload.retry().is_unsafe_without_key());
     assert_eq!(safe_payload.idempotency_key(), Some(&key));
@@ -165,9 +172,74 @@ fn idempotency_key_boundaries() {
 }
 
 #[test]
-fn provider_payload_rejects_non_json() {
-    let payload = ProviderPayload::new(Channel::Telegram, "POST", "text/plain", b"nope".to_vec());
-    assert!(matches!(payload.json(), Err(Error::Payload(_))));
+fn provider_payload_rejects_non_json_content_type_and_body() {
+    assert!(matches!(
+        ProviderPayload::new(
+            Channel::Telegram,
+            ProviderMethod::Post,
+            "application/json",
+            Vec::new(),
+        ),
+        Err(Error::Payload(_))
+    ));
+    assert!(matches!(
+        ProviderPayload::new(
+            Channel::Telegram,
+            ProviderMethod::Post,
+            "text/plain",
+            b"nope".to_vec(),
+        ),
+        Err(Error::Payload(_))
+    ));
+    assert!(matches!(
+        ProviderPayload::new(
+            Channel::Telegram,
+            ProviderMethod::Post,
+            "application/json",
+            b"nope".to_vec(),
+        ),
+        Err(Error::Payload(_))
+    ));
+    assert!(matches!(
+        ProviderPayload::new(
+            Channel::Telegram,
+            ProviderMethod::Post,
+            "application/json",
+            b"[1]".to_vec(),
+        ),
+        Err(Error::Payload(_))
+    ));
+}
+
+#[test]
+fn provider_payload_body_limit_is_exact() {
+    let json_prefix = br#"{"x":""#.len();
+    let mut at_limit = br#"{"x":""#.to_vec();
+    at_limit.extend(std::iter::repeat_n(b'a', MAX_BODY_BYTES - json_prefix - 2));
+    at_limit.extend_from_slice(br#""}"#);
+    assert_eq!(at_limit.len(), MAX_BODY_BYTES);
+
+    assert!(ProviderPayload::new(
+        Channel::Telegram,
+        ProviderMethod::Post,
+        "application/json",
+        at_limit,
+    )
+    .is_ok());
+
+    let over_limit = vec![b' '; MAX_BODY_BYTES + 1];
+    assert!(matches!(
+        ProviderPayload::new(
+            Channel::Telegram,
+            ProviderMethod::Post,
+            "application/json",
+            over_limit,
+        ),
+        Err(Error::BodyTooLarge {
+            limit: MAX_BODY_BYTES,
+            actual,
+        }) if actual == MAX_BODY_BYTES + 1
+    ));
 }
 
 #[test]

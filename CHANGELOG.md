@@ -95,6 +95,13 @@ carry a `!` in the conventional-commit subject.
 
 ### Breaking
 
+- **`ProviderPayload` constructors enforce the payload contract.**
+  `ProviderPayload::new` and `ProviderPayload::with_retry` now return `Result`,
+  take a typed `ProviderMethod`, require `application/json`, reject non-object
+  JSON and bodies above `MAX_BODY_BYTES` before the payload can be sent. This
+  stops the type from accepting any method, content type and body while
+  `ProviderPayload::json` documented that decode failure could not happen for
+  payloads this crate produces. Closes #91.
 - **Outbound messages are a distinct type.** `Adapter::encode` now accepts
   `OutboundMessage`, the fields an application can know before a provider
   assigns an event id. `NormalizedMessage` stays the inbound event shape and
