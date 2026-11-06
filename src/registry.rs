@@ -5,7 +5,7 @@ use std::fmt;
 
 use crate::error::{Error, Result};
 use crate::model::{Channel, NormalizedMessage, ProviderPayload};
-use crate::{Adapter, Headers};
+use crate::{check_body, Adapter, Headers};
 
 /// A set of adapters, one per channel.
 ///
@@ -145,7 +145,8 @@ impl Registry {
     /// # Errors
     ///
     /// [`Error::UnknownChannel`] if the channel has no adapter, plus every
-    /// error [`Adapter::verify`] reports.
+    /// error [`Adapter::verify`] reports. A body above [`crate::MAX_BODY_BYTES`]
+    /// is rejected before the adapter is called.
     ///
     /// ```
     /// use messenger_webhook::{Channel, Headers, Registry};
@@ -153,6 +154,7 @@ impl Registry {
     /// assert!(Registry::new().verify(&Channel::Telegram, &Headers::new(), b"{}").is_err());
     /// ```
     pub fn verify(&self, channel: &Channel, headers: &Headers, body: &[u8]) -> Result<()> {
+        check_body(body.len())?;
         self.get(channel)?.verify(headers, body)
     }
 
@@ -161,7 +163,8 @@ impl Registry {
     /// # Errors
     ///
     /// [`Error::UnknownChannel`] if the channel has no adapter, plus every
-    /// error [`Adapter::adapt`] reports.
+    /// error [`Adapter::adapt`] reports. A payload above
+    /// [`crate::MAX_BODY_BYTES`] is rejected before the adapter is called.
     ///
     /// ```
     /// use messenger_webhook::{Channel, Registry};
@@ -169,6 +172,7 @@ impl Registry {
     /// assert!(Registry::new().adapt(&Channel::Matrix, b"{}").is_err());
     /// ```
     pub fn adapt(&self, channel: &Channel, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
+        check_body(payload.len())?;
         self.get(channel)?.adapt(payload)
     }
 
@@ -179,7 +183,9 @@ impl Registry {
     /// # Errors
     ///
     /// [`Error::UnknownChannel`] if the channel has no adapter, plus every
-    /// error [`Adapter::verify`] or [`Adapter::adapt`] reports.
+    /// error [`Adapter::verify`] or [`Adapter::adapt`] reports. A body above
+    /// [`crate::MAX_BODY_BYTES`] is rejected before either adapter method is
+    /// called.
     ///
     /// ```
     /// use messenger_webhook::{Channel, Headers, Registry};
@@ -194,6 +200,7 @@ impl Registry {
         headers: &Headers,
         body: &[u8],
     ) -> Result<Vec<NormalizedMessage>> {
+        check_body(body.len())?;
         let adapter = self.get(channel)?;
         adapter.verify(headers, body)?;
         adapter.adapt(body)

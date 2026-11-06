@@ -30,7 +30,7 @@ use crate::model::ProviderPayload;
 use crate::model::{Attachment, AttachmentKind, Channel, NormalizedMessage, Reaction};
 use crate::rich::{utf16_to_byte_range, TextFormat, TextSpan};
 use crate::secret::Secret;
-use crate::{check_body, json_payload, recipient, utf16_len, Adapter, MAX_BODY_BYTES};
+use crate::{check_body, json_payload, recipient, utf16_len, Adapter};
 
 /// Maximum length of a Telegram text message, in UTF-16 code units.
 ///
@@ -100,7 +100,7 @@ impl Adapter for TelegramAdapter {
     }
 
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()> {
-        check_body(MAX_BODY_BYTES, body.len())?;
+        check_body(body.len())?;
         if self.secret.is_empty() {
             return Err(Error::MissingSecret {
                 channel: Channel::Telegram,
@@ -122,7 +122,7 @@ impl Adapter for TelegramAdapter {
     }
 
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
-        check_body(MAX_BODY_BYTES, payload.len())?;
+        check_body(payload.len())?;
         let root: Value =
             serde_json::from_slice(payload).map_err(|error| Error::Payload(error.to_string()))?;
         if !root.is_object() {

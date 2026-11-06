@@ -1,6 +1,8 @@
 //! Registry lookup, dispatch and fail-closed handling.
 
-use messenger_webhook::{Channel, Error, Headers, Registry};
+use messenger_webhook::{
+    Adapter, Channel, Error, Headers, NormalizedMessage, ProviderPayload, Registry, MAX_BODY_BYTES,
+};
 
 #[test]
 fn unknown_channel_is_a_typed_error() {
@@ -125,6 +127,71 @@ fn handle_verifies_before_it_parses() {
             Err(Error::Payload(_))
         ));
     }
+}
+
+#[derive(Debug)]
+struct IgnoresSize;
+
+impl Adapter for IgnoresSize {
+    fn channel(&self) -> Channel {
+        Channel::Other("size-blind".to_owned())
+    }
+
+    fn verify(&self, _headers: &Headers, _body: &[u8]) -> messenger_webhook::Result<()> {
+        Ok(())
+    }
+
+    fn adapt(&self, _payload: &[u8]) -> messenger_webhook::Result<Vec<NormalizedMessage>> {
+        Ok(Vec::new())
+    }
+
+    fn encode(&self, _message: &NormalizedMessage) -> messenger_webhook::Result<ProviderPayload> {
+        Err(Error::InvalidMessage {
+            channel: self.channel(),
+            reason: "not used in this test".to_owned(),
+        })
+    }
+}
+
+#[test]
+fn registry_enforces_the_body_ceiling_for_custom_adapters() {
+    let mut registry = Registry::new();
+    registry.register(IgnoresSize);
+    let channel = Channel::Other("size-blind".to_owned());
+    let at_limit = vec![b' '; MAX_BODY_BYTES];
+    let over_limit = vec![b' '; MAX_BODY_BYTES + 1];
+
+    assert!(registry.adapt(&channel, &at_limit).is_ok());
+    assert!(registry
+        .verify(&channel, &Headers::new(), &at_limit)
+        .is_ok());
+    assert!(registry
+        .handle(&channel, &Headers::new(), &at_limit)
+        .is_ok());
+
+    assert!(matches!(
+        registry.adapt(&channel, &over_limit),
+        Err(Error::BodyTooLarge {
+            limit: MAX_BODY_BYTES,
+            actual,
+        }) if actual == MAX_BODY_BYTES + 1
+    ));
+
+    assert!(matches!(
+        registry.verify(&channel, &Headers::new(), &over_limit),
+        Err(Error::BodyTooLarge {
+            limit: MAX_BODY_BYTES,
+            actual,
+        }) if actual == MAX_BODY_BYTES + 1
+    ));
+
+    assert!(matches!(
+        registry.handle(&channel, &Headers::new(), &over_limit),
+        Err(Error::BodyTooLarge {
+            limit: MAX_BODY_BYTES,
+            actual,
+        }) if actual == MAX_BODY_BYTES + 1
+    ));
 }
 
 #[test]
