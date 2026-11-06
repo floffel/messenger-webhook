@@ -21,12 +21,16 @@ pub const MIN_SECRET_BYTES: usize = 16;
 
 /// A shared secret used to authenticate provider webhooks.
 ///
-/// The value is redacted in [`Debug`](fmt::Debug) output and can only be
-/// compared in constant time through [`Secret::ct_eq`] when the candidate
-/// length matches the secret. Unequal lengths return `false` after the length
-/// check, so that path reveals the secret's byte length. Empty and weak secrets
-/// are rejected at construction, so a `Secret` that exists is at least
-/// [`MIN_SECRET_BYTES`] long.
+/// The value is redacted in [`Debug`](fmt::Debug) output. Authentication
+/// comparisons should go through [`Secret::ct_eq`], which compares without
+/// short-circuiting when the candidate length matches the secret; unequal
+/// lengths return `false` after the length check, so that path reveals the
+/// secret's byte length. [`Secret::expose_secret`] deliberately returns the raw
+/// `&str` for provider integration points; comparisons or formatting done on
+/// that borrow are outside the constant-time guarantee.
+///
+/// Empty and weak secrets are rejected at construction, so a `Secret` that
+/// exists is at least [`MIN_SECRET_BYTES`] long.
 ///
 /// The bytes live in a [`zeroize::Zeroizing`] buffer, so the heap allocation
 /// backing the secret is wiped when the value is dropped. [`Clone`] is a deep
@@ -102,7 +106,12 @@ impl Secret {
         self.0.is_empty()
     }
 
-    /// Borrows the raw value. Treat the result as a credential: never log it.
+    /// Borrows the raw value.
+    ///
+    /// This is an explicit escape hatch for provider integration points that
+    /// need the raw credential. Treat the result as a credential: never log it,
+    /// and compare it through [`Secret::ct_eq`] rather than `==` on this `&str`
+    /// when the comparison is an authentication check.
     ///
     /// ```
     /// use messenger_webhook::Secret;
@@ -125,6 +134,9 @@ impl Secret {
     /// length check, so an attacker who can measure timing can learn the
     /// secret's byte length. Do not treat this as a length-blind comparison for
     /// variable-length candidates.
+    ///
+    /// Use this for authentication comparisons. It is the crate's safe
+    /// comparison path for a secret's contents.
     ///
     /// ```
     /// use messenger_webhook::Secret;
@@ -219,5 +231,25 @@ mod tests {
     fn secret_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Secret>();
+    }
+
+    #[test]
+    fn public_contract_separates_redaction_from_raw_access() {
+        let secret = Secret::new("app-secret-app-secret").expect("secret");
+
+        // The enforced logging contract: `Debug` never exposes the secret.
+        assert_eq!(format!("{secret:?}"), "Secret(<redacted>)");
+
+        // The constant-time comparison path for authentication checks.
+        assert!(secret.ct_eq(b"app-secret-app-secret"));
+        assert!(!secret.ct_eq(b"app-secret-app-secreT"));
+
+        // The deliberate raw escape hatch. Because this is a `&str`, callers
+        // could compare or format it; the docs must not claim otherwise.
+        let raw = secret.expose_secret();
+        assert_eq!(raw, "app-secret-app-secret");
+        assert_eq!(raw, "app-secret-app-secret");
+        let rendered = format!("secret={raw}");
+        assert!(rendered.contains("app-secret-app-secret"));
     }
 }
