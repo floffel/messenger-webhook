@@ -150,6 +150,33 @@ fn headers_api() {
 }
 
 #[test]
+fn header_lookup_is_case_insensitive_in_place() {
+    // Every ASCII casing of the same name must find the stored entry, with the
+    // stored value, whether the query is all lower, all upper or mixed case.
+    let headers = Headers::from_iter([("x-telegram-bot-api-secret-token", "secret")]);
+
+    for query in [
+        "x-telegram-bot-api-secret-token",
+        "X-TELEGRAM-BOT-API-SECRET-TOKEN",
+        "X-Telegram-Bot-Api-Secret-Token",
+        "x-Telegram-BOT-Api-Secret-Token",
+    ] {
+        assert_eq!(headers.get(query), Some("secret"), "query {query:?}");
+    }
+
+    // A query that differs in more than case is still a miss, and an empty
+    // name does not match any stored header.
+    assert_eq!(headers.get("x-telegram-bot-api-secret-tokens"), None);
+    assert_eq!(headers.get(""), None);
+
+    // Non-ASCII bytes are compared byte-for-byte: a name that only differs by
+    // Unicode case folding is not the same header.
+    let unicode = Headers::from_iter([("x-über", "v")]);
+    assert_eq!(unicode.get("x-über"), Some("v"));
+    assert_eq!(unicode.get("X-ÜBER"), None, "ASCII folding only");
+}
+
+#[test]
 fn headers_debug_redacts_credential_values() {
     let authorization = "Bearer representative-authorization-token";
     let telegram = "representative-telegram-secret-token";
