@@ -9,54 +9,48 @@
 use std::collections::{BTreeSet, HashSet};
 
 use messenger_webhook::{
-    signature, Attachment, AttachmentKind, Channel, DeliveryStatus, Error, Headers, IdempotencyKey,
-    NormalizedMessage, OutboundMessage, ProviderMethod, ProviderPayload, Reaction, Registry,
-    RetryPolicy, Secret, MAX_BODY_BYTES, MAX_BODY_READ_BYTES, MAX_CHANNEL_NAME_BYTES,
+    signature, Attachment, AttachmentKind, Channel, ChannelName, DeliveryStatus, Error, Headers,
+    IdempotencyKey, NormalizedMessage, OutboundMessage, ProviderMethod, ProviderPayload, Reaction,
+    Registry, RetryPolicy, Secret, MAX_BODY_BYTES, MAX_BODY_READ_BYTES, MAX_CHANNEL_NAME_BYTES,
     MAX_IDEMPOTENCY_KEY_BYTES,
 };
 use std::str::FromStr;
 
 #[test]
 fn channel_names_and_display() {
+    let signal = Channel::other("signal").unwrap();
+
     assert_eq!(Channel::WhatsApp.as_str(), "whatsapp");
     assert_eq!(Channel::Telegram.as_str(), "telegram");
     assert_eq!(Channel::Matrix.as_str(), "matrix");
-    assert_eq!(Channel::Other("signal".to_owned()).as_str(), "signal");
-    assert_eq!(
-        Channel::other("signal").unwrap(),
-        Channel::Other("signal".into())
-    );
+    assert_eq!(signal.as_str(), "signal");
     assert_eq!(Channel::other("rss-feed").unwrap().as_str(), "rss-feed");
+    assert_eq!(Channel::other(" Signal ").unwrap(), signal);
     assert_eq!(MAX_CHANNEL_NAME_BYTES, 255);
 
     assert_eq!(Channel::WhatsApp.to_string(), "whatsapp");
     assert_eq!(Channel::Telegram.to_string(), "telegram");
     assert_eq!(Channel::Matrix.to_string(), "matrix");
-    assert_eq!(Channel::Other("signal".to_owned()).to_string(), "signal");
+    assert_eq!(signal.to_string(), "signal");
 
     assert_eq!(Channel::from_str("whatsapp").unwrap(), Channel::WhatsApp);
     assert_eq!(Channel::from_str("telegram").unwrap(), Channel::Telegram);
     assert_eq!(Channel::from_str("matrix").unwrap(), Channel::Matrix);
     assert_eq!(
         Channel::from_str("signal").unwrap(),
-        Channel::Other("signal".to_owned())
+        Channel::other("signal").unwrap()
     );
 }
 
 #[test]
 fn channel_identity_follows_the_canonical_name() {
-    assert_eq!(Channel::Other("whatsapp".to_owned()), Channel::WhatsApp);
-    assert_eq!(Channel::Other("telegram".to_owned()), Channel::Telegram);
-    assert_eq!(Channel::Other("matrix".to_owned()), Channel::Matrix);
-
     let mut hashed = HashSet::new();
-    hashed.insert(Channel::Other("whatsapp".to_owned()));
+    hashed.insert(Channel::WhatsApp);
     assert!(!hashed.insert(Channel::WhatsApp));
 
     let sorted = BTreeSet::from([
-        Channel::Other("z-custom".to_owned()),
+        Channel::other("z-custom").unwrap(),
         Channel::Telegram,
-        Channel::Other("whatsapp".to_owned()),
         Channel::Matrix,
         Channel::WhatsApp,
     ]);
@@ -72,17 +66,31 @@ fn channel_identity_follows_the_canonical_name() {
 #[test]
 fn custom_channel_names_are_bounded_and_unreserved() {
     assert!(Channel::other("").is_err());
+    assert!(Channel::other("   ").is_err());
     assert!(Channel::other("a".repeat(MAX_CHANNEL_NAME_BYTES)).is_ok());
     assert!(Channel::other("a".repeat(MAX_CHANNEL_NAME_BYTES + 1)).is_err());
     assert!(Channel::other("has space").is_err());
-    assert!(Channel::other("UPPER").is_err());
     assert!(Channel::other("whatsapp").is_err());
     assert!(Channel::other("telegram").is_err());
     assert!(Channel::other("matrix").is_err());
 
+    assert_eq!(Channel::other("UPPER").unwrap().as_str(), "upper");
+
     for name in ["a", "rss-feed", "sms_v2"] {
         assert_eq!(Channel::other(name).unwrap().as_str(), name);
     }
+}
+
+#[test]
+fn channel_name_is_opaque() {
+    let channel = Channel::other("signal").unwrap();
+    let Channel::Other(name) = channel else {
+        panic!("Channel::other must produce Channel::Other");
+    };
+
+    let name: &ChannelName = &name;
+    assert_eq!(name.as_str(), "signal");
+    assert_eq!(name.to_string(), "signal");
 }
 
 #[test]
@@ -469,7 +477,7 @@ fn every_error_variant_renders_without_panicking() {
         Error::InvalidChannelName {
             reason: "empty".to_owned(),
         },
-        Error::UnknownChannel(Channel::Other("signal".to_owned())),
+        Error::UnknownChannel(Channel::other("signal").unwrap()),
         Error::ChannelAlreadyRegistered(Channel::Telegram),
     ];
     for error in errors {

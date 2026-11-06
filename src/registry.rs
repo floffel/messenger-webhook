@@ -111,7 +111,8 @@ impl Registry {
     /// use messenger_webhook::{Channel, Registry};
     ///
     /// let registry = Registry::new();
-    /// assert!(registry.get(&Channel::Other("signal".into())).is_err());
+    /// assert!(registry.get(&Channel::other("signal")?).is_err());
+    /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     pub fn get(&self, channel: &Channel) -> Result<&dyn Adapter> {
         self.adapters

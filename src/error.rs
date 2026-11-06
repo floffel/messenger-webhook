@@ -14,9 +14,10 @@ use crate::model::Channel;
 /// ```
 /// use messenger_webhook::{Channel, Error};
 ///
-/// let error = Error::UnknownChannel(Channel::Other("signal".into()));
+/// let error = Error::UnknownChannel(Channel::other("signal")?);
 /// assert_eq!(error.to_string(), "no adapter registered for channel signal");
 /// assert!(!error.is_retryable());
+/// # Ok::<(), messenger_webhook::Error>(())
 /// ```
 #[derive(Debug, Error)]
 #[non_exhaustive]

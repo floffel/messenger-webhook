@@ -8,18 +8,15 @@ use messenger_webhook::{
 #[test]
 fn unknown_channel_is_a_typed_error() {
     let registry = Registry::new();
-    let error = registry
-        .get(&Channel::Other("signal".into()))
-        .expect_err("unknown channel");
+    let signal = Channel::other("signal").unwrap();
+    let error = registry.get(&signal).expect_err("unknown channel");
     assert!(matches!(error, Error::UnknownChannel(_)));
     assert_eq!(
         error.to_string(),
         "no adapter registered for channel signal"
     );
 
-    assert!(registry
-        .handle(&Channel::Other("signal".into()), &Headers::new(), b"{}")
-        .is_err());
+    assert!(registry.handle(&signal, &Headers::new(), b"{}").is_err());
     assert!(registry.adapt(&Channel::Matrix, b"{}").is_err());
     assert!(registry
         .verify(&Channel::Telegram, &Headers::new(), b"{}")
@@ -51,20 +48,50 @@ fn registration_is_by_channel_and_replaceable() {
 }
 
 #[test]
-fn lookups_treat_canonical_other_names_as_the_built_in_channel() {
+fn lookups_use_the_normalised_custom_channel_name() {
     #[cfg(feature = "telegram")]
     {
-        use messenger_webhook::TelegramAdapter;
+        use messenger_webhook::{Adapter, Headers, TelegramAdapter};
+
+        #[derive(Debug)]
+        struct Custom;
+
+        impl Adapter for Custom {
+            fn channel(&self) -> Channel {
+                Channel::other("custom").expect("custom is a valid channel")
+            }
+
+            fn verify(&self, _headers: &Headers, _body: &[u8]) -> messenger_webhook::Result<()> {
+                Ok(())
+            }
+
+            fn adapt(&self, _payload: &[u8]) -> messenger_webhook::Result<Vec<NormalizedMessage>> {
+                Ok(Vec::new())
+            }
+
+            fn encode(
+                &self,
+                _message: &OutboundMessage,
+            ) -> messenger_webhook::Result<ProviderPayload> {
+                Err(Error::InvalidMessage {
+                    channel: self.channel(),
+                    reason: "not used in this test".to_owned(),
+                })
+            }
+        }
 
         let mut registry = Registry::new();
-        registry.register(TelegramAdapter::new("secret"));
+        registry
+            .register(Custom)
+            .register(TelegramAdapter::new("secret"));
 
-        let canonical = Channel::Other("telegram".to_owned());
+        let canonical = Channel::other(" CUSTOM ").expect("trimmed custom name is valid");
         assert!(registry.contains(&canonical));
         assert_eq!(
             registry.get(&canonical).unwrap().channel(),
-            Channel::Telegram
+            Channel::other("custom").expect("custom is valid")
         );
+        assert!(Channel::other("telegram").is_err());
     }
 }
 
@@ -184,7 +211,7 @@ struct IgnoresSize;
 
 impl Adapter for IgnoresSize {
     fn channel(&self) -> Channel {
-        Channel::Other("size-blind".to_owned())
+        Channel::other("size-blind").expect("size-blind is a valid channel")
     }
 
     fn verify(&self, _headers: &Headers, _body: &[u8]) -> messenger_webhook::Result<()> {
@@ -207,7 +234,7 @@ impl Adapter for IgnoresSize {
 fn registry_enforces_the_body_ceiling_for_custom_adapters() {
     let mut registry = Registry::new();
     registry.register(IgnoresSize);
-    let channel = Channel::Other("size-blind".to_owned());
+    let channel = Channel::other("size-blind").expect("size-blind is a valid channel");
     let at_limit = vec![b' '; MAX_BODY_BYTES];
     let over_limit = vec![b' '; MAX_BODY_BYTES + 1];
 

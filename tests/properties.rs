@@ -57,7 +57,8 @@ proptest! {
             Just(Channel::WhatsApp),
             Just(Channel::Telegram),
             Just(Channel::Matrix),
-            "signal|sms|rss-feed".prop_map(Channel::Other),
+            "signal|sms|rss-feed"
+                .prop_map(|name| Channel::other(name).unwrap()),
         ],
         kind in prop_oneof![
             Just(AttachmentKind::Image),
@@ -155,14 +156,18 @@ proptest! {
     fn custom_channel_names_accept_exactly_the_documented_grammar(name in ".*") {
         match Channel::other(name.clone()) {
             Ok(channel) => {
-                prop_assert_eq!(channel.as_str(), name.as_str());
-                prop_assert!(!name.is_empty());
-                prop_assert!(name.len() <= MAX_CHANNEL_NAME_BYTES);
-                prop_assert!(name.bytes().all(|byte| matches!(
+                let normalised = name.trim().to_ascii_lowercase();
+                prop_assert_eq!(channel.as_str(), normalised.as_str());
+                prop_assert!(!normalised.is_empty());
+                prop_assert!(normalised.len() <= MAX_CHANNEL_NAME_BYTES);
+                prop_assert!(normalised.bytes().all(|byte| matches!(
                     byte,
                     b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'
                 )));
-                prop_assert!(!matches!(name.as_str(), "whatsapp" | "telegram" | "matrix"));
+                prop_assert!(!matches!(
+                    normalised.as_str(),
+                    "whatsapp" | "telegram" | "matrix"
+                ));
             }
             Err(Error::InvalidChannelName { .. }) => {}
             Err(other) => prop_assert!(false, "unexpected error: {other:?}"),

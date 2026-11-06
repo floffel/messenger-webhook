@@ -6,70 +6,133 @@
 //! [`NormalizedMessage::raw`].
 
 use std::cmp::Ordering;
+use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 
 use crate::rich::TextSpan;
 use strum::{AsRefStr, Display, EnumString};
+
+/// A validated custom channel name.
+///
+/// Values are produced by [`Channel::other`], which trims surrounding
+/// whitespace, lower-cases ASCII letters, and rejects empty, oversized or
+/// malformed names. The inner string is private, so callers cannot bypass those
+/// checks by constructing the type directly.
+///
+/// ```
+/// use messenger_webhook::{Channel, ChannelName};
+///
+/// let channel = Channel::other(" Signal ")?;
+/// let name: &ChannelName = match &channel {
+///     Channel::Other(name) => name,
+///     _ => return Ok(()),
+/// };
+/// assert_eq!(name.as_str(), "signal");
+/// # Ok::<(), messenger_webhook::Error>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ChannelName(String);
+
+impl ChannelName {
+    fn new(name: String) -> crate::Result<Self> {
+        validate_channel_name(&name)?;
+        Ok(Self(name))
+    }
+
+    /// Returns the normalised custom channel name.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ChannelName};
+    ///
+    /// let channel = Channel::other("signal")?;
+    /// let name: &ChannelName = match &channel {
+    ///     Channel::Other(name) => name,
+    ///     _ => return Ok(()),
+    /// };
+    /// assert_eq!(name.as_str(), "signal");
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ChannelName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Which messenger a message came from.
 ///
 /// The enum is `#[non_exhaustive]`, so a messenger this crate learns to speak
 /// later arrives as a new variant in a minor release instead of a break.
 ///
-/// Equality, hashing and ordering all compare [`Channel::as_str`], so
-/// `Channel::Other("whatsapp")` identifies the same channel as
-/// [`Channel::WhatsApp`]. New custom channels should be built with
-/// [`Channel::other`], which rejects names that collide with a built-in channel.
+/// Equality, hashing and ordering all compare [`Channel::as_str`], so a custom
+/// channel name and a built-in channel cannot disagree about identity. New
+/// custom channels must be built with [`Channel::other`].
 ///
 /// ```
 /// use messenger_webhook::Channel;
 ///
 /// assert_eq!(Channel::WhatsApp.as_str(), "whatsapp");
-/// assert_eq!(Channel::Other("signal".into()).as_str(), "signal");
-/// assert_eq!(Channel::Other("whatsapp".into()), Channel::WhatsApp);
+/// assert_eq!(Channel::other(" Signal ")?.as_str(), "signal");
+/// # Ok::<(), messenger_webhook::Error>(())
 /// ```
-#[derive(Debug, Clone, AsRefStr, Display, EnumString)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Channel {
     /// `WhatsApp` Cloud API.
-    #[strum(serialize = "whatsapp")]
     WhatsApp,
     /// Telegram Bot API.
-    #[strum(serialize = "telegram")]
     Telegram,
     /// Matrix client-server or application-service events.
-    #[strum(serialize = "matrix")]
     Matrix,
-    /// Anything else, verbatim.
+    /// Anything else, carried as a validated [`ChannelName`].
     ///
-    /// Prefer [`Channel::other`] for caller-supplied channel names. This variant
-    /// is public for compatibility and for carrying provider strings, and is not
-    /// validated on direct construction.
-    #[strum(default, transparent)]
-    Other(String),
+    /// Use [`Channel::other`] to build this variant; [`ChannelName`] has no
+    /// public constructor.
+    Other(ChannelName),
 }
 
 impl Channel {
-    /// Builds a custom channel from a validated lower-case name.
+    /// Builds a custom channel from a caller-supplied name.
+    ///
+    /// The name is trimmed, ASCII lower-cased, and validated. Empty names,
+    /// names longer than [`MAX_CHANNEL_NAME_BYTES`], names with a byte outside
+    /// `[a-z0-9_-]` after normalisation, and names reserved by a built-in
+    /// channel are rejected.
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::InvalidChannelName`] when `name` is empty,
-    /// longer than [`MAX_CHANNEL_NAME_BYTES`], contains a byte outside
-    /// `[a-z0-9_-]`, or matches a built-in channel name.
+    /// Returns [`crate::Error::InvalidChannelName`] when the trimmed,
+    /// lower-cased name is empty, longer than [`MAX_CHANNEL_NAME_BYTES`],
+    /// contains a byte outside `[a-z0-9_-]`, or matches a built-in channel name.
     ///
     /// ```
     /// use messenger_webhook::Channel;
     ///
-    /// let signal = Channel::other("signal")?;
+    /// let signal = Channel::other(" Signal ")?;
     /// assert_eq!(signal.as_str(), "signal");
     /// assert!(Channel::other("whatsapp").is_err());
+    /// assert!(Channel::other("").is_err());
     /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     pub fn other(name: impl Into<String>) -> crate::Result<Self> {
-        let name = name.into();
-        validate_channel_name(&name)?;
-        Ok(Self::Other(name))
+        let raw = name.into();
+        let trimmed = raw.trim();
+        if trimmed.len() > MAX_CHANNEL_NAME_BYTES {
+            return Err(crate::Error::InvalidChannelName {
+                reason: format!(
+                    "channel name is {} bytes, the ceiling is {MAX_CHANNEL_NAME_BYTES}",
+                    trimmed.len()
+                ),
+            });
+        }
+        let name = trimmed.to_ascii_lowercase();
+        Ok(Self::Other(ChannelName::new(name)?))
     }
 
     /// Stable lower-case name, used in error messages and registry lookups.
@@ -81,7 +144,12 @@ impl Channel {
     /// ```
     #[must_use]
     pub fn as_str(&self) -> &str {
-        self.as_ref()
+        match self {
+            Self::WhatsApp => "whatsapp",
+            Self::Telegram => "telegram",
+            Self::Matrix => "matrix",
+            Self::Other(name) => name.as_str(),
+        }
     }
 }
 
@@ -111,6 +179,40 @@ impl Ord for Channel {
     }
 }
 
+impl fmt::Display for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Channel {
+    type Err = crate::Error;
+
+    /// Parses a channel name back into a [`Channel`].
+    ///
+    /// Built-in names map to their variants; any other valid custom name is
+    /// routed through [`Channel::other`], so parsing enforces the same grammar
+    /// and reserved-name rules as construction.
+    ///
+    /// ```
+    /// use messenger_webhook::Channel;
+    /// use std::str::FromStr;
+    ///
+    /// assert_eq!(Channel::from_str("matrix")?, Channel::Matrix);
+    /// assert_eq!(Channel::from_str("signal")?, Channel::other("signal")?);
+    /// assert!(Channel::from_str("").is_err());
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    fn from_str(s: &str) -> crate::Result<Self> {
+        match s {
+            "whatsapp" => Ok(Self::WhatsApp),
+            "telegram" => Ok(Self::Telegram),
+            "matrix" => Ok(Self::Matrix),
+            other => Self::other(other),
+        }
+    }
+}
+
 /// Longest custom channel name this crate accepts, in bytes.
 ///
 /// ```
@@ -124,14 +226,6 @@ fn validate_channel_name(name: &str) -> crate::Result<()> {
     if name.is_empty() {
         return Err(crate::Error::InvalidChannelName {
             reason: "channel name is empty".to_owned(),
-        });
-    }
-    if name.len() > MAX_CHANNEL_NAME_BYTES {
-        return Err(crate::Error::InvalidChannelName {
-            reason: format!(
-                "channel name is {} bytes, the ceiling is {MAX_CHANNEL_NAME_BYTES}",
-                name.len()
-            ),
         });
     }
     if name
@@ -1045,7 +1139,7 @@ impl ProviderPayload {
     /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload, RetryPolicy};
     ///
     /// let payload = ProviderPayload::with_retry(
-    ///     Channel::Other("echo".into()),
+    ///     Channel::other("echo").expect("echo is a valid channel"),
     ///     ProviderMethod::Post,
     ///     "application/json",
     ///     b"{}".to_vec(),
