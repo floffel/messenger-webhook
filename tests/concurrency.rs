@@ -108,7 +108,7 @@ fn thirty_two_tasks_share_one_registry() {
                         let outbound = messenger_webhook::OutboundMessage::text(
                             event.channel.clone(),
                             event.conversation_id.clone(),
-                            event.text.clone().unwrap_or_default(),
+                            event.text().unwrap_or_default(),
                         );
                         let _ = registry.encode(channel, &outbound);
                     }

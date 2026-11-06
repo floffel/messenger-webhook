@@ -281,7 +281,7 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 /// }
 ///
 /// let events = Echo.adapt(b"ping")?;
-/// assert_eq!(events[0].text.as_deref(), Some("ping"));
+/// assert_eq!(events[0].text(), Some("ping"));
 ///
 /// let payload = Echo.encode(&OutboundMessage::text(
 ///     Channel::Other("echo".into()),

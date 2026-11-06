@@ -39,7 +39,7 @@ fn a_whatsapp_message_without_an_id_is_carried_with_a_synthetic_one() {
     assert_eq!(events.len(), 1, "the event must not disappear");
     assert!(events[0].has_synthetic_id());
     assert!(events[0].external_id.starts_with(SYNTHETIC_ID_PREFIX));
-    assert_eq!(events[0].text.as_deref(), Some("Hallo"));
+    assert_eq!(events[0].text(), Some("Hallo"));
     assert_eq!(events[0].conversation_id, "4915112345678");
 
     // A provider retry delivers the identical body: same key, so a caller's
@@ -163,7 +163,7 @@ fn a_message_without_a_sender_is_carried_with_an_empty_conversation() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].conversation_id, "");
     assert!(events[0].has_synthetic_id());
-    assert_eq!(events[0].text.as_deref(), Some("anonymous"));
+    assert_eq!(events[0].text(), Some("anonymous"));
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn a_telegram_update_without_a_message_id_is_carried() {
     assert_eq!(events.len(), 1);
     assert!(events[0].has_synthetic_id());
     assert_eq!(events[0].conversation_id, "-1001");
-    assert_eq!(events[0].text.as_deref(), Some("Hallo"));
+    assert_eq!(events[0].text(), Some("Hallo"));
 }
 
 #[test]
@@ -211,7 +211,7 @@ fn a_matrix_event_without_an_event_id_is_carried() {
     assert_eq!(events.len(), 1);
     assert!(events[0].has_synthetic_id());
     assert_eq!(events[0].conversation_id, "!r:example.org");
-    assert_eq!(events[0].text.as_deref(), Some("Hallo"));
+    assert_eq!(events[0].text(), Some("Hallo"));
 }
 
 #[test]

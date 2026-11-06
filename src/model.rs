@@ -497,7 +497,7 @@ pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 255;
 /// let message = NormalizedMessage::inbound_text(Channel::Telegram, "update-1", "-1001", "Hallo");
 /// assert_eq!(message.external_id, "update-1");
 /// assert_eq!(message.conversation_id, "-1001");
-/// assert_eq!(message.text.as_deref(), Some("Hallo"));
+/// assert_eq!(message.text(), Some("Hallo"));
 /// assert!(message.attachments.is_empty());
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -519,7 +519,7 @@ pub struct NormalizedMessage {
     /// Who sent it, in the provider's own id space.
     pub sender_id: String,
     /// Plain text, when the event carries any (captions included).
-    pub text: Option<String>,
+    text: Option<String>,
     /// Unix timestamp in seconds, when the provider sent one.
     pub timestamp: Option<i64>,
     /// Media carried by the event, in provider order.
@@ -540,7 +540,7 @@ pub struct NormalizedMessage {
     /// run the span describes. A provider entity whose offsets cannot be
     /// expressed that way is dropped rather than repaired — see
     /// [`TextSpan::new`](crate::TextSpan::new).
-    pub spans: Vec<TextSpan>,
+    spans: Vec<TextSpan>,
     /// Provider-native event name (`text`, `image`, `message_reaction`,
     /// `m.room.message`, …), verbatim including unknown types.
     pub provider_type: Option<String>,
@@ -549,6 +549,32 @@ pub struct NormalizedMessage {
 }
 
 impl NormalizedMessage {
+    /// Builds an event with empty text and no formatting spans.
+    pub(crate) fn carrier(
+        channel: Channel,
+        external_id: impl Into<String>,
+        conversation_id: impl Into<String>,
+        sender_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            channel,
+            external_id: external_id.into(),
+            conversation_id: conversation_id.into(),
+            sender_id: sender_id.into(),
+            text: None,
+            timestamp: None,
+            attachments: Vec::new(),
+            reply_to: None,
+            thread_id: None,
+            edit_of: None,
+            reaction: None,
+            status: None,
+            spans: Vec::new(),
+            provider_type: None,
+            raw: None,
+        }
+    }
+
     /// Builds a plain inbound text event with the provider's event id.
     ///
     /// This constructor is for tests, examples and event forwarding. Real
@@ -573,23 +599,163 @@ impl NormalizedMessage {
         conversation_id: impl Into<String>,
         text: impl Into<String>,
     ) -> Self {
-        Self {
-            channel,
-            external_id: external_id.into(),
-            conversation_id: conversation_id.into(),
-            sender_id: String::new(),
-            text: Some(text.into()),
-            timestamp: None,
-            attachments: Vec::new(),
-            reply_to: None,
-            thread_id: None,
-            edit_of: None,
-            reaction: None,
-            status: None,
-            spans: Vec::new(),
-            provider_type: None,
-            raw: None,
-        }
+        let mut message = Self::carrier(channel, external_id, conversation_id, String::new());
+        message.set_text(Some(text));
+        message
+    }
+
+    /// Plain text, when the event carries any (captions included).
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, NormalizedMessage};
+    ///
+    /// let message = NormalizedMessage::inbound_text(Channel::Telegram, "update-1", "-1001", "Hallo");
+    /// assert_eq!(message.text(), Some("Hallo"));
+    /// ```
+    #[must_use]
+    pub fn text(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+
+    /// Formatted runs inside [`Self::text`], in provider order.
+    ///
+    /// Every span returned here slices [`Self::text`] cleanly. Providers whose
+    /// entity offsets cannot be expressed as UTF-8 byte offsets are dropped
+    /// before they reach this list.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, NormalizedMessage, TextFormat, TextSpan};
+    ///
+    /// let span = TextSpan::new("Hallo Welt", 6, 10, TextFormat::Bold)?;
+    /// let message = NormalizedMessage::inbound_text(Channel::Telegram, "update-1", "-1001", "Hallo Welt")
+    ///     .with_spans([span]);
+    /// assert_eq!(message.spans().len(), 1);
+    /// # Ok::<(), messenger_webhook::SpanError>(())
+    /// ```
+    #[must_use]
+    pub fn spans(&self) -> &[TextSpan] {
+        &self.spans
+    }
+
+    /// The text covered by the span at `index`, or `None` when no such span exists.
+    ///
+    /// This is the checked way to read formatted text: it delegates to
+    /// [`TextSpan::slice`](crate::TextSpan::slice) and never indexes the text
+    /// directly.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, NormalizedMessage, TextFormat, TextSpan};
+    ///
+    /// let span = TextSpan::new("Hallo Welt", 6, 10, TextFormat::Bold)?;
+    /// let message = NormalizedMessage::inbound_text(Channel::Telegram, "update-1", "-1001", "Hallo Welt")
+    ///     .with_spans([span]);
+    /// assert_eq!(message.span_text(0), Some("Welt"));
+    /// assert_eq!(message.span_text(1), None);
+    /// # Ok::<(), messenger_webhook::SpanError>(())
+    /// ```
+    #[must_use]
+    pub fn span_text(&self, index: usize) -> Option<&str> {
+        let text = self.text.as_deref()?;
+        self.spans.get(index)?.slice(text)
+    }
+
+    /// Returns this event with `text` replaced and incompatible spans dropped.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, NormalizedMessage};
+    ///
+    /// let message = NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "hi")
+    ///     .with_text("servus");
+    /// assert_eq!(message.text(), Some("servus"));
+    /// ```
+    #[must_use]
+    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+        self.set_text(Some(text));
+        self
+    }
+
+    /// Returns this event with `text` cleared and all formatting spans removed.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, NormalizedMessage};
+    ///
+    /// let message = NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "hi")
+    ///     .without_text();
+    /// assert_eq!(message.text(), None);
+    /// assert!(message.spans().is_empty());
+    /// ```
+    #[must_use]
+    pub fn without_text(mut self) -> Self {
+        self.set_text(None::<String>);
+        self
+    }
+
+    /// Returns this event with formatting spans set from `spans`.
+    ///
+    /// Spans that do not slice [`Self::text`] cleanly are dropped.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, NormalizedMessage, TextFormat, TextSpan};
+    ///
+    /// let span = TextSpan::new("Hallo Welt", 6, 10, TextFormat::Bold)?;
+    /// let message = NormalizedMessage::inbound_text(Channel::Telegram, "update-1", "-1001", "Hallo Welt")
+    ///     .with_spans([span]);
+    /// assert_eq!(message.span_text(0), Some("Welt"));
+    /// # Ok::<(), messenger_webhook::SpanError>(())
+    /// ```
+    #[must_use]
+    pub fn with_spans(mut self, spans: impl IntoIterator<Item = TextSpan>) -> Self {
+        self.set_spans(spans);
+        self
+    }
+
+    /// Returns this event with `text` and `spans` set together.
+    ///
+    /// Spans that do not slice the final `text` cleanly are dropped.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, NormalizedMessage, TextFormat, TextSpan};
+    ///
+    /// let valid = TextSpan::new("Hallo Welt", 6, 10, TextFormat::Bold)?;
+    /// let message = NormalizedMessage::inbound_text(Channel::Telegram, "update-1", "-1001", "")
+    ///     .with_text_and_spans("Hallo Welt", [valid]);
+    /// assert_eq!(message.text(), Some("Hallo Welt"));
+    /// assert_eq!(message.span_text(0), Some("Welt"));
+    /// # Ok::<(), messenger_webhook::SpanError>(())
+    /// ```
+    #[must_use]
+    pub fn with_text_and_spans(
+        mut self,
+        text: impl Into<String>,
+        spans: impl IntoIterator<Item = TextSpan>,
+    ) -> Self {
+        self.text = Some(text.into());
+        self.set_spans(spans);
+        self
+    }
+
+    pub(crate) fn set_text(&mut self, text: Option<impl Into<String>>) {
+        self.text = text.map(Into::into);
+        self.retain_valid_spans();
+    }
+
+    pub(crate) fn set_spans(&mut self, spans: impl IntoIterator<Item = TextSpan>) {
+        let Some(text) = self.text.as_deref() else {
+            self.spans.clear();
+            return;
+        };
+        self.spans = spans
+            .into_iter()
+            .filter(|span| span.slice(text).is_some())
+            .collect();
+    }
+
+    fn retain_valid_spans(&mut self) {
+        let Some(text) = self.text.as_deref() else {
+            self.spans.clear();
+            return;
+        };
+        self.spans.retain(|span| span.slice(text).is_some());
     }
 
     /// Whether [`Self::external_id`] was invented by this crate.

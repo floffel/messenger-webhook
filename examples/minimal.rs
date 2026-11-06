@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             message.external_id,
             message.sender_id,
             message.conversation_id,
-            message.text,
+            message.text().unwrap_or("<no text>"),
         );
     }
 

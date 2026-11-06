@@ -50,7 +50,7 @@ adapter.verify(&headers, &body)?;
 
 // 2. Normalise.
 for message in adapter.adapt(&body)? {
-    store.upsert(&message.external_id, &message.conversation_id, message.text.as_deref()).await?;
+    store.upsert(&message.external_id, &message.conversation_id, message.text()).await?;
 }
 ```
 
@@ -255,8 +255,8 @@ let body = br#"{"update_id":1,"message":{"message_id":7,"from":{"id":42},
 let events = TelegramAdapter::new("secret").adapt(body)?;
 let message = &events[0];
 
-assert_eq!(message.text.as_deref(), Some("Hallo Welt"));
-let span = &message.spans[0];
+assert_eq!(message.text(), Some("Hallo Welt"));
+let span = &message.spans()[0];
 assert_eq!(span.format, TextFormat::Bold);
 assert_eq!(span.slice("Hallo Welt"), Some("Welt"));   // UTF-8 byte range
 assert!(span.covers(6));

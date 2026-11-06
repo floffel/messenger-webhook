@@ -135,7 +135,7 @@ fn attachment_helpers() {
 fn normalized_message_helpers() {
     let mut message = NormalizedMessage::inbound_text(Channel::Telegram, "7", "42", "hi");
     assert_eq!(message.conversation_id, "42");
-    assert_eq!(message.text.as_deref(), Some("hi"));
+    assert_eq!(message.text(), Some("hi"));
     assert_eq!(message.external_id, "7");
     assert!(message.first_attachment().is_none());
 

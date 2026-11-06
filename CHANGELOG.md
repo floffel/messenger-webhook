@@ -63,6 +63,13 @@ carry a `!` in the conventional-commit subject.
 
 ### Fixed
 
+- **Formatting spans stay tied to their text.** `NormalizedMessage::text` and
+  `NormalizedMessage::spans` are no longer independent public fields. The
+  fields are now private behind checked accessors
+  (`text()`, `spans()` and `span_text()`), and every setter re-validates spans
+  against the final text so an event cannot carry an offset that would panic
+  when sliced. `with_text`, `without_text`, `with_spans` and
+  `with_text_and_spans` keep text and formatting in lockstep. Closes #92.
 - **Verification headers must appear exactly once.** A proxy or attacker can
   forward repeated `X-Hub-Signature-256`, `X-Telegram-Bot-Api-Secret-Token` or
   `Authorization` fields; the adapters used to authenticate whichever value

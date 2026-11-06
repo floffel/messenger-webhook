@@ -1,7 +1,7 @@
 //! Rich text: entity offsets become byte spans, or are dropped.
 //!
 //! Telegram counts `MessageEntity.offset`/`.length` in UTF-16 code units, while
-//! `NormalizedMessage::text` is a Rust string field. These tests pin the conversion at
+//! `NormalizedMessage::text()` is a Rust string. These tests pin the conversion at
 //! its edges — an emoji outside the BMP is two units, a boundary inside its
 //! surrogate pair has no byte equivalent — and pin every entity type onto a
 //! [`TextFormat`] instead of trusting the happy path.
@@ -46,9 +46,9 @@ fn with_entities(text: &str, entities: &Value) -> NormalizedMessage {
 /// The single span of an adapted message, with the text it covers.
 #[cfg(feature = "telegram")]
 fn only_span(message: &NormalizedMessage) -> (TextFormat, String) {
-    assert_eq!(message.spans.len(), 1, "expected exactly one span");
-    let span = &message.spans[0];
-    let text = message.text.as_deref().expect("text");
+    assert_eq!(message.spans().len(), 1, "expected exactly one span");
+    let span = &message.spans()[0];
+    let text = message.text().expect("text");
     (
         span.format.clone(),
         span.slice(text).expect("span slices its text").to_owned(),
@@ -63,10 +63,10 @@ fn telegram_entities_become_byte_spans() {
         &json!([{ "type": "bold", "offset": 6, "length": 4 }]),
     );
     assert!(message.is_formatted());
-    let span = &message.spans[0];
+    let span = &message.spans()[0];
     assert_eq!((span.start, span.end), (6, 10));
     assert_eq!(only_span(&message).0, TextFormat::Bold);
-    assert_eq!(message.text.as_deref(), Some("Hallo Welt"));
+    assert_eq!(message.text(), Some("Hallo Welt"));
 }
 
 #[cfg(feature = "telegram")]
@@ -78,11 +78,11 @@ fn astral_characters_shift_utf16_offsets_to_bytes() {
         "a😀b",
         &json!([{ "type": "italic", "offset": 1, "length": 2 }]),
     );
-    let span = &message.spans[0];
+    let span = &message.spans()[0];
     assert_eq!((span.start, span.end), (1, 5));
     assert_eq!(only_span(&message), (TextFormat::Italic, "😀".to_owned()));
     // ...and the byte offsets are char boundaries, so slicing cannot panic.
-    assert_eq!(&message.text.as_deref().unwrap()[1..5], "😀");
+    assert_eq!(&message.text().unwrap()[1..5], "😀");
 }
 
 #[cfg(feature = "telegram")]
@@ -93,9 +93,9 @@ fn boundary_inside_a_surrogate_pair_is_dropped() {
         "a😀b",
         &json!([{ "type": "bold", "offset": 2, "length": 1 }]),
     );
-    assert_eq!(message.spans, Vec::new(), "no invented run");
+    assert_eq!(message.spans(), Vec::new(), "no invented run");
     assert!(!message.is_formatted());
-    assert_eq!(message.text.as_deref(), Some("a😀b"), "text stays complete");
+    assert_eq!(message.text(), Some("a😀b"), "text stays complete");
 }
 
 #[cfg(feature = "telegram")]
@@ -111,7 +111,7 @@ fn ranges_past_the_end_or_empty_are_dropped() {
         json!({ "type": "bold", "offset": -1, "length": 3 }),
     ] {
         let message = with_entities("abc", &json!([entity.clone()]));
-        assert_eq!(message.spans, Vec::new(), "dropped: {entity}");
+        assert_eq!(message.spans(), Vec::new(), "dropped: {entity}");
     }
 }
 
@@ -155,7 +155,7 @@ fn payloads_of_structured_entities_are_carried() {
         &json!([{ "type": "pre", "offset": 0, "length": 12, "language": "rust" }]),
     );
     assert_eq!(
-        pre.spans[0].format,
+        pre.spans()[0].format,
         TextFormat::Pre {
             language: Some("rust".to_owned())
         }
@@ -166,7 +166,7 @@ fn payloads_of_structured_entities_are_carried() {
         &json!([{ "type": "text_link", "offset": 0, "length": 4, "url": "https://docs.rs" }]),
     );
     assert_eq!(
-        link.spans[0].format,
+        link.spans()[0].format,
         TextFormat::Link {
             url: "https://docs.rs".to_owned()
         }
@@ -177,7 +177,7 @@ fn payloads_of_structured_entities_are_carried() {
         &json!([{ "type": "text_mention", "offset": 0, "length": 3, "user": { "id": 4242 } }]),
     );
     assert_eq!(
-        mention.spans[0].format,
+        mention.spans()[0].format,
         TextFormat::TextMention {
             user_id: "4242".to_owned()
         }
@@ -188,7 +188,7 @@ fn payloads_of_structured_entities_are_carried() {
         &json!([{ "type": "custom_emoji", "offset": 0, "length": 1, "custom_emoji_id": "5368324170671202286" }]),
     );
     assert_eq!(
-        emoji.spans[0].format,
+        emoji.spans()[0].format,
         TextFormat::CustomEmoji {
             id: "5368324170671202286".to_owned()
         }
@@ -233,7 +233,7 @@ fn caption_entities_describe_the_caption() {
         "caption": "ein Bild",
         "caption_entities": [{ "type": "underline", "offset": 4, "length": 4 }],
     }));
-    assert_eq!(message.text.as_deref(), Some("ein Bild"));
+    assert_eq!(message.text(), Some("ein Bild"));
     assert_eq!(
         only_span(&message),
         (TextFormat::Underline, "Bild".to_owned())
@@ -252,7 +252,7 @@ fn entities_in_provider_order_and_overlapping_stay_untouched() {
     );
     assert_eq!(
         message
-            .spans
+            .spans()
             .iter()
             .map(|span| (span.start, span.end))
             .collect::<Vec<_>>(),
@@ -276,7 +276,7 @@ fn many_entities_are_converted_in_provider_order_and_bad_ranges_do_not_shift() {
 
     assert_eq!(
         message
-            .spans
+            .spans()
             .iter()
             .map(|span| (span.start, span.end, span.format.as_str()))
             .collect::<Vec<_>>(),
@@ -288,7 +288,7 @@ fn many_entities_are_converted_in_provider_order_and_bad_ranges_do_not_shift() {
 #[test]
 fn adapters_that_send_no_entities_produce_no_spans() {
     assert_eq!(
-        NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "hi").spans,
+        NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "hi").spans(),
         Vec::new()
     );
     assert!(!NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "hi").is_formatted());
@@ -310,7 +310,7 @@ fn whatsapp_text_messages_carry_no_spans() {
         .adapt(&serde_json::to_vec(&body).expect("body"))
         .expect("adapt");
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].spans, Vec::new());
+    assert_eq!(events[0].spans(), Vec::new());
     assert!(!events[0].is_formatted());
 }
 
@@ -376,8 +376,8 @@ fn readme_example_runs() {
     let events = TelegramAdapter::new("secret").adapt(body).expect("adapt");
     let message = &events[0];
 
-    assert_eq!(message.text.as_deref(), Some("Hallo Welt"));
-    let span = &message.spans[0];
+    assert_eq!(message.text(), Some("Hallo Welt"));
+    let span = &message.spans()[0];
     assert_eq!(span.format, TextFormat::Bold);
     assert_eq!(span.slice("Hallo Welt"), Some("Welt"));
     assert!(span.covers(6));
@@ -426,7 +426,6 @@ fn every_format_has_a_stable_name() {
 }
 
 /// A text whose characters differ in UTF-8 and UTF-16 width.
-#[cfg(feature = "telegram")]
 fn any_text() -> impl Strategy<Value = String> {
     proptest::collection::vec(
         prop_oneof![
@@ -443,6 +442,108 @@ fn any_text() -> impl Strategy<Value = String> {
         0..24,
     )
     .prop_map(|characters| characters.into_iter().collect())
+}
+
+fn any_span() -> impl Strategy<Value = TextSpan> {
+    (0_usize..24, 0_usize..24, any::<u8>()).prop_map(|(start, end, format)| TextSpan {
+        start,
+        end,
+        format: match format % 3 {
+            0 => TextFormat::Bold,
+            1 => TextFormat::Code,
+            _ => TextFormat::Italic,
+        },
+    })
+}
+
+#[test]
+fn changing_text_drops_spans_that_no_longer_slice_it() {
+    let text = "Hallo Welt";
+    let valid = TextSpan::new(text, 6, 10, TextFormat::Bold).expect("valid span");
+    let just_inside = TextSpan::new(text, 0, text.len(), TextFormat::Code).expect("full span");
+    let message = NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", text)
+        .with_spans([valid.clone(), just_inside.clone()]);
+    assert_eq!(message.spans(), [valid.clone(), just_inside.clone()]);
+    assert_eq!(message.span_text(0), Some("Welt"));
+    assert_eq!(message.span_text(1), Some(text));
+
+    let shortened = message.clone().with_text("Hallo");
+    assert_eq!(shortened.text(), Some("Hallo"));
+    assert_eq!(shortened.spans(), []);
+    assert_eq!(shortened.span_text(0), None);
+    assert_eq!(message.clone().without_text().text(), None);
+    assert_eq!(message.clone().without_text().spans(), []);
+
+    let multibyte = message.with_text("Hällo W€");
+    assert_eq!(multibyte.text(), Some("Hällo W€"));
+    assert_eq!(multibyte.spans(), []);
+}
+
+#[test]
+fn setting_spans_filters_every_span_against_the_final_text() {
+    let text = "Hallo Welt";
+    let valid = TextSpan::new(text, 6, 10, TextFormat::Bold).expect("valid span");
+    let end_at_limit =
+        TextSpan::new(text, 6, text.len(), TextFormat::Italic).expect("end at limit");
+    let over = TextSpan {
+        start: 6,
+        end: text.len() + 1,
+        format: TextFormat::Code,
+    };
+
+    let message = NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", text)
+        .with_spans([valid.clone(), end_at_limit.clone(), over]);
+    assert_eq!(message.spans(), [valid, end_at_limit]);
+    assert_eq!(message.span_text(0), Some("Welt"));
+    assert_eq!(message.span_text(1), Some("Welt"));
+    assert_eq!(message.span_text(2), None);
+}
+
+#[test]
+fn with_text_and_spans_validates_the_pair_together() {
+    let text = "Hallo Welt";
+    let spans = [
+        TextSpan::new(text, 0, 5, TextFormat::Bold).expect("prefix"),
+        TextSpan::new(text, 6, 10, TextFormat::Italic).expect("suffix"),
+    ];
+    let message = NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "")
+        .with_text_and_spans(text, spans.clone());
+    assert_eq!(message.spans(), spans);
+    assert_eq!(message.span_text(0), Some("Hallo"));
+    assert_eq!(message.span_text(1), Some("Welt"));
+
+    let invalid = TextSpan::new(text, 6, 10, TextFormat::Code).expect("suffix");
+    let message = NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "")
+        .with_text_and_spans("Hallo", [invalid]);
+    assert_eq!(message.text(), Some("Hallo"));
+    assert_eq!(message.spans(), []);
+}
+
+mod text_span_invariant {
+    use super::{any_span, any_text};
+    use messenger_webhook::{Channel, NormalizedMessage};
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn every_stored_span_slices_the_stored_text(
+            text in any_text(),
+            spans in proptest::collection::vec(any_span(), 0..8),
+        ) {
+            let message = NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "")
+                .with_text_and_spans(text.clone(), spans);
+
+            let stored = message.text().unwrap_or_default();
+            prop_assert!(message
+                .spans()
+                .iter()
+                .all(|span| span.slice(stored).is_some()));
+            for (index, span) in message.spans().iter().enumerate() {
+                prop_assert_eq!(message.span_text(index), span.slice(stored));
+            }
+            prop_assert_eq!(message.span_text(message.spans().len()), None);
+        }
+    }
 }
 
 #[cfg(feature = "telegram")]
@@ -476,8 +577,8 @@ mod utf16_round_trip {
             let length = text[start..end].encode_utf16().count();
             let message = with_entities(&text, &json!([{ "type": "bold", "offset": offset, "length": length }]),
             );
-            prop_assert_eq!(message.spans.len(), 1);
-            let span = &message.spans[0];
+            prop_assert_eq!(message.spans().len(), 1);
+            let span = &message.spans()[0];
             prop_assert_eq!((span.start, span.end), (start, end));
             prop_assert_eq!(span.slice(&text), Some(&text[start..end]));
         }

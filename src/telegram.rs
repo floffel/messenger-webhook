@@ -272,24 +272,20 @@ fn normalize_message(message: &Value, provider_type: &str) -> Result<NormalizedM
         .map(str::to_owned);
     let is_edit = provider_type.starts_with("edited_");
 
-    Ok(NormalizedMessage {
-        channel: Channel::Telegram,
-        conversation_id,
-        sender_id,
-        edit_of: is_edit.then(|| external_id.clone()),
-        external_id,
-        text,
-        timestamp: json::integer(message, "edit_date").or_else(|| json::integer(message, "date")),
-        attachments: attachments(message),
-        reply_to: json::child(message, "reply_to_message")
-            .and_then(|reply| json::id(reply, "message_id")),
-        thread_id: json::id(message, "message_thread_id"),
-        reaction: None,
-        status: None,
-        spans: spans(message),
-        provider_type: Some(provider_type.to_owned()),
-        raw: Some(message.clone()),
-    })
+    let mut normalized =
+        NormalizedMessage::carrier(Channel::Telegram, external_id, conversation_id, sender_id);
+    normalized.edit_of = is_edit.then(|| normalized.external_id.clone());
+    normalized.timestamp =
+        json::integer(message, "edit_date").or_else(|| json::integer(message, "date"));
+    normalized.attachments = attachments(message);
+    normalized.reply_to =
+        json::child(message, "reply_to_message").and_then(|reply| json::id(reply, "message_id"));
+    normalized.thread_id = json::id(message, "message_thread_id");
+    normalized.provider_type = Some(provider_type.to_owned());
+    normalized.raw = Some(message.clone());
+    normalized.set_text(text);
+    normalized.set_spans(spans(message));
+    Ok(normalized)
 }
 
 /// Collects every media field Telegram may attach to a message.
@@ -409,27 +405,21 @@ fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
         })
         .unwrap_or_default();
 
-    Ok(NormalizedMessage {
-        channel: Channel::Telegram,
-        external_id: message_id.clone(),
+    let mut normalized = NormalizedMessage::carrier(
+        Channel::Telegram,
+        message_id.clone(),
         conversation_id,
         sender_id,
-        text: None,
-        timestamp: json::integer(reaction, "date"),
-        attachments: Vec::new(),
-        reply_to: None,
-        thread_id: None,
-        edit_of: None,
-        reaction: Some(Reaction {
-            message_id,
-            removed: emoji.is_empty(),
-            emoji,
-        }),
-        status: None,
-        spans: Vec::new(),
-        provider_type: Some("message_reaction".to_owned()),
-        raw: Some(reaction.clone()),
-    })
+    );
+    normalized.timestamp = json::integer(reaction, "date");
+    normalized.reaction = Some(Reaction {
+        message_id,
+        removed: emoji.is_empty(),
+        emoji,
+    });
+    normalized.provider_type = Some("message_reaction".to_owned());
+    normalized.raw = Some(reaction.clone());
+    Ok(normalized)
 }
 
 /// Collects the formatting Telegram marks on a message.
