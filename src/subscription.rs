@@ -208,11 +208,14 @@ pub fn meta_subscription_challenge(
     secret: &Secret,
     query: &str,
 ) -> Result<String> {
-    if secret.is_empty() {
-        return Err(Error::MissingSecret { channel });
-    }
+    let error_channel = channel.clone();
+    drop(channel);
+
     if query.len() > MAX_QUERY_BYTES {
-        return Err(malformed(&channel, "query string is over the length limit"));
+        return Err(malformed(
+            &error_channel,
+            "query string is over the length limit",
+        ));
     }
 
     let mut mode = None;
@@ -231,7 +234,10 @@ pub fn meta_subscription_challenge(
             _ => continue,
         };
         if value.len() > limit {
-            return Err(malformed(&channel, "a parameter is over the length limit"));
+            return Err(malformed(
+                &error_channel,
+                "a parameter is over the length limit",
+            ));
         }
         let value = value.into_owned();
         if let Some(existing) = slot {
@@ -240,7 +246,7 @@ pub fn meta_subscription_challenge(
                 // ambiguous: which of them was meant to be verified? Reject
                 // instead of picking one.
                 return Err(malformed(
-                    &channel,
+                    &error_channel,
                     "a parameter appears with conflicting values",
                 ));
             }
@@ -249,30 +255,29 @@ pub fn meta_subscription_challenge(
         }
     }
 
-    let mode = mode.ok_or_else(|| malformed(&channel, "no hub.mode parameter"))?;
+    let mode = mode.ok_or_else(|| malformed(&error_channel, "no hub.mode parameter"))?;
     if !mode.eq_ignore_ascii_case(META_SUBSCRIBE_MODE) {
-        return Err(malformed(&channel, "hub.mode is not subscribe"));
+        return Err(malformed(&error_channel, "hub.mode is not subscribe"));
     }
 
     let verify_token =
-        verify_token.ok_or_else(|| malformed(&channel, "no hub.verify_token parameter"))?;
-    if !secret.ct_eq(verify_token.as_bytes()) {
-        return Err(Error::BadSignature { channel });
-    }
+        verify_token.ok_or_else(|| malformed(&error_channel, "no hub.verify_token parameter"))?;
+    secret.verify_channel(&error_channel, verify_token.as_bytes())?;
 
-    let challenge = challenge.ok_or_else(|| malformed(&channel, "no hub.challenge parameter"))?;
+    let challenge =
+        challenge.ok_or_else(|| malformed(&error_channel, "no hub.challenge parameter"))?;
     if challenge.is_empty() {
-        return Err(malformed(&channel, "hub.challenge is empty"));
+        return Err(malformed(&error_channel, "hub.challenge is empty"));
     }
     if challenge.len() > MAX_CHALLENGE_BYTES {
         return Err(malformed(
-            &channel,
+            &error_channel,
             "hub.challenge is over the length limit",
         ));
     }
     let challenge: u64 = challenge
         .parse()
-        .map_err(|_| malformed(&channel, "hub.challenge is not an unsigned integer"))?;
+        .map_err(|_| malformed(&error_channel, "hub.challenge is not an unsigned integer"))?;
 
     Ok(challenge.to_string())
 }

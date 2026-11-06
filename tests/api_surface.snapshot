@@ -280,10 +280,10 @@ src/rich.rs:impl TextSpan:fn new
 src/rich.rs:impl TextSpan:fn slice
 src/rich.rs:struct TextSpan
 src/secret.rs:const MIN_SECRET_BYTES
-src/secret.rs:impl Secret:fn ct_eq
 src/secret.rs:impl Secret:fn expose_secret
 src/secret.rs:impl Secret:fn is_empty
 src/secret.rs:impl Secret:fn new
+src/secret.rs:impl Secret:fn verify
 src/secret.rs:struct Secret
 src/signature.rs:const META_SIGNATURE_HEADER
 src/signature.rs:const META_SIGNATURE_PREFIX

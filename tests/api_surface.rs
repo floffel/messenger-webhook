@@ -503,9 +503,9 @@ fn secret_api() {
     // A custom `is_empty` is not the `assert_is_empty` lint's target.
     assert!(!secret.is_empty());
     assert_eq!(secret.expose_secret(), "secret-secret-secret");
-    assert!(secret.ct_eq(b"secret-secret-secret"));
-    assert!(!secret.ct_eq(b"toke"));
-    assert!(!secret.ct_eq(b""));
+    assert!(secret.verify(b"secret-secret-secret").unwrap());
+    assert!(!secret.verify(b"toke").unwrap());
+    assert!(!secret.verify(b"").unwrap());
     assert!(matches!(
         Secret::new(""),
         Err(Error::WeakSecret {
