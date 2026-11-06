@@ -6,7 +6,13 @@
 //! with `setWebhook`.
 //!
 //! Outbound, `encode` produces the `sendMessage` (or send-media) body and
-//! enforces Telegram's 4096/1024 UTF-16 unit limits:
+//! enforces Telegram's 4096/1024 UTF-16 unit limits. An
+//! [`OutboundMessage::edit_of`](crate::OutboundMessage::edit_of) becomes the
+//! `editMessageText` body and an
+//! [`OutboundMessage::reaction`](crate::OutboundMessage::reaction) becomes the
+//! `setMessageReaction` body; the returned
+//! [`ProviderPayload::operation`](crate::ProviderPayload::operation) tells the
+//! caller which endpoint to post to.
 //!
 //! ```
 //! use messenger_webhook::{Adapter, Channel, OutboundMessage, TelegramAdapter};
@@ -29,7 +35,7 @@ use crate::json;
 use crate::model::{
     Attachment, AttachmentKind, Channel, NormalizedMessage, OutboundMessage, Reaction,
 };
-use crate::model::{ProviderMethod, ProviderPayload};
+use crate::model::{ProviderMethod, ProviderOperation, ProviderPayload};
 use crate::rich::{byte_to_utf16_ranges, utf16_to_byte_ranges, TextFormat, TextSpan};
 use crate::secret::Secret;
 use crate::{check_body, json_payload, recipient, utf16_len, Adapter};
@@ -209,16 +215,11 @@ impl Adapter for TelegramAdapter {
 
     fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
         let chat_id = recipient(Channel::Telegram, message)?;
-        if message.edit_of.is_some() {
-            let method = if message.first_attachment().is_some() {
-                "editMessageMedia or editMessageCaption"
-            } else {
-                "editMessageText"
-            };
-            return Err(Error::InvalidMessage {
-                channel: Channel::Telegram,
-                reason: format!("edits go to {method} with the original message id"),
-            });
+        if let Some(reaction) = &message.reaction {
+            return encode_reaction(chat_id, message, reaction);
+        }
+        if let Some(target) = &message.edit_of {
+            return encode_edit(chat_id, message, target);
         }
         let mut body = serde_json::Map::new();
         body.insert(
@@ -289,7 +290,157 @@ impl Adapter for TelegramAdapter {
             ProviderMethod::Post,
             &Value::Object(body),
         )
+        .map(|payload| payload.with_operation(ProviderOperation::Message, None))
     }
+}
+
+/// Builds the `editMessageText` body for an outbound text edit.
+///
+/// Telegram addresses an edit by the original `message_id` plus the same
+/// `chat_id` a send uses. Only text edits are encoded: `editMessageMedia` and
+/// `editMessageCaption` need a provider `file_id` this crate does not model, so
+/// an edit that carries an attachment is rejected before a request is built.
+/// See *editMessageText* in the Bot API reference
+/// (<https://core.telegram.org/bots/api#editmessagetext>).
+fn encode_edit(chat_id: &str, message: &OutboundMessage, target: &str) -> Result<ProviderPayload> {
+    if message.first_attachment().is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "an edit cannot carry an attachment; editMessageMedia and \
+                     editMessageCaption need a provider file id"
+                .to_owned(),
+        });
+    }
+    if message.reaction.is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "an edit cannot also be a reaction".to_owned(),
+        });
+    }
+    if message.interactive_reply.is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "Telegram has no interactive edit; send a new message".to_owned(),
+        });
+    }
+    let text = message.text.as_deref().unwrap_or_default();
+    if text.is_empty() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "an edit needs the replacement text".to_owned(),
+        });
+    }
+    let length = utf16_len(text);
+    if length > MAX_TEXT_UTF16 {
+        return Err(Error::MessageTooLong {
+            channel: Channel::Telegram,
+            limit: MAX_TEXT_UTF16,
+            actual: length,
+            unit: crate::LimitUnit::Utf16Units,
+        });
+    }
+
+    let mut body = serde_json::Map::new();
+    body.insert(
+        schema::CHAT_ID.to_owned(),
+        Value::String(chat_id.to_owned()),
+    );
+    body.insert(
+        schema::MESSAGE_ID.to_owned(),
+        Value::from(telegram_id(target, "edit_of")?),
+    );
+    body.insert(schema::TEXT.to_owned(), Value::String(text.to_owned()));
+    if !message.spans().is_empty() {
+        body.insert(
+            schema::ENTITIES.to_owned(),
+            telegram_entities(text, message.spans())?,
+        );
+    }
+
+    json_payload(
+        Channel::Telegram,
+        ProviderMethod::Post,
+        &Value::Object(body),
+    )
+    .map(|payload| payload.with_operation(ProviderOperation::Edit, None))
+}
+
+/// Builds the `setMessageReaction` body for an outbound reaction.
+///
+/// The reaction sits on the message Telegram delivered, addressed by
+/// `message_id`. An added reaction is one emoji `ReactionType`; a removal
+/// ([`Reaction::remove`]) is the documented empty list, which clears whatever
+/// reaction the bot had left. See *setMessageReaction* in the Bot API reference
+/// (<https://core.telegram.org/bots/api#setmessagereaction>).
+fn encode_reaction(
+    chat_id: &str,
+    message: &OutboundMessage,
+    reaction: &Reaction,
+) -> Result<ProviderPayload> {
+    if message.first_attachment().is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "a reaction cannot carry an attachment".to_owned(),
+        });
+    }
+    if message.edit_of.is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "a reaction cannot also be an edit".to_owned(),
+        });
+    }
+    if message.interactive_reply.is_some() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "a reaction cannot carry an interactive reply".to_owned(),
+        });
+    }
+    if message.text.as_deref().is_some_and(|text| !text.is_empty()) {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "a reaction cannot carry message text".to_owned(),
+        });
+    }
+    let target = reaction.message_id().trim();
+    if target.is_empty() {
+        return Err(Error::InvalidMessage {
+            channel: Channel::Telegram,
+            reason: "a reaction needs the message id it reacts to".to_owned(),
+        });
+    }
+
+    let reaction_types = if reaction.removed() {
+        Value::Array(Vec::new())
+    } else {
+        let mut emoji = serde_json::Map::new();
+        emoji.insert(
+            schema::TYPE.to_owned(),
+            Value::String(schema::REACTION_EMOJI.to_owned()),
+        );
+        emoji.insert(
+            schema::EMOJI.to_owned(),
+            Value::String(reaction.emoji().to_owned()),
+        );
+        Value::Array(vec![Value::Object(emoji)])
+    };
+
+    let mut body = serde_json::Map::new();
+    body.insert(
+        schema::CHAT_ID.to_owned(),
+        Value::String(chat_id.to_owned()),
+    );
+    body.insert(
+        schema::MESSAGE_ID.to_owned(),
+        Value::from(telegram_id(target, "reaction message_id")?),
+    );
+    body.insert(schema::REACTION.to_owned(), reaction_types);
+
+    json_payload(
+        Channel::Telegram,
+        ProviderMethod::Post,
+        &Value::Object(body),
+    )
+    .map(|payload| payload.with_operation(ProviderOperation::Reaction, None))
 }
 
 /// Telegram ids are signed 64-bit integers; anything else would be rejected by

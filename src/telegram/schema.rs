@@ -70,6 +70,8 @@ pub(super) const TITLE: &str = "title";
 pub(super) const OLD_REACTION: &str = "old_reaction";
 pub(super) const NEW_REACTION: &str = "new_reaction";
 pub(super) const CUSTOM_EMOJI_ID: &str = "custom_emoji_id";
+pub(super) const REACTION: &str = "reaction";
+pub(super) const REACTION_EMOJI: &str = "emoji";
 
 pub(super) const ENTITIES: &str = "entities";
 pub(super) const CAPTION_ENTITIES: &str = "caption_entities";
@@ -475,9 +477,9 @@ mod tests {
         ENTITY_TEXT_MENTION, ENTITY_UNDERLINE, ENTITY_URL, FILE_ID, FILE_NAME, FILE_SIZE,
         FIRST_NAME, FROM, HEIGHT, ID, LANGUAGE, LAST_NAME, LATITUDE, LENGTH, LOCATION, LONGITUDE,
         MESSAGE_ID, MESSAGE_REACTION, MESSAGE_THREAD_ID, MIME_TYPE, NAME, NEW_REACTION, OFFSET,
-        OLD_REACTION, PHONE_NUMBER, PHOTO, POLL, REPLY_PARAMETERS, REPLY_TO_MESSAGE, SENDER_CHAT,
-        STICKER, TEXT, TITLE, TYPE, UPDATE_ID, UPDATE_KINDS, URL, USER, VIDEO, VIDEO_FIELDS,
-        VIDEO_NOTE, VOICE, WIDTH,
+        OLD_REACTION, PHONE_NUMBER, PHOTO, POLL, REACTION, REACTION_EMOJI, REPLY_PARAMETERS,
+        REPLY_TO_MESSAGE, SENDER_CHAT, STICKER, TEXT, TITLE, TYPE, UPDATE_ID, UPDATE_KINDS, URL,
+        USER, VIDEO, VIDEO_FIELDS, VIDEO_NOTE, VOICE, WIDTH,
     };
 
     /// The exact object field names from
@@ -531,6 +533,8 @@ mod tests {
             (OLD_REACTION, "old_reaction"),
             (NEW_REACTION, "new_reaction"),
             (CUSTOM_EMOJI_ID, "custom_emoji_id"),
+            (REACTION, "reaction"),
+            (REACTION_EMOJI, "emoji"),
             (ENTITIES, "entities"),
             (CAPTION_ENTITIES, "caption_entities"),
             (TYPE, "type"),

@@ -11,8 +11,8 @@ use std::collections::{BTreeSet, HashSet};
 use messenger_webhook::{
     signature, Attachment, AttachmentKind, Channel, ChannelName, DeliveryStatus, Error, Headers,
     IdempotencyKey, InteractiveReply, LimitUnit, NormalizedMessage, OutboundMessage,
-    ProviderMethod, ProviderPayload, Reaction, Registry, RetryPolicy, Secret, MAX_BODY_BYTES,
-    MAX_BODY_READ_BYTES, MAX_CHANNEL_NAME_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
+    ProviderMethod, ProviderOperation, ProviderPayload, Reaction, Registry, RetryPolicy, Secret,
+    MAX_BODY_BYTES, MAX_BODY_READ_BYTES, MAX_CHANNEL_NAME_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
     MAX_INTERACTIVE_ID_BYTES, MAX_INTERACTIVE_TITLE_CHARS,
 };
 use std::str::FromStr;
@@ -272,6 +272,10 @@ fn outbound_message_helpers() {
 
 #[test]
 fn provider_payload_accessors() {
+    assert_eq!(ProviderOperation::Message.as_str(), "send");
+    assert_eq!(ProviderOperation::Edit.as_str(), "edit");
+    assert_eq!(ProviderOperation::Reaction.as_str(), "reaction");
+
     let payload = ProviderPayload::new(
         Channel::Matrix,
         ProviderMethod::Put,
@@ -285,6 +289,10 @@ fn provider_payload_accessors() {
     assert!(payload.body().starts_with(b"{"));
     assert_eq!(payload.json().unwrap()["body"], "hi");
     assert_eq!(payload.clone().into_body(), payload.body());
+    // A payload built without an adapter operation reports a plain message and
+    // no Matrix event type.
+    assert_eq!(payload.operation(), ProviderOperation::Message);
+    assert_eq!(payload.event_type(), None);
 }
 
 #[test]

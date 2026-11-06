@@ -128,8 +128,8 @@ pub use headers::Headers;
 pub use model::SYNTHETIC_ID_PREFIX;
 pub use model::{
     Attachment, AttachmentKind, Channel, ChannelName, DeliveryStatus, IdempotencyKey,
-    InteractiveReply, NormalizedMessage, OutboundMessage, ProviderMethod, ProviderPayload,
-    Reaction, RetryPolicy, MAX_CHANNEL_NAME_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
+    InteractiveReply, NormalizedMessage, OutboundMessage, ProviderMethod, ProviderOperation,
+    ProviderPayload, Reaction, RetryPolicy, MAX_CHANNEL_NAME_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
     MAX_INTERACTIVE_ID_BYTES, MAX_INTERACTIVE_TITLE_CHARS,
 };
 pub use registry::Registry;
@@ -586,6 +586,13 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     /// produced: `WhatsApp` text is capped at 4096 bytes, Telegram text at 4096
     /// UTF-16 units and Telegram captions at 1024 UTF-16 units. Matrix has no
     /// documented body limit.
+    ///
+    /// A message that carries [`OutboundMessage::edit_of`] or
+    /// [`OutboundMessage::reaction`] is encoded for the provider's edit or
+    /// reaction endpoint rather than a plain send. The returned payload reports
+    /// which through [`ProviderPayload::operation`], and Matrix additionally
+    /// reports the event type through [`ProviderPayload::event_type`] because
+    /// that provider carries it in the request path.
     ///
     /// The returned [`ProviderPayload`] also states whether the caller may
     /// retry the request after a `5xx` or timeout. A payload marked

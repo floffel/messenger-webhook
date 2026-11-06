@@ -251,11 +251,107 @@ mod whatsapp {
             Error::InvalidMessage { .. }
         ));
 
-        // Edits need the original message id, not a send.
+        // The Cloud API documents no edit endpoint.
         let mut edit = OutboundMessage::text(Channel::WhatsApp, "49", "fixed");
         edit.edit_of = Some("wamid.1".to_owned());
         assert!(matches!(
             adapter().encode(&edit).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
+    }
+
+    #[test]
+    fn reaction_payload_has_the_cloud_api_shape() {
+        let mut message = OutboundMessage::text(Channel::WhatsApp, "4915112345678", "");
+        message.text = None;
+        message.reaction =
+            Some(messenger_webhook::Reaction::add("wamid.target", "\u{1F44D}").expect("reaction"));
+
+        let payload = adapter().encode(&message).unwrap();
+        assert_eq!(
+            payload.operation(),
+            messenger_webhook::ProviderOperation::Reaction
+        );
+        assert_eq!(payload.method(), "POST");
+        assert_eq!(payload.retry(), RetryPolicy::UnsafeUnlessKeyPresent);
+        assert!(payload.idempotency_key().is_none());
+        // The bot API keeps the event type inside the body, so there is none.
+        assert_eq!(payload.event_type(), None);
+
+        let body = payload.json().unwrap();
+        assert_eq!(body["messaging_product"], "whatsapp");
+        assert_eq!(body["recipient_type"], "individual");
+        assert_eq!(body["to"], "4915112345678");
+        assert_eq!(body["type"], "reaction");
+        assert_eq!(body["reaction"]["message_id"], "wamid.target");
+        assert_eq!(body["reaction"]["emoji"], "\u{1F44D}");
+    }
+
+    #[test]
+    fn reaction_removal_uses_an_empty_emoji() {
+        let mut message = OutboundMessage::text(Channel::WhatsApp, "49", "");
+        message.text = None;
+        message.reaction = Some(messenger_webhook::Reaction::remove("wamid.target"));
+
+        let body = adapter().encode(&message).unwrap().json().unwrap();
+        assert_eq!(body["type"], "reaction");
+        assert_eq!(body["reaction"]["message_id"], "wamid.target");
+        assert_eq!(body["reaction"]["emoji"], "");
+    }
+
+    #[test]
+    fn reaction_key_visibility_boundary() {
+        // The valid value: a single emoji.
+        let mut message = OutboundMessage::text(Channel::WhatsApp, "49", "");
+        message.text = None;
+        message.reaction = Some(messenger_webhook::Reaction::add("wamid.1", "\u{1F44D}").unwrap());
+        assert!(adapter().encode(&message).is_ok());
+
+        // Just inside the boundary: an emoji plus a variation selector still
+        // carries a visible character, so the key is accepted.
+        let mut message = OutboundMessage::text(Channel::WhatsApp, "49", "");
+        message.text = None;
+        message.reaction =
+            Some(messenger_webhook::Reaction::add("wamid.1", "\u{2764}\u{FE0F}").unwrap());
+        assert!(adapter().encode(&message).is_ok());
+
+        // Just outside it: a whitespace-only key has no visible character and
+        // cannot identify a reaction, so it never becomes a payload.
+        assert!(messenger_webhook::Reaction::add("wamid.1", "   ").is_err());
+    }
+
+    #[test]
+    fn reaction_with_incompatible_fields_is_rejected() {
+        // A reaction with text.
+        let mut with_text = OutboundMessage::text(Channel::WhatsApp, "49", "hi");
+        with_text.reaction =
+            Some(messenger_webhook::Reaction::add("wamid.1", "\u{1F44D}").unwrap());
+        assert!(matches!(
+            adapter().encode(&with_text).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
+
+        // A reaction targeting an empty message id.
+        let mut empty_target = OutboundMessage::text(Channel::WhatsApp, "49", "");
+        empty_target.text = None;
+        empty_target.reaction = Some(messenger_webhook::Reaction::remove("   "));
+        assert!(matches!(
+            adapter().encode(&empty_target).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
+
+        // A reaction with an attachment.
+        let mut with_media = OutboundMessage::text(Channel::WhatsApp, "49", "");
+        with_media.text = None;
+        with_media.reaction =
+            Some(messenger_webhook::Reaction::add("wamid.1", "\u{1F44D}").unwrap());
+        with_media.attachments.push(Attachment {
+            kind: AttachmentKind::Image,
+            url: Some("https://example.org/a.jpg".to_owned()),
+            ..Attachment::default()
+        });
+        assert!(matches!(
+            adapter().encode(&with_media).unwrap_err(),
             Error::InvalidMessage { .. }
         ));
     }
@@ -522,13 +618,6 @@ mod telegram {
 
     #[test]
     fn unsupported_messages_are_rejected() {
-        let mut edit = OutboundMessage::text(Channel::Telegram, "1", "fixed");
-        edit.edit_of = Some("7".to_owned());
-        assert!(matches!(
-            adapter().encode(&edit).unwrap_err(),
-            Error::InvalidMessage { .. }
-        ));
-
         let mut location = OutboundMessage::text(Channel::Telegram, "1", "");
         location
             .attachments
@@ -564,6 +653,123 @@ mod telegram {
             ),
             "unexpected error: {error:?}"
         );
+    }
+
+    #[test]
+    fn edit_payload_uses_edit_message_text() {
+        let mut edit = OutboundMessage::text(Channel::Telegram, "1", "fixed");
+        edit.edit_of = Some("7".to_owned());
+
+        let payload = adapter().encode(&edit).unwrap();
+        assert_eq!(
+            payload.operation(),
+            messenger_webhook::ProviderOperation::Edit
+        );
+        assert_eq!(payload.method(), "POST");
+        assert_eq!(payload.event_type(), None);
+
+        let body = payload.json().unwrap();
+        assert_eq!(body["chat_id"], "1");
+        assert_eq!(body["message_id"], 7);
+        assert_eq!(body["text"], "fixed");
+    }
+
+    #[test]
+    fn edit_text_limit_is_counted_in_utf16_units() {
+        // The valid value: a short replacement.
+        let mut edit = OutboundMessage::text(Channel::Telegram, "1", "fixed");
+        edit.edit_of = Some("7".to_owned());
+        assert!(adapter().encode(&edit).is_ok());
+
+        // Just inside the limit: exactly 4096 UTF-16 units.
+        let mut at_limit =
+            OutboundMessage::text(Channel::Telegram, "1", "a".repeat(MAX_TEXT_UTF16));
+        at_limit.edit_of = Some("7".to_owned());
+        assert!(adapter().encode(&at_limit).is_ok());
+
+        // Just outside it.
+        let mut over =
+            OutboundMessage::text(Channel::Telegram, "1", "a".repeat(MAX_TEXT_UTF16 + 1));
+        over.edit_of = Some("7".to_owned());
+        assert!(matches!(
+            adapter().encode(&over).unwrap_err(),
+            Error::MessageTooLong {
+                limit: MAX_TEXT_UTF16,
+                unit: LimitUnit::Utf16Units,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn edit_rejects_a_non_integer_message_id() {
+        let mut edit = OutboundMessage::text(Channel::Telegram, "1", "fixed");
+        edit.edit_of = Some("not-an-id".to_owned());
+        assert!(matches!(
+            adapter().encode(&edit).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
+    }
+
+    #[test]
+    fn reaction_payload_uses_set_message_reaction() {
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
+        message.text = None;
+        message.reaction =
+            Some(messenger_webhook::Reaction::add("7", "\u{1F44D}").expect("reaction"));
+
+        let payload = adapter().encode(&message).unwrap();
+        assert_eq!(
+            payload.operation(),
+            messenger_webhook::ProviderOperation::Reaction
+        );
+        assert_eq!(payload.method(), "POST");
+
+        let body = payload.json().unwrap();
+        assert_eq!(body["chat_id"], "1");
+        assert_eq!(body["message_id"], 7);
+        assert_eq!(body["reaction"][0]["type"], "emoji");
+        assert_eq!(body["reaction"][0]["emoji"], "\u{1F44D}");
+    }
+
+    #[test]
+    fn reaction_removal_uses_an_empty_reaction_list() {
+        let mut message = OutboundMessage::text(Channel::Telegram, "1", "");
+        message.text = None;
+        message.reaction = Some(messenger_webhook::Reaction::remove("7"));
+
+        let body = adapter().encode(&message).unwrap().json().unwrap();
+        assert_eq!(body["message_id"], 7);
+        assert_eq!(body["reaction"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn reaction_with_incompatible_fields_is_rejected() {
+        // A reaction with text.
+        let mut with_text = OutboundMessage::text(Channel::Telegram, "1", "hi");
+        with_text.reaction = Some(messenger_webhook::Reaction::add("7", "\u{1F44D}").unwrap());
+        assert!(matches!(
+            adapter().encode(&with_text).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
+
+        // A reaction with an empty target id.
+        let mut empty_target = OutboundMessage::text(Channel::Telegram, "1", "");
+        empty_target.text = None;
+        empty_target.reaction = Some(messenger_webhook::Reaction::remove("   "));
+        assert!(matches!(
+            adapter().encode(&empty_target).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
+
+        // A non-integer target id is rejected before the request is built.
+        let mut bad_id = OutboundMessage::text(Channel::Telegram, "1", "");
+        bad_id.text = None;
+        bad_id.reaction = Some(messenger_webhook::Reaction::add("nope", "\u{1F44D}").unwrap());
+        assert!(matches!(
+            adapter().encode(&bad_id).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
     }
 }
 
@@ -685,6 +891,79 @@ mod matrix {
         assert_eq!(content["m.new_content"]["info"]["h"], 20);
         assert!(content["m.new_content"].get("m.relates_to").is_none());
         assert!(content["m.new_content"].get("m.new_content").is_none());
+    }
+
+    #[test]
+    fn reaction_payload_is_an_annotation_event() {
+        let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "");
+        message.text = None;
+        message.reaction =
+            Some(messenger_webhook::Reaction::add("$target", "\u{1F44D}").expect("reaction"));
+
+        let payload = adapter().encode(&message).unwrap();
+        assert_eq!(
+            payload.operation(),
+            messenger_webhook::ProviderOperation::Reaction
+        );
+        assert_eq!(payload.method(), "PUT");
+        assert_eq!(payload.event_type(), Some("m.reaction"));
+        assert_eq!(payload.retry(), RetryPolicy::Safe);
+        assert!(payload.idempotency_key().is_some());
+
+        let content = payload.json().unwrap();
+        assert_eq!(content["m.relates_to"]["rel_type"], "m.annotation");
+        assert_eq!(content["m.relates_to"]["event_id"], "$target");
+        assert_eq!(content["m.relates_to"]["key"], "\u{1F44D}");
+    }
+
+    #[test]
+    fn send_and_edit_report_their_event_type_and_operation() {
+        let send = adapter()
+            .encode(&OutboundMessage::text(Channel::Matrix, "!r:s", "hi"))
+            .unwrap();
+        assert_eq!(
+            send.operation(),
+            messenger_webhook::ProviderOperation::Message
+        );
+        assert_eq!(send.event_type(), Some("m.room.message"));
+
+        let mut edit = OutboundMessage::text(Channel::Matrix, "!r:s", "fixed");
+        edit.edit_of = Some("$1".to_owned());
+        let edit = adapter().encode(&edit).unwrap();
+        assert_eq!(edit.operation(), messenger_webhook::ProviderOperation::Edit);
+        assert_eq!(edit.event_type(), Some("m.room.message"));
+    }
+
+    #[test]
+    fn reaction_removal_is_rejected_as_a_redaction() {
+        let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "");
+        message.text = None;
+        message.reaction = Some(messenger_webhook::Reaction::remove("$target"));
+        assert!(matches!(
+            adapter().encode(&message).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
+    }
+
+    #[test]
+    fn reaction_with_incompatible_fields_is_rejected() {
+        // A reaction with text.
+        let mut with_text = OutboundMessage::text(Channel::Matrix, "!r:s", "hi");
+        with_text.reaction = Some(messenger_webhook::Reaction::add("$1", "\u{1F44D}").unwrap());
+        assert!(matches!(
+            adapter().encode(&with_text).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
+
+        // A reaction with an empty target id (an add, so the removal check does
+        // not shadow the empty-target check).
+        let mut empty_target = OutboundMessage::text(Channel::Matrix, "!r:s", "");
+        empty_target.text = None;
+        empty_target.reaction = Some(messenger_webhook::Reaction::add("", "\u{1F44D}").unwrap());
+        assert!(matches!(
+            adapter().encode(&empty_target).unwrap_err(),
+            Error::InvalidMessage { .. }
+        ));
     }
 
     #[test]

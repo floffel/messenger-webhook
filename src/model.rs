@@ -1332,8 +1332,13 @@ pub struct OutboundMessage {
     pub edit_of: Option<String>,
     /// Reaction carried by this request.
     ///
-    /// Providers that expose reactions through a separate endpoint reject this
-    /// field in `encode`, just as they do for edits.
+    /// [`Adapter::encode`](crate::Adapter::encode) turns this into a provider
+    /// reaction request, and the returned [`ProviderPayload`] reports
+    /// [`ProviderOperation::Reaction`] so the caller can route it to the
+    /// provider's reaction endpoint. A removal ([`Reaction::remove`]) is sent
+    /// when the provider documents one; Matrix documents removal through
+    /// `MatrixClient::redact`, so a Matrix removal is rejected here instead of
+    /// being sent as an annotation.
     pub reaction: Option<Reaction>,
     /// Interactive reply button to send, when the request asks for one.
     ///
@@ -1496,6 +1501,50 @@ impl ProviderMethod {
     }
 }
 
+/// The outbound operation a [`ProviderPayload`] performs.
+///
+/// A payload's HTTP method is the same for a send, an edit and a reaction on
+/// most providers, so the caller cannot tell them apart from
+/// [`ProviderPayload::method`] alone. This enum says which endpoint or event
+/// type the body belongs to, so a caller routes it to the provider's documented
+/// send, edit or reaction endpoint instead of guessing.
+///
+/// ```
+/// use messenger_webhook::ProviderOperation;
+///
+/// assert_eq!(ProviderOperation::Message.as_str(), "send");
+/// assert_eq!(ProviderOperation::Edit.as_str(), "edit");
+/// assert_eq!(ProviderOperation::Reaction.as_str(), "reaction");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ProviderOperation {
+    /// A new message (text, media or an interactive reply).
+    Message,
+    /// An edit of an earlier message, addressed by `edit_of`.
+    Edit,
+    /// A reaction to an earlier message, added or removed.
+    Reaction,
+}
+
+impl ProviderOperation {
+    /// The stable, lower-case spelling of this operation.
+    ///
+    /// ```
+    /// use messenger_webhook::ProviderOperation;
+    ///
+    /// assert_eq!(ProviderOperation::Message.as_str(), "send");
+    /// ```
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Message => "send",
+            Self::Edit => "edit",
+            Self::Reaction => "reaction",
+        }
+    }
+}
+
 /// An outbound request body for one provider, ready for the caller to send.
 ///
 /// The crate performs no I/O: the payload carries the HTTP method, the content
@@ -1518,6 +1567,8 @@ impl ProviderMethod {
 pub struct ProviderPayload {
     channel: Channel,
     method: ProviderMethod,
+    operation: ProviderOperation,
+    event_type: Option<&'static str>,
     content_type: &'static str,
     body: Vec<u8>,
     idempotency_key: Option<IdempotencyKey>,
@@ -1618,11 +1669,32 @@ impl ProviderPayload {
         Ok(Self {
             channel,
             method,
+            operation: ProviderOperation::Message,
+            event_type: None,
             content_type,
             body,
             idempotency_key,
             retry,
         })
+    }
+
+    /// Records the provider operation and Matrix event type for this payload.
+    ///
+    /// Adapters call this after building a body so a caller can route an edit
+    /// or reaction to the provider's documented endpoint. The Matrix
+    /// client-server API carries both in the request path, so `event_type` is
+    /// the event type the send leg belongs to (`m.room.message` or
+    /// `m.reaction`); providers that keep the event type out of their REST
+    /// surface leave it `None`.
+    #[must_use]
+    pub(crate) fn with_operation(
+        mut self,
+        operation: ProviderOperation,
+        event_type: Option<&'static str>,
+    ) -> Self {
+        self.operation = operation;
+        self.event_type = event_type;
+        self
     }
 
     /// The retry contract for this payload.
@@ -1711,6 +1783,55 @@ impl ProviderPayload {
     #[must_use]
     pub fn method(&self) -> &'static str {
         self.method.as_str()
+    }
+
+    /// Which outbound operation this payload performs.
+    ///
+    /// The method alone does not separate a send, an edit and a reaction: on
+    /// Telegram all three are `POST`s, and the adapter encodes an edit or
+    /// reaction into the body of the payload it returns. This tells the caller
+    /// which provider endpoint the body belongs to.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderOperation, ProviderPayload};
+    ///
+    /// let payload = ProviderPayload::new(
+    ///     Channel::Telegram,
+    ///     ProviderMethod::Post,
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    /// )?;
+    /// assert_eq!(payload.operation(), ProviderOperation::Message);
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub const fn operation(&self) -> ProviderOperation {
+        self.operation
+    }
+
+    /// The Matrix event type this payload belongs to, when the provider carries
+    /// one in the request path.
+    ///
+    /// Matrix builds `PUT /rooms/{room}/send/{type}/{txn}`, so the event type is
+    /// part of the route: `m.room.message` for a send or edit and `m.reaction`
+    /// for a reaction. Providers whose REST surface keeps the event type inside
+    /// the body (the `WhatsApp` and Telegram bot APIs) return `None`.
+    ///
+    /// ```
+    /// use messenger_webhook::{Channel, ProviderMethod, ProviderPayload};
+    ///
+    /// let payload = ProviderPayload::new(
+    ///     Channel::Telegram,
+    ///     ProviderMethod::Post,
+    ///     "application/json",
+    ///     b"{}".to_vec(),
+    /// )?;
+    /// assert_eq!(payload.event_type(), None);
+    /// # Ok::<(), messenger_webhook::Error>(())
+    /// ```
+    #[must_use]
+    pub const fn event_type(&self) -> Option<&'static str> {
+        self.event_type
     }
 
     /// Content type of [`ProviderPayload::body`].
