@@ -141,22 +141,22 @@ impl TxnId {
     /// assert!(TxnId::new("a".repeat(256)).is_err());
     /// assert!(TxnId::new("abc.DEF_123~-").is_ok());
     /// ```
-    pub fn new(raw: impl Into<String>) -> Result<Self, OutboundError> {
-        let raw = raw.into();
-        if raw.is_empty() {
+    pub fn new(raw: impl AsRef<str> + Into<String>) -> Result<Self, OutboundError> {
+        let raw_ref = raw.as_ref();
+        if raw_ref.is_empty() {
             return Err(OutboundError::InvalidTxnId {
                 reason: "the transaction id is empty".to_owned(),
             });
         }
-        if raw.len() > MAX_TXN_ID_BYTES {
+        if raw_ref.len() > MAX_TXN_ID_BYTES {
             return Err(OutboundError::InvalidTxnId {
                 reason: format!(
                     "the transaction id is {} bytes, the ceiling is {MAX_TXN_ID_BYTES}",
-                    raw.len()
+                    raw_ref.len()
                 ),
             });
         }
-        if let Some(bad) = raw
+        if let Some(bad) = raw_ref
             .bytes()
             .find(|byte| !matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~'))
         {
@@ -166,7 +166,7 @@ impl TxnId {
                 ),
             });
         }
-        Ok(Self(raw))
+        Ok(Self(raw.into()))
     }
 
     /// Mints a fresh transaction id: a monotonic sequence and a per-process
@@ -265,18 +265,18 @@ impl MxcUri {
     /// assert!(MxcUri::parse("mxc://example.org/a b").is_err());
     /// assert!(MxcUri::parse("mxc://example.org/ok").is_ok());
     /// ```
-    pub fn parse(raw: impl Into<String>) -> Result<Self, OutboundError> {
-        let raw = raw.into();
+    pub fn parse(raw: impl AsRef<str> + Into<String>) -> Result<Self, OutboundError> {
+        let raw_ref = raw.as_ref();
         let invalid = |reason: &str| OutboundError::InvalidMxcUri {
             reason: reason.to_owned(),
         };
-        let Some(rest) = raw.strip_prefix("mxc://") else {
+        let Some(rest) = raw_ref.strip_prefix("mxc://") else {
             return Err(invalid("a Matrix content URI starts with `mxc://`"));
         };
-        if raw.len() > MAX_MXC_URI_BYTES {
+        if raw_ref.len() > MAX_MXC_URI_BYTES {
             return Err(invalid("the URI is longer than the 512 byte ceiling"));
         }
-        if raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        if raw_ref.chars().any(|c| c.is_whitespace() || c.is_control()) {
             return Err(invalid(
                 "the URI contains whitespace or a control character",
             ));
@@ -295,7 +295,7 @@ impl MxcUri {
         let server = server.to_owned().into_boxed_str();
         let media = media.to_owned().into_boxed_str();
         Ok(Self {
-            full: raw,
+            full: raw.into(),
             server,
             media,
         })
@@ -681,9 +681,36 @@ fn validate_filename(filename: &str) -> Result<(), OutboundError> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use proptest::prelude::*;
 
     use super::*;
+
+    struct TrackedInput {
+        value: String,
+        conversions: Rc<Cell<usize>>,
+    }
+
+    impl TrackedInput {
+        fn new(value: String, conversions: Rc<Cell<usize>>) -> Self {
+            Self { value, conversions }
+        }
+    }
+
+    impl AsRef<str> for TrackedInput {
+        fn as_ref(&self) -> &str {
+            &self.value
+        }
+    }
+
+    impl From<TrackedInput> for String {
+        fn from(input: TrackedInput) -> Self {
+            input.conversions.set(input.conversions.get() + 1);
+            input.value
+        }
+    }
 
     #[test]
     fn txn_ids_accept_the_unreserved_alphabet_only() {
@@ -705,6 +732,45 @@ mod tests {
     fn txn_id_rejection_names_the_offending_byte() {
         let error = TxnId::new("a/b").expect_err("slash");
         assert!(error.to_string().contains("0x2f"), "{error}");
+    }
+
+    #[test]
+    fn ceiling_rejections_do_not_materialise_the_caller_string() {
+        let txn_conversions = Rc::new(Cell::new(0));
+        let over_txn = TrackedInput::new(
+            "x".repeat(MAX_TXN_ID_BYTES + 1),
+            Rc::clone(&txn_conversions),
+        );
+        assert!(TxnId::new(over_txn).is_err());
+        assert_eq!(txn_conversions.get(), 0);
+
+        let uri_conversions = Rc::new(Cell::new(0));
+        let over_uri = TrackedInput::new(
+            format!("mxc://example.org/{}", "a".repeat(MAX_MXC_URI_BYTES)),
+            Rc::clone(&uri_conversions),
+        );
+        assert!(MxcUri::parse(over_uri).is_err());
+        assert_eq!(uri_conversions.get(), 0);
+    }
+
+    #[test]
+    fn accepted_ids_are_owned_after_validation() {
+        let txn_conversions = Rc::new(Cell::new(0));
+        let exact_txn =
+            TrackedInput::new("t".repeat(MAX_TXN_ID_BYTES), Rc::clone(&txn_conversions));
+        let txn = TxnId::new(exact_txn).expect("exactly at the ceiling");
+        assert_eq!(txn.as_str().len(), MAX_TXN_ID_BYTES);
+        assert_eq!(txn_conversions.get(), 1);
+
+        let uri_conversions = Rc::new(Cell::new(0));
+        let prefix = "mxc://a/";
+        let exact_uri = TrackedInput::new(
+            format!("{prefix}{}", "a".repeat(MAX_MXC_URI_BYTES - prefix.len())),
+            Rc::clone(&uri_conversions),
+        );
+        let uri = MxcUri::parse(exact_uri).expect("exactly at the ceiling");
+        assert_eq!(uri.as_str().len(), MAX_MXC_URI_BYTES);
+        assert_eq!(uri_conversions.get(), 1);
     }
 
     #[test]
