@@ -1485,9 +1485,12 @@ const URL_COMPONENT: &AsciiSet = &CONTROLS
 /// fallback and a bound on how much of it is echoed.
 fn matrix_error(response: &Response) -> (String, String) {
     let fallback = |body: &[u8]| {
-        let text = String::from_utf8_lossy(body);
-        let trimmed: String = text.chars().take(200).collect();
-        ("M_UNKNOWN".to_owned(), trimmed)
+        let prefix = &body[..body.len().min(ERROR_BODY_FALLBACK_BYTES)];
+        let mut message = String::from_utf8_lossy(prefix).into_owned();
+        if body.len() > ERROR_BODY_FALLBACK_BYTES {
+            message.push_str("…truncated");
+        }
+        ("M_UNKNOWN".to_owned(), message)
     };
     match serde_json::from_slice::<Value>(&response.body) {
         Ok(body) => {
@@ -1509,6 +1512,9 @@ fn matrix_error(response: &Response) -> (String, String) {
         Err(_) => fallback(&response.body),
     }
 }
+
+/// How many bytes of an unparseable error body may reach the caller.
+const ERROR_BODY_FALLBACK_BYTES: usize = 200;
 
 /// `M_CODE: message`, or just the code when the homeserver sent no message.
 fn detail_text(errcode: &str, message: &str) -> String {
@@ -1750,9 +1756,32 @@ mod tests {
         assert_eq!(errcode, "M_UNKNOWN");
         assert!(message.contains("bad gateway"));
 
-        // A hostile body cannot flood a log line.
+        // A hostile body cannot flood a log line; the fallback keeps the
+        // boundary exact and marks only the bytes it dropped.
+        let just_inside = Response::new(500, vec![b'x'; ERROR_BODY_FALLBACK_BYTES - 1]);
+        assert_eq!(
+            matrix_error(&just_inside).1,
+            "x".repeat(ERROR_BODY_FALLBACK_BYTES - 1)
+        );
+
+        let at_limit = Response::new(500, vec![b'x'; ERROR_BODY_FALLBACK_BYTES]);
+        assert_eq!(
+            matrix_error(&at_limit).1,
+            "x".repeat(ERROR_BODY_FALLBACK_BYTES)
+        );
+
+        let over_limit = Response::new(500, vec![b'x'; ERROR_BODY_FALLBACK_BYTES + 1]);
+        assert_eq!(
+            matrix_error(&over_limit).1,
+            format!("x{}…truncated", "x".repeat(ERROR_BODY_FALLBACK_BYTES - 1))
+        );
+
         let huge = Response::new(500, vec![b'x'; 10_000]);
-        assert_eq!(matrix_error(&huge).1.chars().count(), 200);
+        assert!(matrix_error(&huge).1.ends_with("…truncated"));
+        assert_eq!(
+            matrix_error(&huge).1.len(),
+            ERROR_BODY_FALLBACK_BYTES + "…truncated".len()
+        );
     }
 
     #[test]
