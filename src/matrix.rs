@@ -142,11 +142,6 @@ impl Adapter for MatrixAdapter {
 
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()> {
         check_body(body.len(), MAX_WEBHOOK_BODY_BYTES)?;
-        if self.token.is_empty() {
-            return Err(Error::MissingSecret {
-                channel: Channel::Matrix,
-            });
-        }
         let header = headers.exactly_one(Channel::Matrix, AUTHORIZATION_HEADER)?;
         let (scheme, token) =
             header
@@ -161,13 +156,8 @@ impl Adapter for MatrixAdapter {
                 reason: "authorization scheme is not Bearer".to_owned(),
             });
         }
-        if self.token.ct_eq(token.as_bytes()) {
-            Ok(())
-        } else {
-            Err(Error::BadSignature {
-                channel: Channel::Matrix,
-            })
-        }
+        self.token
+            .verify_channel(&Channel::Matrix, token.as_bytes())
     }
 
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {

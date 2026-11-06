@@ -286,12 +286,12 @@ mod tests {
     }
 
     #[test]
-    fn secret_comparison_is_constant_time_and_length_aware() {
+    fn secret_verification_is_length_aware() {
         let secret = Secret::new("abc-abc-abc-abcd").expect("secret");
-        assert!(secret.ct_eq(b"abc-abc-abc-abcd"));
-        assert!(!secret.ct_eq(b"abc-abc-abc-abce"));
-        assert!(!secret.ct_eq(b"abc-abc-abc-abc"));
-        assert!(!secret.ct_eq(b""));
+        assert!(secret.verify(b"abc-abc-abc-abcd").expect("match"));
+        assert!(!secret.verify(b"abc-abc-abc-abce").expect("mismatch"));
+        assert!(!secret.verify(b"abc-abc-abc-abc").expect("mismatch"));
+        assert!(!secret.verify(b"").expect("mismatch"));
     }
 
     #[test]

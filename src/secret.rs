@@ -22,12 +22,13 @@ pub const MIN_SECRET_BYTES: usize = 16;
 /// A shared secret used to authenticate provider webhooks.
 ///
 /// The value is redacted in [`Debug`](fmt::Debug) output. Authentication
-/// comparisons should go through [`Secret::ct_eq`], which compares without
-/// short-circuiting when the candidate length matches the secret; unequal
-/// lengths return `false` after the length check, so that path reveals the
-/// secret's byte length. [`Secret::expose_secret`] deliberately returns the raw
-/// `&str` for provider integration points; comparisons or formatting done on
-/// that borrow are outside the constant-time guarantee.
+/// comparisons should go through [`Secret::verify`], which fails closed for an
+/// empty secret before comparing without short-circuiting when the candidate
+/// length matches; unequal lengths return `Ok(false)` after the length check,
+/// so that path reveals the secret's byte length.
+/// [`Secret::expose_secret`] deliberately returns the raw `&str` for provider
+/// integration points; comparisons or formatting done on that borrow are
+/// outside the constant-time guarantee.
 ///
 /// Empty and weak secrets are rejected at construction, so a `Secret` that
 /// exists is at least [`MIN_SECRET_BYTES`] long.
@@ -42,8 +43,8 @@ pub const MIN_SECRET_BYTES: usize = 16;
 ///
 /// let secret = Secret::new("s3cret-s3cret-s3cret")?;
 /// assert!(!secret.is_empty());
-/// assert!(secret.ct_eq(b"s3cret-s3cret-s3cret"));
-/// assert!(!secret.ct_eq(b"s3cret-s3cret-s3creT"));
+/// assert!(secret.verify(b"s3cret-s3cret-s3cret")?);
+/// assert!(!secret.verify(b"s3cret-s3cret-s3creT")?);
 /// assert_eq!(format!("{secret:?}"), "Secret(<redacted>)");
 /// # Ok::<(), messenger_webhook::Error>(())
 /// ```
@@ -58,7 +59,10 @@ impl Clone for Secret {
 }
 
 impl Secret {
-    #[cfg(all(test, feature = "whatsapp"))]
+    #[cfg(all(
+        test,
+        any(feature = "whatsapp", feature = "telegram", feature = "matrix")
+    ))]
     pub(crate) fn empty_for_test() -> Self {
         Self(Zeroizing::new(String::new()))
     }
@@ -115,7 +119,7 @@ impl Secret {
     ///
     /// This is an explicit escape hatch for provider integration points that
     /// need the raw credential. Treat the result as a credential: never log it,
-    /// and compare it through [`Secret::ct_eq`] rather than `==` on this `&str`
+    /// and compare it through [`Secret::verify`] rather than `==` on this `&str`
     /// when the comparison is an authentication check.
     ///
     /// ```
@@ -132,28 +136,73 @@ impl Secret {
         self.0.as_str()
     }
 
-    /// Compares a candidate with this secret.
+    /// Verifies a candidate against this secret.
     ///
+    /// An empty secret is rejected before comparison, so no caller can
+    /// accidentally authenticate an empty candidate against an unset secret.
     /// The byte comparison is constant time only when the candidate has the
     /// same length as the secret. Unequal lengths return `false` after the
     /// length check, so an attacker who can measure timing can learn the
     /// secret's byte length. Do not treat this as a length-blind comparison for
     /// variable-length candidates.
     ///
-    /// Use this for authentication comparisons. It is the crate's safe
-    /// comparison path for a secret's contents.
+    /// This is the crate's safe authentication comparison path for a secret's
+    /// contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::WeakSecret`] when the secret is empty. A `Secret`
+    /// built through [`Secret::new`] cannot be empty; this error exists for
+    /// internal invalid states and keeps the comparison fail closed.
+    ///
+    /// Returns `Ok(true)` when the candidate matches and `Ok(false)` when it
+    /// does not.
     ///
     /// ```
     /// use messenger_webhook::Secret;
     ///
     /// let secret = Secret::new("telegram-bot-secret")?;
-    /// assert!(secret.ct_eq(b"telegram-bot-secret"));
-    /// assert!(!secret.ct_eq(b"telegram-bot-secre"));
-    /// assert!(!secret.ct_eq(b"telegram-bot-secret!"));
+    /// assert!(secret.verify(b"telegram-bot-secret")?);
+    /// assert!(!secret.verify(b"telegram-bot-secre")?);
+    /// assert!(!secret.verify(b"telegram-bot-secret!")?);
     /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
+    pub fn verify(&self, candidate: &[u8]) -> Result<bool> {
+        if self.is_empty() {
+            return Err(Error::WeakSecret {
+                actual: self.0.len(),
+                minimum: MIN_SECRET_BYTES,
+            });
+        }
+        Ok(self.ct_eq(candidate))
+    }
+
+    /// Verifies a candidate and maps the result to adapter-facing errors.
+    #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+    pub(crate) fn verify_channel(
+        &self,
+        channel: &crate::model::Channel,
+        candidate: &[u8],
+    ) -> Result<()> {
+        if self.is_empty() {
+            return Err(Error::MissingSecret {
+                channel: channel.clone(),
+            });
+        }
+        if self.ct_eq(candidate) {
+            Ok(())
+        } else {
+            Err(Error::BadSignature {
+                channel: channel.clone(),
+            })
+        }
+    }
+
     #[must_use]
-    pub fn ct_eq(&self, candidate: &[u8]) -> bool {
+    pub(crate) fn ct_eq(&self, candidate: &[u8]) -> bool {
+        if self.is_empty() || candidate.is_empty() {
+            return false;
+        }
         bool::from(self.0.as_bytes().ct_eq(candidate))
     }
 }
@@ -174,11 +223,11 @@ mod tests {
         let clone = original.clone();
 
         // Both share the same bytes...
-        assert!(clone.ct_eq(b"app-secret-app-secret"));
+        assert!(clone.verify(b"app-secret-app-secret").expect("match"));
         assert_eq!(clone.expose_secret(), "app-secret-app-secret");
         // ...and dropping one leaves the other valid.
         drop(original);
-        assert!(clone.ct_eq(b"app-secret-app-secret"));
+        assert!(clone.verify(b"app-secret-app-secret").expect("match"));
         assert_eq!(format!("{clone:?}"), "Secret(<redacted>)");
     }
 
@@ -194,7 +243,7 @@ mod tests {
         let clone = secret.clone();
         assert_zeroizing(&secret.0);
         assert_zeroizing(&clone.0);
-        assert!(secret.ct_eq(b"app-secret-app-secret"));
+        assert!(secret.verify(b"app-secret-app-secret").expect("match"));
     }
 
     #[test]
@@ -222,14 +271,29 @@ mod tests {
     }
 
     #[test]
-    fn ct_eq_pins_equal_length_and_length_mismatch_contract() {
+    fn verify_pins_equal_length_and_length_mismatch_contract() {
         let secret = Secret::new("0123456789abcdef").expect("secret");
 
-        assert!(secret.ct_eq(b"0123456789abcdef"));
-        assert!(!secret.ct_eq(b"0123456789abcdeG"));
-        assert!(!secret.ct_eq(b"0123456789abcde"));
-        assert!(!secret.ct_eq(b"0123456789abcdefg"));
+        assert!(secret.verify(b"0123456789abcdef").expect("match"));
+        assert!(!secret.verify(b"0123456789abcdeG").expect("mismatch"));
+        assert!(!secret.verify(b"0123456789abcde").expect("mismatch"));
+        assert!(!secret.verify(b"0123456789abcdefg").expect("mismatch"));
+        assert!(!secret.verify(b"").expect("mismatch"));
+    }
+
+    #[test]
+    #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
+    fn empty_secret_never_compares_equal_to_empty_candidate() {
+        let secret = Secret::empty_for_test();
+
         assert!(!secret.ct_eq(b""));
+        assert!(matches!(
+            secret.verify(b""),
+            Err(crate::Error::WeakSecret {
+                actual: 0,
+                minimum: MIN_SECRET_BYTES,
+            })
+        ));
     }
 
     #[test]
@@ -246,8 +310,8 @@ mod tests {
         assert_eq!(format!("{secret:?}"), "Secret(<redacted>)");
 
         // The constant-time comparison path for authentication checks.
-        assert!(secret.ct_eq(b"app-secret-app-secret"));
-        assert!(!secret.ct_eq(b"app-secret-app-secreT"));
+        assert!(secret.verify(b"app-secret-app-secret").expect("match"));
+        assert!(!secret.verify(b"app-secret-app-secreT").expect("mismatch"));
 
         // The deliberate raw escape hatch. Because this is a `&str`, callers
         // could compare or format it; the docs must not claim otherwise.

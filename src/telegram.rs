@@ -164,19 +164,9 @@ impl Adapter for TelegramAdapter {
 
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()> {
         check_body(body.len(), MAX_WEBHOOK_BODY_BYTES)?;
-        if self.secret.is_empty() {
-            return Err(Error::MissingSecret {
-                channel: Channel::Telegram,
-            });
-        }
         let header = headers.exactly_one(Channel::Telegram, SECRET_TOKEN_HEADER)?;
-        if self.secret.ct_eq(header.as_bytes()) {
-            Ok(())
-        } else {
-            Err(Error::BadSignature {
-                channel: Channel::Telegram,
-            })
-        }
+        self.secret
+            .verify_channel(&Channel::Telegram, header.as_bytes())
     }
 
     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {

@@ -153,6 +153,11 @@ carry a `!` in the conventional-commit subject.
 - Matrix `5xx` retryability now follows the operation and transaction id carried
   by `OutboundError::Server`, so an uncertain write is ambiguous instead of
   advertised as safe to repeat. Closes #49.
+- **Empty-secret verification is structural.** `Secret::ct_eq` is no longer a
+  public comparison primitive, and `Secret::verify` is the checked comparison
+  path that refuses an empty secret before comparing. Token-header adapters and
+  the Meta subscription handshake now use that path instead of relying on
+  separate call-site emptiness checks. Closes #107.
 - **Matrix receipts keep their event identity and fan out completely.** A
   Matrix `m.receipt` event used to overwrite `external_id` with the referenced
   message id, so a read marker could be stored as the message it referred to,
