@@ -311,6 +311,10 @@ the query is parsed.
 - **Verification is not optional.** Adapters are constructed with their secret;
   `verify` is on the `Adapter` trait and fails closed on an empty secret, a
   missing header, a malformed header or a body over `MAX_BODY_BYTES` (1 MiB).
+- **Bounded reads before verification.** `verify` receives a complete body, so
+  the ceiling cannot protect the read itself. Use `read_body` (or an equivalent
+  `Read::take(MAX_BODY_READ_BYTES)` guard) when reading a request, and reject an
+  over-limit `Content-Length` before reading when the server exposes one.
 - **The handshake before the events.** Meta's subscription `GET` is not an
   event, so it is not covered by `Adapter::verify`; `meta_subscription_challenge`
   answers it instead — token compared in constant time, challenge echoed back

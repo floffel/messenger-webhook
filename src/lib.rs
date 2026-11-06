@@ -26,6 +26,11 @@
 //! adapter cannot be constructed without a secret, and [`Adapter::verify`]
 //! fails closed on an empty secret, a missing header or an oversized body.
 //!
+//! The size check cannot protect the step that happens before it: the caller
+//! has to avoid materialising an unbounded body in the first place. For that
+//! step, [`read_body`] reads at most [`MAX_BODY_READ_BYTES`] bytes and returns
+//! [`Error::BodyTooLarge`] instead of growing without bound.
+//!
 //! A `WhatsApp` endpoint also receives one request that is not an event at all:
 //! Meta's subscription handshake. [`subscription::meta_subscription_challenge`]
 //! answers it — the token compared in constant time, the challenge echoed back
@@ -147,6 +152,82 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// ```
 pub const MAX_RECIPIENT_BYTES: usize = 256;
 
+/// The largest body read [`read_body`] will buffer before failing.
+///
+/// This is [`MAX_BODY_BYTES`] plus one byte: the extra byte is enough to prove
+/// that a stream exceeded the real ceiling without reading the whole stream.
+///
+/// ```
+/// use messenger_webhook::{MAX_BODY_BYTES, MAX_BODY_READ_BYTES};
+///
+/// assert_eq!(MAX_BODY_READ_BYTES, MAX_BODY_BYTES + 1);
+/// ```
+pub const MAX_BODY_READ_BYTES: usize = MAX_BODY_BYTES + 1;
+
+/// Reads a request body, failing before an unbounded stream is buffered.
+///
+/// Webhook signatures are computed over the raw body, so the bytes have to
+/// survive intact. This helper keeps that requirement while bounding an
+/// unauthenticated caller's memory and read work: it stops after
+/// [`MAX_BODY_READ_BYTES`] bytes and returns [`Error::BodyTooLarge`] rather than
+/// reading further.
+///
+/// The caller still owns transport-level limits such as rejecting a
+/// `Content-Length` header that is already over [`MAX_BODY_BYTES`]; this helper
+/// protects the read itself when a header is missing or inaccurate.
+///
+/// # Errors
+///
+/// - [`Error::BodyTooLarge`] when the stream supplies more than
+///   [`MAX_BODY_BYTES`] bytes. At most [`MAX_BODY_READ_BYTES`] bytes are
+///   buffered before the failure.
+/// - [`Error::Io`] when the underlying reader returns an error other than an
+///   interrupted read.
+///
+/// ```
+/// use messenger_webhook::{read_body, Error, MAX_BODY_BYTES};
+///
+/// let body = read_body(&b"{}"[..])?;
+/// assert_eq!(body, b"{}");
+///
+/// let oversized = vec![b' '; MAX_BODY_BYTES + 1];
+/// assert!(matches!(
+///     read_body(&oversized[..]),
+///     Err(Error::BodyTooLarge { .. })
+/// ));
+/// # Ok::<(), messenger_webhook::Error>(())
+/// ```
+pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let remaining = MAX_BODY_READ_BYTES.saturating_sub(body.len());
+        if remaining == 0 {
+            return Err(Error::BodyTooLarge {
+                limit: MAX_BODY_BYTES,
+                actual: body.len(),
+            });
+        }
+
+        let read_len = remaining.min(buffer.len());
+        match reader.read(&mut buffer[..read_len]) {
+            Ok(0) => return Ok(body),
+            Ok(read) => {
+                body.extend_from_slice(&buffer[..read]);
+                if body.len() > MAX_BODY_BYTES {
+                    return Err(Error::BodyTooLarge {
+                        limit: MAX_BODY_BYTES,
+                        actual: body.len(),
+                    });
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(Error::Io(error)),
+        }
+    }
+}
+
 /// Turns provider payloads into normalised messages.
 ///
 /// Implementations are `Send + Sync + Debug` (with redacted secrets), hold no
@@ -211,6 +292,10 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     ///   provider's documented shape.
     /// - [`Error::BadSignature`] if the signature does not match. The
     ///   comparison is constant time.
+    ///
+    /// The size check happens here, after the body has already been read. A
+    /// server should cap the read itself with [`read_body`] (or an equivalent
+    /// `Read::take(MAX_BODY_READ_BYTES)` guard) before calling this method.
     fn verify(&self, headers: &Headers, body: &[u8]) -> Result<()>;
 
     /// Parses `body` and returns every event it contains.

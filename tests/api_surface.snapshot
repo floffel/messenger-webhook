@@ -8,7 +8,9 @@ src/headers.rs:impl Headers:fn len
 src/headers.rs:impl Headers:fn new
 src/headers.rs:struct Headers
 src/lib.rs:const MAX_BODY_BYTES
+src/lib.rs:const MAX_BODY_READ_BYTES
 src/lib.rs:const MAX_RECIPIENT_BYTES
+src/lib.rs:fn read_body
 src/lib.rs:mod error
 src/lib.rs:mod headers
 src/lib.rs:mod matrix

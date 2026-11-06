@@ -25,8 +25,14 @@ pub enum Error {
     #[error("invalid payload: {0}")]
     Payload(String),
 
+    /// Reading the request body failed before it could be verified.
+    #[error("could not read request body: {0}")]
+    Io(#[from] std::io::Error),
+
     /// The body is larger than the adapter's ceiling; it is rejected before
-    /// any hashing or deserialisation happens.
+    /// any hashing or deserialisation happens. When the body is read through
+    /// [`crate::read_body`], `actual` is at least the limit and is capped at
+    /// [`crate::MAX_BODY_READ_BYTES`].
     #[error("payload is {actual} bytes, over the {limit} byte limit")]
     BodyTooLarge {
         /// Configured ceiling in bytes.
