@@ -55,7 +55,7 @@ pub const AUTHORIZATION_HEADER: &str = "authorization";
 /// adapter.verify(&headers, body)?;
 ///
 /// let events = adapter.adapt(body)?;
-/// assert_eq!(events[0].text.as_deref(), Some("Hallo"));
+/// assert_eq!(events[0].text(), Some("Hallo"));
 /// assert_eq!(events[0].timestamp, Some(1_729_600_000));
 /// # Ok::<(), messenger_webhook::Error>(())
 /// ```
@@ -291,23 +291,11 @@ fn normalize_event(event: &Value) -> Result<NormalizedMessage> {
         .cloned()
         .unwrap_or(Value::Null);
 
-    let mut normalized = NormalizedMessage {
-        channel: Channel::Matrix,
-        external_id,
-        conversation_id,
-        sender_id,
-        text: None,
-        timestamp: json::millis_to_seconds(json::integer(event, "origin_server_ts")),
-        attachments: Vec::new(),
-        reply_to: None,
-        thread_id: None,
-        edit_of: None,
-        reaction: None,
-        status: None,
-        spans: Vec::new(),
-        provider_type: Some(event_type.to_owned()),
-        raw: Some(event.clone()),
-    };
+    let mut normalized =
+        NormalizedMessage::carrier(Channel::Matrix, external_id, conversation_id, sender_id);
+    normalized.timestamp = json::millis_to_seconds(json::integer(event, "origin_server_ts"));
+    normalized.provider_type = Some(event_type.to_owned());
+    normalized.raw = Some(event.clone());
 
     match event_type {
         "m.room.message" | "m.sticker" => apply_content(&mut normalized, event_type, &content),
@@ -351,7 +339,7 @@ fn apply_content(normalized: &mut NormalizedMessage, event_type: &str, content: 
                 normalized.edit_of = json::id(relates, "event_id");
                 // A replacement carries the new content in `m.new_content`.
                 if let Some(replacement) = json::child(content, "m.new_content") {
-                    normalized.text = json::string(replacement, "body").map(str::to_owned);
+                    normalized.set_text(json::string(replacement, "body").map(str::to_owned));
                 }
             }
             Some("m.thread") => normalized.thread_id = json::id(relates, "event_id"),
@@ -359,8 +347,8 @@ fn apply_content(normalized: &mut NormalizedMessage, event_type: &str, content: 
         }
     }
 
-    if normalized.text.is_none() {
-        normalized.text = json::string(content, "body").map(str::to_owned);
+    if normalized.text().is_none() {
+        normalized.set_text(json::string(content, "body").map(str::to_owned));
     }
 
     let msgtype = json::string(content, "msgtype").unwrap_or("m.text");
@@ -400,7 +388,7 @@ fn apply_content(normalized: &mut NormalizedMessage, event_type: &str, content: 
             attachment.caption = json::string(content, "geo_uri").map(str::to_owned);
         }
         // For media the body is the filename, not the message text.
-        normalized.text = None;
+        normalized.set_text(None::<String>);
         normalized.attachments.push(attachment);
     }
 }

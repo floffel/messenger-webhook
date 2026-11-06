@@ -378,7 +378,7 @@ mod whatsapp_edges {
             {"id":"wamid.1","from":"49","type":"text","text":"not-an-object"}]}}]}]}"#;
         let events = whatsapp().adapt(payload).unwrap();
         assert_eq!(events.len(), 1);
-        assert!(events[0].text.is_none());
+        assert!(events[0].text().is_none());
 
         // A timestamp object is not a timestamp.
         let payload = br#"{"entry":[{"changes":[{"value":{"messages":[
@@ -393,7 +393,7 @@ mod whatsapp_edges {
         let events = whatsapp().adapt(payload).unwrap();
         assert_eq!(events[0].provider_type.as_deref(), Some("button_reply_v9"));
         assert!(events[0].raw.is_some());
-        assert!(events[0].text.is_none());
+        assert!(events[0].text().is_none());
     }
 
     #[test]
@@ -415,7 +415,7 @@ mod whatsapp_edges {
         for (index, event) in events.iter().enumerate() {
             assert_eq!(event.external_id, format!("wamid.{index}"));
             assert_eq!(event.conversation_id, format!("49{index:09}"));
-            assert_eq!(event.text.as_deref(), Some(format!("hi {index}").as_str()));
+            assert_eq!(event.text(), Some(format!("hi {index}").as_str()));
         }
     }
 
@@ -440,7 +440,7 @@ mod whatsapp_edges {
             serde_json::to_string(text).unwrap()
         );
         let events = whatsapp().adapt(inbound.as_bytes()).unwrap();
-        assert_eq!(events[0].text.as_deref(), Some(text));
+        assert_eq!(events[0].text(), Some(text));
     }
 
     #[test]
@@ -461,7 +461,7 @@ mod whatsapp_edges {
         let events = whatsapp().adapt(payload).unwrap();
         assert_eq!(events.len(), 2, "an event without an id is not dropped");
         assert!(events[0].has_synthetic_id());
-        assert_eq!(events[0].text.as_deref(), Some("no id"));
+        assert_eq!(events[0].text(), Some("no id"));
         assert_eq!(events[1].external_id, "wamid.2");
     }
 
@@ -603,7 +603,7 @@ mod telegram_edges {
             assert_eq!(left.conversation_id, right.conversation_id);
             assert_eq!(left.sender_id, right.sender_id);
             assert_eq!(left.timestamp, right.timestamp);
-            assert_eq!(left.text, right.text);
+            assert_eq!(left.text(), right.text());
         }
     }
 
@@ -613,7 +613,7 @@ mod telegram_edges {
         let events = telegram().adapt(payload).unwrap();
         assert_eq!(events.len(), 1);
         assert!(events[0].timestamp.is_none());
-        assert!(events[0].text.is_none());
+        assert!(events[0].text().is_none());
         assert_eq!(events[0].attachments.len(), 0);
         assert_eq!(events[0].sender_id, "2", "falls back to the chat");
     }
@@ -809,7 +809,7 @@ mod matrix_edges {
                      "m.relates_to":{"rel_type":"m.replace","event_id":"$1"}}}"#;
         let events = matrix().adapt(payload).unwrap();
         assert_eq!(events[0].edit_of.as_deref(), Some("$1"));
-        assert_eq!(events[0].text.as_deref(), Some("fixed"));
+        assert_eq!(events[0].text(), Some("fixed"));
     }
 
     #[test]
@@ -839,7 +839,7 @@ mod matrix_edges {
         assert_eq!(normalized.len(), 20);
         for (index, event) in normalized.iter().enumerate() {
             assert_eq!(event.external_id, format!("${index}"));
-            assert_eq!(event.text.as_deref(), Some(format!("hi {index}").as_str()));
+            assert_eq!(event.text(), Some(format!("hi {index}").as_str()));
         }
     }
 
@@ -864,7 +864,7 @@ mod matrix_edges {
         let events = matrix().adapt(payload).unwrap();
         assert_eq!(events.len(), 2, "an event without an id is not dropped");
         assert!(events[0].has_synthetic_id());
-        assert_eq!(events[0].text.as_deref(), Some("no id"));
+        assert_eq!(events[0].text(), Some("no id"));
         assert_eq!(events[1].external_id, "$1");
     }
 }

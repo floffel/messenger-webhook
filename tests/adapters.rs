@@ -17,7 +17,7 @@ mod whatsapp {
         assert_eq!(m.external_id, "wamid.1");
         assert_eq!(m.sender_id, "4915112345678");
         assert_eq!(m.conversation_id, "4915112345678");
-        assert_eq!(m.text.as_deref(), Some("Hallo"));
+        assert_eq!(m.text(), Some("Hallo"));
         assert_eq!(m.timestamp, Some(1_729_600_000));
         assert_eq!(m.provider_type.as_deref(), Some("text"));
         assert!(m.raw.is_some());
@@ -37,7 +37,7 @@ mod whatsapp {
         assert_eq!(attachment.kind, AttachmentKind::Image);
         assert_eq!(attachment.id.as_deref(), Some("media-1"));
         assert_eq!(attachment.mime_type.as_deref(), Some("image/jpeg"));
-        assert_eq!(m.text.as_deref(), Some("Look"), "caption becomes text");
+        assert_eq!(m.text(), Some("Look"), "caption becomes text");
     }
 
     #[test]
@@ -49,7 +49,7 @@ mod whatsapp {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].status, Some(DeliveryStatus::Read));
         assert!(events[0].is_status_update());
-        assert!(events[0].text.is_none());
+        assert!(events[0].text().is_none());
     }
 
     #[test]
@@ -94,7 +94,7 @@ mod telegram {
         let m = &messages[0];
         assert_eq!(m.reply_to.as_deref(), Some("7"));
         assert_eq!(m.thread_id.as_deref(), Some("5"));
-        assert_eq!(m.text.as_deref(), Some("Nice"));
+        assert_eq!(m.text(), Some("Nice"));
         assert_eq!(m.attachments[0].kind, AttachmentKind::Image);
         assert_eq!(m.attachments[0].id.as_deref(), Some("large"));
         assert_eq!(m.attachments[0].size_bytes, Some(90_000));
@@ -133,7 +133,7 @@ mod matrix {
            "url":"mxc://s/cat","info":{"mimetype":"image/jpeg","size":1234,"w":10,"h":20}}}]}"#;
         let events = MatrixAdapter::new("t").adapt(payload).unwrap();
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].text.as_deref(), Some("Hallo"));
+        assert_eq!(events[0].text(), Some("Hallo"));
         assert_eq!(events[0].channel, Channel::Matrix);
         assert_eq!(events[0].timestamp, Some(1_729_600_000));
         assert_eq!(events[1].attachments[0].kind, AttachmentKind::Image);

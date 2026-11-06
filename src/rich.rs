@@ -1,6 +1,6 @@
 //! Rich text: formatting spans over a message's plain text.
 //!
-//! [`NormalizedMessage::text`](crate::NormalizedMessage#structfield.text) field stays plain: the
+//! [`NormalizedMessage::text`](crate::NormalizedMessage::text) stays plain: the
 //! provider's markup is carried as a list of [`TextSpan`]s whose offsets point
 //! **into that plain text**, so a consumer that cannot render formatting still
 //! gets readable text and a consumer that can render it gets the attributes
@@ -8,7 +8,7 @@
 //!
 //! Two properties are load bearing:
 //!
-//! * offsets are **UTF-8 byte offsets** into `NormalizedMessage::text`
+//! * offsets are **UTF-8 byte offsets** into [`NormalizedMessage::text`](crate::NormalizedMessage::text)
 //!   (`start` inclusive, `end` exclusive), never UTF-16 code units and never
 //!   character indices, so `&text[span.start..span.end]` is always the run the
 //!   span describes;
@@ -181,7 +181,7 @@ impl TextFormat {
     }
 }
 
-/// A formatted run inside [`NormalizedMessage::text`](crate::NormalizedMessage#structfield.text).
+/// A formatted run inside [`NormalizedMessage::text`](crate::NormalizedMessage::text).
 ///
 /// ```
 /// use messenger_webhook::{TextFormat, TextSpan};

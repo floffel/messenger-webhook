@@ -63,7 +63,7 @@ pub const MAX_CAPTION_BYTES: usize = 1024;
 /// adapter.verify(&headers, body)?;
 ///
 /// let messages = adapter.adapt(body)?;
-/// assert_eq!(messages[0].text.as_deref(), Some("Hallo"));
+/// assert_eq!(messages[0].text(), Some("Hallo"));
 /// # Ok::<(), messenger_webhook::Error>(())
 /// ```
 #[derive(Debug, Clone)]
@@ -250,29 +250,21 @@ fn normalize_message(message: &Value) -> Result<NormalizedMessage> {
         .unwrap_or("unknown")
         .to_owned();
 
-    let mut normalized = NormalizedMessage {
-        channel: Channel::WhatsApp,
-        conversation_id: sender_id.clone(),
-        sender_id,
-        external_id,
-        text: None,
-        timestamp: json::integer(message, "timestamp"),
-        attachments: Vec::new(),
-        reply_to: json::child(message, "context").and_then(|context| json::id(context, "id")),
-        thread_id: None,
-        edit_of: None,
-        reaction: None,
-        status: None,
-        spans: Vec::new(),
-        provider_type: Some(provider_type.clone()),
-        raw: Some(message.clone()),
-    };
+    let mut normalized =
+        NormalizedMessage::carrier(Channel::WhatsApp, external_id, sender_id.clone(), sender_id);
+    normalized.timestamp = json::integer(message, "timestamp");
+    normalized.reply_to =
+        json::child(message, "context").and_then(|context| json::id(context, "id"));
+    normalized.provider_type = Some(provider_type.clone());
+    normalized.raw = Some(message.clone());
 
     match provider_type.as_str() {
         "text" => {
-            normalized.text = json::child(message, "text")
-                .and_then(|text| json::string(text, "body"))
-                .map(str::to_owned);
+            normalized.set_text(
+                json::child(message, "text")
+                    .and_then(|text| json::string(text, "body"))
+                    .map(str::to_owned),
+            );
         }
         "image" => push_media(&mut normalized, message, "image", AttachmentKind::Image),
         "document" => push_media(
@@ -357,7 +349,7 @@ fn push_media(
     kind: AttachmentKind,
 ) {
     if let Some(attachment) = media_attachment(message, field, kind) {
-        normalized.text.clone_from(&attachment.caption);
+        normalized.set_text(attachment.caption.clone());
         normalized.attachments.push(attachment);
     }
 }
@@ -368,23 +360,13 @@ fn normalize_status(status: &Value) -> Result<NormalizedMessage> {
     let recipient = json::id(status, "recipient_id").unwrap_or_default();
     let state = json::string(status, "status").unwrap_or("unknown");
 
-    Ok(NormalizedMessage {
-        channel: Channel::WhatsApp,
-        conversation_id: recipient.clone(),
-        sender_id: recipient,
-        external_id,
-        text: None,
-        timestamp: json::integer(status, "timestamp"),
-        attachments: Vec::new(),
-        reply_to: None,
-        thread_id: None,
-        edit_of: None,
-        reaction: None,
-        status: Some(delivery_status(state)),
-        spans: Vec::new(),
-        provider_type: Some("status".to_owned()),
-        raw: Some(status.clone()),
-    })
+    let mut normalized =
+        NormalizedMessage::carrier(Channel::WhatsApp, external_id, recipient.clone(), recipient);
+    normalized.timestamp = json::integer(status, "timestamp");
+    normalized.status = Some(delivery_status(state));
+    normalized.provider_type = Some("status".to_owned());
+    normalized.raw = Some(status.clone());
+    Ok(normalized)
 }
 
 fn delivery_status(state: &str) -> DeliveryStatus {

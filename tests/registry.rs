@@ -147,7 +147,7 @@ fn handle_verifies_before_it_parses() {
             meta_signature(&secret, body).unwrap(),
         );
         let events = registry.handle(&Channel::WhatsApp, &headers, body).unwrap();
-        assert_eq!(events[0].text.as_deref(), Some("Hallo"));
+        assert_eq!(events[0].text(), Some("Hallo"));
 
         // A signature from another secret is rejected as a signature problem.
         let mut forged = Headers::new();

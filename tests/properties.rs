@@ -123,7 +123,7 @@ proptest! {
                 Ok(events) => {
                     for event in &events {
                         // Whatever came out must be encodable or rejected.
-                        let _ = adapter.encode(&OutboundMessage::text(event.channel.clone(), event.conversation_id.clone(), event.text.clone().unwrap_or_default()));
+                        let _ = adapter.encode(&OutboundMessage::text(event.channel.clone(), event.conversation_id.clone(), event.text().unwrap_or_default()));
                     }
                 }
                 Err(Error::Payload(_)) => {}
@@ -297,7 +297,7 @@ fn telegram_echo(conversation: &str, text: &str) {
         .unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].conversation_id, chat_id);
-    assert_eq!(events[0].text.as_deref(), Some(echoed_text));
+    assert_eq!(events[0].text(), Some(echoed_text));
     assert_eq!(chat_id, conversation);
     assert_eq!(echoed_text, text);
 }
@@ -333,7 +333,7 @@ proptest! {
             .adapt(&serde_json::to_vec(&inbound).unwrap())
             .unwrap();
         prop_assert_eq!(&events[0].conversation_id, &recipient);
-        prop_assert_eq!(events[0].text.as_deref(), Some(text.as_str()));
+        prop_assert_eq!(events[0].text(), Some(text.as_str()));
     }
 
     /// Matrix: encode → wrap in an event envelope → normalise is lossless for
@@ -355,7 +355,7 @@ proptest! {
             .adapt(&serde_json::to_vec(&event).unwrap())
             .unwrap();
         prop_assert_eq!(&events[0].conversation_id, &room);
-        prop_assert_eq!(events[0].text.as_deref(), Some(text.as_str()));
+        prop_assert_eq!(events[0].text(), Some(text.as_str()));
     }
 
     /// Reply and thread references survive a Matrix round trip.

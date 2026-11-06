@@ -187,6 +187,13 @@ src/model.rs:impl NormalizedMessage:fn inbound_text
 src/model.rs:impl NormalizedMessage:fn is_edit
 src/model.rs:impl NormalizedMessage:fn is_formatted
 src/model.rs:impl NormalizedMessage:fn is_status_update
+src/model.rs:impl NormalizedMessage:fn span_text
+src/model.rs:impl NormalizedMessage:fn spans
+src/model.rs:impl NormalizedMessage:fn text
+src/model.rs:impl NormalizedMessage:fn without_text
+src/model.rs:impl NormalizedMessage:fn with_spans
+src/model.rs:impl NormalizedMessage:fn with_text
+src/model.rs:impl NormalizedMessage:fn with_text_and_spans
 src/model.rs:impl OutboundMessage:fn first_attachment
 src/model.rs:impl OutboundMessage:fn text
 src/model.rs:impl ProviderMethod:fn as_str

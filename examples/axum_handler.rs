@@ -88,7 +88,7 @@ fn handle_event(message: &NormalizedMessage) {
         message.channel,
         message.external_id,
         message.conversation_id,
-        message.text.as_deref().unwrap_or("<no text>"),
+        message.text().unwrap_or("<no text>"),
     );
 }
 

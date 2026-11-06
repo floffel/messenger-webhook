@@ -47,7 +47,7 @@ fuzz_target!(|data: &[u8]| {
                     let outbound = OutboundMessage::text(
                         event.channel.clone(),
                         event.conversation_id.clone(),
-                        event.text.clone().unwrap_or_default(),
+                        event.text().unwrap_or_default(),
                     );
                     if event.conversation_id.is_empty() {
                         assert!(
