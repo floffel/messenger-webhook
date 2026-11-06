@@ -696,6 +696,16 @@ fn telegram_contact_fields(
     Ok(())
 }
 
+/// Every update is routed by its `chat.id`, so it is mandatory even though
+/// Telegram leaves the rest of the object permissive. A missing, null, empty,
+/// whitespace or non-object `chat` cannot be flattened into an empty routing
+/// key: it would be acked at the webhook and only surface later when the caller
+/// tries to reply, past the delivery point of no return. The read is rejected
+/// here instead, and `discriminator` pinpoints the offending object.
+fn required_chat_id(chat_id: Option<String>, discriminator: &str) -> Result<String> {
+    chat_id.ok_or_else(|| Error::Payload(format!("{discriminator}: chat.id is required")))
+}
+
 /// Maps one `Message` object.
 fn normalize_message(
     message: &Value,
@@ -710,7 +720,7 @@ fn normalize_message(
         "message",
         envelope_discriminator,
     )?;
-    let conversation_id = message.chat_id().unwrap_or_default();
+    let conversation_id = required_chat_id(message.chat_id(), envelope_discriminator)?;
     // Channel posts have no `from`; the chat itself is the author.
     let sender_id = message
         .user_id()
@@ -855,7 +865,7 @@ fn photo_area(size: &Value) -> Option<u128> {
 /// annotates.
 fn normalize_reaction(reaction: &Value, envelope_discriminator: &str) -> Result<NormalizedMessage> {
     let reaction = schema::MessageReactionUpdated::new(reaction);
-    let conversation_id = reaction.chat_id().unwrap_or_default();
+    let conversation_id = required_chat_id(reaction.chat_id(), envelope_discriminator)?;
     let message_id = id::identify(
         reaction.raw(),
         schema::MESSAGE_ID,

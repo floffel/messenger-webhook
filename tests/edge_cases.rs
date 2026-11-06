@@ -766,6 +766,50 @@ mod telegram_edges {
     }
 
     #[test]
+    fn a_valid_chat_id_still_normalises() {
+        let payload = br#"{"message":{"message_id":1,"chat":{"id":-1001},"text":"x"}}"#;
+        let events = telegram().adapt(payload).unwrap();
+        assert_eq!(events[0].conversation_id, "-1001");
+        assert_eq!(events[0].sender_id, "-1001");
+    }
+
+    #[test]
+    fn an_unusable_chat_id_is_a_payload_error() {
+        // The routing key is mandatory: missing, null, empty, whitespace and
+        // non-object `chat` must not flatten into an empty conversation_id.
+        let unusable = [
+            // missing `chat`
+            br#"{"message":{"message_id":1,"text":"x"}}"#.as_slice(),
+            // `chat` is not an object
+            br#"{"message":{"message_id":1,"chat":"nope","text":"x"}}"#.as_slice(),
+            br#"{"message":{"message_id":1,"chat":42,"text":"x"}}"#.as_slice(),
+            // `chat.id` missing, null, empty or whitespace
+            br#"{"message":{"message_id":1,"chat":{},"text":"x"}}"#.as_slice(),
+            br#"{"message":{"message_id":1,"chat":{"id":null},"text":"x"}}"#.as_slice(),
+            br#"{"message":{"message_id":1,"chat":{"id":""},"text":"x"}}"#.as_slice(),
+            br#"{"message":{"message_id":1,"chat":{"id":"   "},"text":"x"}}"#.as_slice(),
+        ];
+        for payload in unusable {
+            let error = telegram().adapt(payload).unwrap_err();
+            assert!(
+                matches!(&error, Error::Payload(message) if message.contains("chat.id is required")),
+                "{payload:?} produced {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unusable_reaction_chat_id_is_a_payload_error() {
+        let payload = br#"{"message_reaction":{"message_id":9,"user":{"id":2},"date":1,
+            "new_reaction":[{"type":"emoji","emoji":"\ud83d\udc4d"}]}}"#;
+        let error = telegram().adapt(payload).unwrap_err();
+        assert!(
+            matches!(&error, Error::Payload(message) if message.contains("chat.id is required")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn all_media_kinds_are_recognised() {
         let payload = br#"{"message":{"message_id":1,"chat":{"id":2},"date":1,
           "document":{"file_id":"d","file_name":"a.pdf","mime_type":"application/pdf","file_size":10},

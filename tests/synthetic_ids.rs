@@ -8,7 +8,7 @@
 use proptest::prelude::*;
 use serde_json::{json, Value};
 
-use messenger_webhook::{Adapter, NormalizedMessage, SYNTHETIC_ID_PREFIX};
+use messenger_webhook::{Adapter, Error, NormalizedMessage, SYNTHETIC_ID_PREFIX};
 
 fn whatsapp() -> impl Adapter {
     messenger_webhook::WhatsAppAdapter::new("app-secret-app-secret").expect("adapter")
@@ -272,12 +272,15 @@ fn a_telegram_update_without_a_message_id_is_carried() {
 }
 
 #[test]
-fn a_telegram_update_without_a_chat_keeps_an_empty_conversation() {
+fn a_telegram_update_without_a_chat_is_rejected() {
     let body = json!({ "update_id": 2, "message": { "text": "Hallo" } });
-    let events = adapt(&telegram(), &body);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].conversation_id, "");
-    assert!(events[0].has_synthetic_id());
+    let error = telegram()
+        .adapt(body.to_string().as_bytes())
+        .expect_err("chat.id is mandatory for Telegram routing");
+    assert!(
+        matches!(&error, Error::Payload(message) if message.contains("chat.id is required")),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -326,7 +329,12 @@ fn every_adapter_leaves_no_event_without_a_key() {
         (
             Box::new(telegram()) as Box<dyn Adapter>,
             json!({
-                "message": {"chat": {"id": 1}}, "edited_message": {}, "message_reaction": {}
+                "message": {"chat": {"id": 1}},
+                "edited_message": {"message_id": 2, "chat": {"id": 2}},
+                "message_reaction": {
+                    "chat": {"id": 3}, "message_id": 4, "user": {"id": 5},
+                    "date": 6, "new_reaction": []
+                }
             }),
         ),
         (
