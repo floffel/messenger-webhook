@@ -13,8 +13,9 @@
 //!
 //! [`MatrixClient::send_text_with_txn`]: crate::matrix_out::MatrixClient::send_text_with_txn
 
-use std::fmt;
 use std::time::Duration;
+
+use thiserror::Error;
 
 use crate::matrix_out::types::TxnId;
 
@@ -28,11 +29,12 @@ use crate::matrix_out::types::TxnId;
 /// assert!(!error.is_ambiguous());
 /// assert!(error.to_string().contains("the room id is empty"));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum OutboundError {
     /// The client configuration cannot work — an unusable homeserver URL, an
     /// empty access token, a retry policy that would never retry.
+    #[error("invalid Matrix client configuration: {reason}")]
     InvalidConfig {
         /// What is wrong with the configuration.
         reason: String,
@@ -40,12 +42,14 @@ pub enum OutboundError {
 
     /// A transaction id is empty, too long or carries a byte a URL path segment
     /// cannot hold.
+    #[error("invalid transaction id: {reason}")]
     InvalidTxnId {
         /// Which rule the value broke.
         reason: String,
     },
 
     /// An `mxc://` URI is malformed.
+    #[error("invalid Matrix content URI: {reason}")]
     InvalidMxcUri {
         /// Which rule the value broke.
         reason: String,
@@ -53,12 +57,14 @@ pub enum OutboundError {
 
     /// The request itself cannot be addressed: an empty room id, an id of the
     /// wrong shape, an empty message body, an unusable media type.
+    #[error("cannot send this request: {reason}")]
     InvalidRequest {
         /// What has to change before the request is sendable.
         reason: String,
     },
 
     /// The serialised content is larger than the event ceiling.
+    #[error("the message content is {actual} bytes, the Matrix event ceiling leaves {limit}")]
     MessageTooLong {
         /// Ceiling in bytes ([`MAX_CONTENT_BYTES`](crate::matrix_out::MAX_CONTENT_BYTES)).
         limit: usize,
@@ -67,6 +73,7 @@ pub enum OutboundError {
     },
 
     /// The upload is larger than the configured media ceiling.
+    #[error("the upload is {actual} bytes, the configured media limit is {limit}")]
     MediaTooLarge {
         /// Ceiling in bytes.
         limit: u64,
@@ -76,6 +83,10 @@ pub enum OutboundError {
 
     /// The homeserver rate-limited the request. Nothing was applied; retry
     /// after `retry_after` (or on the caller's own schedule).
+    #[error(
+        "the homeserver rate-limited the request ({errcode}): {message}{suffix}",
+        suffix = retry_after_suffix(.retry_after.as_ref())
+    )]
     RateLimited {
         /// How long the homeserver asked the client to wait, when it said so.
         retry_after: Option<Duration>,
@@ -87,6 +98,7 @@ pub enum OutboundError {
 
     /// The homeserver refused the request and will refuse it again. Nothing was
     /// applied.
+    #[error("the homeserver rejected the request with {status} ({errcode}): {message}")]
     Rejected {
         /// HTTP status the homeserver answered with.
         status: u16,
@@ -98,6 +110,7 @@ pub enum OutboundError {
 
     /// The homeserver failed (`5xx`) on a request that is safe to repeat, and
     /// the client ran out of attempts. Nothing is known to be applied.
+    #[error("the homeserver answered {status} ({errcode}) after {attempts} attempts: {message}")]
     Server {
         /// HTTP status of the last attempt.
         status: u16,
@@ -111,6 +124,10 @@ pub enum OutboundError {
 
     /// A write may or may not have been applied. Retrying blindly duplicates;
     /// repeating the *same* transaction id does not.
+    #[error(
+        "the write may or may not have been applied after {attempts} attempts: {reason}{suffix}",
+        suffix = txn_id_suffix(.txn_id.as_ref())
+    )]
     Ambiguous {
         /// The transaction id of the send, when the operation had one. Use it to
         /// repeat the send idempotently.
@@ -124,6 +141,7 @@ pub enum OutboundError {
     /// No HTTP response was produced on any attempt. Only returned when nothing
     /// could have been applied (a connection that was never established), so it
     /// is retryable even for a non-idempotent request.
+    #[error("the transport failed for all {attempts} attempts: {reason}")]
     Transport {
         /// How many attempts were made.
         attempts: u32,
@@ -133,12 +151,14 @@ pub enum OutboundError {
 
     /// A test transport was asked for a response the test never scripted. This
     /// is a broken test fixture, not a homeserver or network outcome.
+    #[error("the test transport was not scripted for this request: {reason}")]
     TestHarness {
         /// Which request went unanswered.
         reason: String,
     },
 
     /// A `2xx` arrived but the body was not the JSON shape the leg expects.
+    #[error("cannot decode the {what} response: {reason}")]
     Decode {
         /// Which response was being decoded.
         what: &'static str,
@@ -147,87 +167,17 @@ pub enum OutboundError {
     },
 }
 
-impl fmt::Display for OutboundError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidConfig { reason } => {
-                write!(f, "invalid Matrix client configuration: {reason}")
-            }
-            Self::InvalidTxnId { reason } => write!(f, "invalid transaction id: {reason}"),
-            Self::InvalidMxcUri { reason } => write!(f, "invalid Matrix content URI: {reason}"),
-            Self::InvalidRequest { reason } => write!(f, "cannot send this request: {reason}"),
-            Self::MessageTooLong { limit, actual } => write!(
-                f,
-                "the message content is {actual} bytes, the Matrix event ceiling leaves {limit}"
-            ),
-            Self::MediaTooLarge { limit, actual } => write!(
-                f,
-                "the upload is {actual} bytes, the configured media limit is {limit}"
-            ),
-            Self::RateLimited {
-                retry_after,
-                errcode,
-                message,
-            } => {
-                write!(
-                    f,
-                    "the homeserver rate-limited the request ({errcode}): {message}"
-                )?;
-                if let Some(wait) = retry_after {
-                    write!(f, " — retry after {} ms", wait.as_millis())?;
-                }
-                Ok(())
-            }
-            Self::Rejected {
-                status,
-                errcode,
-                message,
-            } => write!(
-                f,
-                "the homeserver rejected the request with {status} ({errcode}): {message}"
-            ),
-            Self::Server {
-                status,
-                errcode,
-                message,
-                attempts,
-            } => write!(
-                f,
-                "the homeserver answered {status} ({errcode}) after {attempts} attempts: {message}"
-            ),
-            Self::Ambiguous {
-                txn_id,
-                attempts,
-                reason,
-            } => {
-                write!(
-                    f,
-                    "the write may or may not have been applied after {attempts} attempts: {reason}"
-                )?;
-                if let Some(txn) = txn_id {
-                    write!(
-                        f,
-                        " (repeat transaction id `{txn}` to send it at most once)"
-                    )?;
-                }
-                Ok(())
-            }
-            Self::Transport { attempts, reason } => write!(
-                f,
-                "the transport failed for all {attempts} attempts: {reason}"
-            ),
-            Self::TestHarness { reason } => write!(
-                f,
-                "the test transport was not scripted for this request: {reason}"
-            ),
-            Self::Decode { what, reason } => {
-                write!(f, "cannot decode the {what} response: {reason}")
-            }
-        }
-    }
+fn retry_after_suffix(retry_after: Option<&Duration>) -> String {
+    retry_after.map_or_else(String::new, |wait| {
+        format!(" — retry after {} ms", wait.as_millis())
+    })
 }
 
-impl std::error::Error for OutboundError {}
+fn txn_id_suffix(txn_id: Option<&TxnId>) -> String {
+    txn_id.map_or_else(String::new, |txn| {
+        format!(" (repeat transaction id `{txn}` to send it at most once)")
+    })
+}
 
 impl OutboundError {
     /// Whether the same request could succeed if it were retried unchanged.
