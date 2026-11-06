@@ -14,6 +14,7 @@
 use std::io::{self, Write};
 
 use serde_json::Value;
+use serde_json_canonicalizer::to_writer as canonical_json;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
@@ -63,13 +64,14 @@ pub(crate) fn synthesize(
     hasher.update([0]);
     hasher.update(role.as_bytes());
     hasher.update([0]);
-    // `Value` renders deterministically (object keys are ordered), so the same
-    // parsed body hashes to the same digest no matter how the provider ordered
-    // its JSON. Stream that rendering straight into the hasher: the only
-    // allocation left is the bounded 32-byte digest's final hex string.
+    // Hash RFC 8785 JCS bytes rather than `Value::to_string`: the output is
+    // stable even when a downstream consumer enables serde_json's
+    // `preserve_order`, and `1` and `1.0` canonicalise to the same number.
+    // Stream those bytes straight into the hasher through a bounded writer so
+    // the only allocation left is the final digest's 64-character hex string.
     {
         let mut writer = DigestWriter::new(&mut hasher, max_bytes);
-        serde_json::to_writer(&mut writer, raw).map_err(|error| {
+        canonical_json(raw, &mut writer).map_err(|error| {
             writer.take_overflow().map_or_else(
                 || Error::Payload(error.to_string()),
                 |actual| Error::BodyTooLarge {
@@ -134,6 +136,7 @@ mod tests {
     use super::{identify, synthesize, PROVIDER_ID_PREFIX};
     use crate::error::Error;
     use crate::model::{Channel, SYNTHETIC_ID_PREFIX};
+    use crate::MAX_BODY_BYTES;
     use serde_json::{json, Value};
 
     #[test]
@@ -173,6 +176,30 @@ mod tests {
             synthesize("whatsapp", "message", &json!({ "a": 1, "b": 3 }), 64).expect("id");
         assert_eq!(first, reordered, "key order must not change the id");
         assert_ne!(first, changed, "content must change the id");
+    }
+
+    #[test]
+    fn jcs_equivalence_pins_numbers_and_nested_order() {
+        let integer =
+            synthesize("whatsapp", "message", &json!({ "n": 1 }), MAX_BODY_BYTES).expect("id");
+        let decimal =
+            synthesize("whatsapp", "message", &json!({ "n": 1.0 }), MAX_BODY_BYTES).expect("id");
+        let nested = synthesize(
+            "whatsapp",
+            "message",
+            &json!({ "outer": { "b": 1.0, "a": [3, 2, 1] } }),
+            MAX_BODY_BYTES,
+        )
+        .expect("id");
+        let nested_reordered = synthesize(
+            "whatsapp",
+            "message",
+            &json!({ "outer": { "a": [3, 2, 1], "b": 1 } }),
+            MAX_BODY_BYTES,
+        )
+        .expect("id");
+        assert_eq!(integer, decimal, "1 and 1.0 are the same JCS number");
+        assert_eq!(nested, nested_reordered, "JCS sorts nested object keys");
     }
 
     #[test]
