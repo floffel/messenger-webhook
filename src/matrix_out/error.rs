@@ -69,6 +69,26 @@ pub enum OutboundError {
         reason: String,
     },
 
+    /// The per-room ordering queue is already full, so no HTTP request was
+    /// attempted.
+    #[error("the room ordering queue for {room_id} already has {limit} waiters")]
+    GateOverflow {
+        /// The room whose ordering queue is full.
+        room_id: String,
+        /// Maximum number of queued callers admitted per room.
+        limit: usize,
+    },
+
+    /// The per-room ordering gate did not become available before the local
+    /// queue timeout elapsed, so no HTTP request was attempted.
+    #[error("timed out after {waited:?} waiting for the ordering gate for {room_id}")]
+    GateTimeout {
+        /// The room whose ordering gate timed out.
+        room_id: String,
+        /// How long the caller waited before giving up.
+        waited: Duration,
+    },
+
     /// The serialised content is larger than the event ceiling.
     #[error("the message content is {actual} bytes, the Matrix event ceiling leaves {limit}")]
     MessageTooLong {
@@ -212,7 +232,8 @@ impl OutboundError {
     /// Whether the same request could succeed if it were retried unchanged.
     ///
     /// `true` for [`OutboundError::RateLimited`], [`OutboundError::Transport`],
-    /// and [`OutboundError::Server`] only when the server error belongs to a
+    /// [`OutboundError::GateOverflow`] and [`OutboundError::GateTimeout`], and
+    /// [`OutboundError::Server`] only when the server error belongs to a
     /// repeatable operation with no transaction id. `false` for an ambiguous
     /// write: retrying it blindly is how a message gets posted twice.
     ///
@@ -252,7 +273,10 @@ impl OutboundError {
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
         match self {
-            Self::RateLimited { .. } | Self::Transport { .. } => true,
+            Self::RateLimited { .. }
+            | Self::Transport { .. }
+            | Self::GateOverflow { .. }
+            | Self::GateTimeout { .. } => true,
             Self::Server {
                 operation, txn_id, ..
             } => txn_id.is_none() && operation.is_repeatable(),
@@ -755,12 +779,13 @@ mod tests {
                 classification: Terminal,
                 client_error: true,
             },
-            OutboundError::RateLimited { .. } | OutboundError::Transport { .. } => {
-                ExpectedClassification {
-                    classification: Retryable,
-                    client_error: false,
-                }
-            }
+            OutboundError::RateLimited { .. }
+            | OutboundError::Transport { .. }
+            | OutboundError::GateOverflow { .. }
+            | OutboundError::GateTimeout { .. } => ExpectedClassification {
+                classification: Retryable,
+                client_error: false,
+            },
             OutboundError::Server {
                 operation, txn_id, ..
             } if txn_id.is_none() && operation.is_repeatable() => ExpectedClassification {
@@ -796,6 +821,14 @@ mod tests {
             },
             OutboundError::InvalidRequest {
                 reason: "empty room".into(),
+            },
+            OutboundError::GateOverflow {
+                room_id: "!room:x".into(),
+                limit: 64,
+            },
+            OutboundError::GateTimeout {
+                room_id: "!room:x".into(),
+                waited: Duration::from_secs(30),
             },
             OutboundError::MessageTooLong {
                 limit: 10,
@@ -851,7 +884,7 @@ mod tests {
     #[test]
     fn every_error_variant_has_one_explicit_classification() {
         let errors = every_outbound_error();
-        assert_eq!(errors.len(), 14, "the table must cover every variant");
+        assert_eq!(errors.len(), 16, "the table must cover every variant");
 
         for error in errors {
             let expected = expected_classification(&error);
