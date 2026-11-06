@@ -8,10 +8,10 @@
 //! `/rooms/{roomId}/send/m.room.message/{txnId}`.
 //!
 //! ```
-//! use messenger_webhook::{Adapter, Channel, MatrixAdapter, NormalizedMessage};
+//! use messenger_webhook::{Adapter, Channel, MatrixAdapter, OutboundMessage};
 //!
 //! let adapter = MatrixAdapter::new("hs-token");
-//! let message = NormalizedMessage::text(Channel::Matrix, "!room:example.org", "Hallo");
+//! let message = OutboundMessage::text(Channel::Matrix, "!room:example.org", "Hallo");
 //! let payload = adapter.encode(&message)?;
 //! assert_eq!(payload.method(), "PUT");
 //! assert_eq!(payload.json()?["msgtype"], "m.text");
@@ -27,7 +27,7 @@ use crate::id;
 use crate::json;
 use crate::model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, IdempotencyKey, NormalizedMessage,
-    ProviderPayload, Reaction, RetryPolicy,
+    OutboundMessage, ProviderPayload, Reaction, RetryPolicy,
 };
 use crate::secret::Secret;
 use crate::{check_body, payload, recipient, Adapter};
@@ -140,7 +140,7 @@ impl Adapter for MatrixAdapter {
             .collect()
     }
 
-    fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
+    fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
         // The room id lives in the URL, not the content, but it is still the
         // recipient, so it goes through the shared validator before anything is
         // built.
@@ -253,7 +253,7 @@ fn media_content(attachment: &Attachment, text: &str) -> Result<serde_json::Map<
 }
 
 /// Adds `m.relates_to` (reply, thread or edit) to an outbound `content`.
-fn apply_relations(content: &mut serde_json::Map<String, Value>, message: &NormalizedMessage) {
+fn apply_relations(content: &mut serde_json::Map<String, Value>, message: &OutboundMessage) {
     if let Some(target) = &message.edit_of {
         let mut replacement = serde_json::Map::new();
         if let Some(msgtype) = content.get("msgtype") {

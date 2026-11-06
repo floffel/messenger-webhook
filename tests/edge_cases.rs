@@ -394,7 +394,7 @@ mod whatsapp_edges {
     #[test]
     fn unicode_and_nul_survive_the_full_round_trip() {
         let text = "Hallo \u{0} Welt — 😀 𝄞 مرحبا 中文";
-        let message = messenger_webhook::NormalizedMessage::text(
+        let message = messenger_webhook::OutboundMessage::text(
             messenger_webhook::Channel::WhatsApp,
             "4915112345678",
             text,

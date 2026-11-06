@@ -11,7 +11,7 @@ use messenger_webhook::MatrixAdapter;
 use messenger_webhook::TelegramAdapter;
 #[cfg(any(feature = "whatsapp", feature = "matrix"))]
 use messenger_webhook::MAX_RECIPIENT_BYTES;
-use messenger_webhook::{Adapter, Error, NormalizedMessage};
+use messenger_webhook::{Adapter, Error, OutboundMessage};
 #[cfg(feature = "whatsapp")]
 use messenger_webhook::{Channel, WhatsAppAdapter};
 
@@ -32,7 +32,7 @@ fn matrix() -> MatrixAdapter {
 
 /// Encodes `id` through `adapter` and reports whether it was accepted.
 fn accepts(adapter: &dyn Adapter, id: &str) -> bool {
-    let message = NormalizedMessage::text(adapter.channel(), id, "hi");
+    let message = OutboundMessage::text(adapter.channel(), id, "hi");
     match adapter.encode(&message) {
         Ok(_) => true,
         Err(Error::InvalidMessage { .. }) => false,
@@ -134,7 +134,7 @@ fn a_format_only_recipient_is_rejected_everywhere() {
 #[test]
 fn the_rejection_carries_the_channel() {
     let error = whatsapp()
-        .encode(&NormalizedMessage::text(Channel::WhatsApp, "", "hi"))
+        .encode(&OutboundMessage::text(Channel::WhatsApp, "", "hi"))
         .unwrap_err();
     match error {
         Error::InvalidMessage { channel, reason } => {

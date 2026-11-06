@@ -9,7 +9,7 @@
 use libfuzzer_sys::fuzz_target;
 
 use messenger_webhook::{
-    signature::meta_signature, Adapter, Headers, MatrixAdapter, NormalizedMessage, Secret,
+    signature::meta_signature, Adapter, Headers, MatrixAdapter, OutboundMessage, Secret,
     TelegramAdapter, WhatsAppAdapter,
 };
 
@@ -44,15 +44,20 @@ fuzz_target!(|data: &[u8]| {
                     // carried on purpose (the id is synthesised, see
                     // `SYNTHETIC_ID_PREFIX`), but it must not be encodable:
                     // there is no recipient to send it to.
+                    let outbound = OutboundMessage::text(
+                        event.channel.clone(),
+                        event.conversation_id.clone(),
+                        event.text.clone().unwrap_or_default(),
+                    );
                     if event.conversation_id.is_empty() {
                         assert!(
-                            adapter.encode(event).is_err(),
+                            adapter.encode(&outbound).is_err(),
                             "{} encoded an event without a recipient",
                             event.channel
                         );
                     }
-                    // Encoding a normalised event must succeed or fail typed.
-                    let _ = adapter.encode(event);
+                    // Encoding an outbound message must succeed or fail typed.
+                    let _ = adapter.encode(&outbound);
                 }
             }
             Err(_) => {}
@@ -61,6 +66,7 @@ fuzz_target!(|data: &[u8]| {
 
     // The same bytes as text, in both directions.
     let text = String::from_utf8_lossy(data);
-    let message = NormalizedMessage::text(messenger_webhook::Channel::WhatsApp, "4915112345678", text);
+    let message =
+        OutboundMessage::text(messenger_webhook::Channel::WhatsApp, "4915112345678", text);
     let _ = whatsapp.encode(&message);
 });

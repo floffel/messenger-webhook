@@ -1,7 +1,7 @@
 //! Rich text: entity offsets become byte spans, or are dropped.
 //!
 //! Telegram counts `MessageEntity.offset`/`.length` in UTF-16 code units, while
-//! `NormalizedMessage::text` is a Rust string. These tests pin the conversion at
+//! `NormalizedMessage::text` is a Rust string field. These tests pin the conversion at
 //! its edges — an emoji outside the BMP is two units, a boundary inside its
 //! surrogate pair has no byte equivalent — and pin every entity type onto a
 //! [`TextFormat`] instead of trusting the happy path.
@@ -288,10 +288,10 @@ fn many_entities_are_converted_in_provider_order_and_bad_ranges_do_not_shift() {
 #[test]
 fn adapters_that_send_no_entities_produce_no_spans() {
     assert_eq!(
-        NormalizedMessage::text(Channel::Matrix, "!r:s", "hi").spans,
+        NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "hi").spans,
         Vec::new()
     );
-    assert!(!NormalizedMessage::text(Channel::Matrix, "!r:s", "hi").is_formatted());
+    assert!(!NormalizedMessage::inbound_text(Channel::Matrix, "$1", "!r:s", "hi").is_formatted());
 }
 
 /// The Cloud API reports a `WhatsApp` text message as `text.body`; there is no

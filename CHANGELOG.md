@@ -91,6 +91,13 @@ carry a `!` in the conventional-commit subject.
 
 ### Breaking
 
+- **Outbound messages are a distinct type.** `Adapter::encode` now accepts
+  `OutboundMessage`, the fields an application can know before a provider
+  assigns an event id. `NormalizedMessage` stays the inbound event shape and
+  keeps `external_id` as the provider event id, so outbound requests no longer
+  carry an empty field documented as an idempotency key. `NormalizedMessage::text`
+  is replaced by `NormalizedMessage::inbound_text` for tests and examples; use
+  `OutboundMessage::text` for sends. Closes #90.
 - `NormalizedMessage` gained the public field `spans`, so a struct literal that
   builds the whole message no longer compiles. Use `NormalizedMessage::text`
   (which leaves `spans` empty) or `..Default::default()`-style updates where

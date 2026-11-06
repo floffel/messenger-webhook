@@ -4,7 +4,7 @@ A transport-neutral layer between messenger payloads and an application.
 
 Every provider reports the same facts differently. This crate maps **inbound**
 `WhatsApp` Cloud API, Telegram Bot API and Matrix events onto one
-`NormalizedMessage`, and **encodes** that message back into a provider payload —
+`NormalizedMessage`, and **encodes** an `OutboundMessage` into a provider payload —
 with signature verification as part of the adapter contract, not an optional
 extra.
 
@@ -77,10 +77,10 @@ let events = registry.handle(&Channel::WhatsApp, &headers, &body)?;
 ### Outbound
 
 ```rust
-use messenger_webhook::{Adapter, Channel, NormalizedMessage, TelegramAdapter};
+use messenger_webhook::{Adapter, Channel, OutboundMessage, TelegramAdapter};
 
 let adapter = TelegramAdapter::new("bot-secret");
-let message = NormalizedMessage::text(Channel::Telegram, "-1001", "Hallo");
+let message = OutboundMessage::text(Channel::Telegram, "-1001", "Hallo");
 let payload = adapter.encode(&message)?;
 
 assert_eq!(payload.method(), "POST");
@@ -187,7 +187,7 @@ decision:
 |---------------|--------------|
 | `channel_core::ChannelKind` (`WhatsApp`, `Telegram`, `Matrix`, `Email`, `Sms`, `Call`, `Letter`) | **Covered, minus the non-messengers.** `Channel` is the same idea with `Other(..)` for anything else; `Email`/`Sms`/`Call`/`Letter` are not messengers and stay in the monorepo, which is why `channel-core` is still a dependency of four other crates there. |
 | `ChannelCapabilities` (typing / reactions / read + delivery receipts / templates) | **Not merged, deliberately.** A capability matrix is a *product* decision (which channel may show what), not a wire fact, and the published crate has no channel that needs gating. `channels.md`-style truth belongs to the caller. |
-| `ChannelClient` trait (`send_text`, `indicate_typing`, `send_reaction`, defaulting to `Unsupported`) | **Covered and dropped.** `NormalizedMessage` + `Adapter::encode` is the outbound surface; the trait's default bodies existed to make an unsupported call fail loudly, which `encode` already does with `Error::InvalidMessage`. A second, `()`-returning send path was dead surface. |
+| `ChannelClient` trait (`send_text`, `indicate_typing`, `send_reaction`, defaulting to `Unsupported`) | **Covered and dropped.** `OutboundMessage` + `Adapter::encode` is the outbound surface; the trait's default bodies existed to make an unsupported call fail loudly, which `encode` already does with `Error::InvalidMessage`. A second, `()`-returning send path was dead surface. |
 | `matrix_out::MatrixClient` | **Merged, hardened.** Same calls, but typed: `TxnId` instead of `Uuid::new_v4()` per attempt, `OutboundError` instead of `String`, limits and response-size checks, per-room ordering, and an injectable transport. |
 | `matrix_out` doc-comment claim that Matrix has "no documented body limit" | **Wrong, corrected.** The spec caps a complete event at 65 536 bytes; the client enforces what it can and says why ([docs/contracts.md](docs/contracts.md)). |
 | Media upload | **New.** `matrix-out` never uploaded anything; the client does, with the non-idempotent delivery rules the upload endpoint demands. |
@@ -396,10 +396,11 @@ without its entry.
 - a new optional field on a type that is `#[non_exhaustive]`
 
 **Breaking today, because these types are exhaustive on purpose:** adding a
-field to `NormalizedMessage`, `Attachment` or `Reaction`. The three structs are
-built with field literals by callers, so a new field is source-breaking; it is
-announced as breaking and lands in a minor bump. `Channel::Other` exists so an
-unmodelled messenger never forces a variant.
+field to `Attachment` or `Reaction`. Both structs are built with field literals
+by callers, so a new field is source-breaking; it is announced as breaking and
+lands in a minor bump. `NormalizedMessage` and `OutboundMessage` are
+`#[non_exhaustive]`, so they can take new optional fields as additions.
+`Channel::Other` exists so an unmodelled messenger never forces a variant.
 
 **The surface is frozen, not remembered.** `tests/api_freeze.rs` records every
 public item of `src/` in `tests/api_surface.snapshot` and fails when one is

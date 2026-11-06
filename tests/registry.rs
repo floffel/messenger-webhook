@@ -1,7 +1,8 @@
 //! Registry lookup, dispatch and fail-closed handling.
 
 use messenger_webhook::{
-    Adapter, Channel, Error, Headers, NormalizedMessage, ProviderPayload, Registry, MAX_BODY_BYTES,
+    Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderPayload,
+    Registry, MAX_BODY_BYTES,
 };
 
 #[test]
@@ -176,7 +177,7 @@ impl Adapter for IgnoresSize {
         Ok(Vec::new())
     }
 
-    fn encode(&self, _message: &NormalizedMessage) -> messenger_webhook::Result<ProviderPayload> {
+    fn encode(&self, _message: &OutboundMessage) -> messenger_webhook::Result<ProviderPayload> {
         Err(Error::InvalidMessage {
             channel: self.channel(),
             reason: "not used in this test".to_owned(),
@@ -229,11 +230,11 @@ fn registry_enforces_the_body_ceiling_for_custom_adapters() {
 fn encode_dispatches_by_channel() {
     #[cfg(feature = "matrix")]
     {
-        use messenger_webhook::{MatrixAdapter, NormalizedMessage};
+        use messenger_webhook::{MatrixAdapter, OutboundMessage};
 
         let mut registry = Registry::new();
         registry.register(MatrixAdapter::new("token"));
-        let message = NormalizedMessage::text(Channel::Matrix, "!r:example.org", "hi");
+        let message = OutboundMessage::text(Channel::Matrix, "!r:example.org", "hi");
         let payload = registry.encode(&Channel::Matrix, &message).unwrap();
         assert_eq!(payload.channel(), &Channel::Matrix);
 
@@ -248,14 +249,14 @@ fn encode_dispatches_by_channel() {
 #[test]
 #[cfg(all(feature = "matrix", feature = "telegram"))]
 fn encode_rejects_a_message_from_another_channel() {
-    use messenger_webhook::{MatrixAdapter, NormalizedMessage, TelegramAdapter};
+    use messenger_webhook::{MatrixAdapter, OutboundMessage, TelegramAdapter};
 
     let mut registry = Registry::new();
     registry
         .register(MatrixAdapter::new("token"))
         .register(TelegramAdapter::new("secret"));
 
-    let matrix_message = NormalizedMessage::text(Channel::Matrix, "!r:example.org", "hi");
+    let matrix_message = OutboundMessage::text(Channel::Matrix, "!r:example.org", "hi");
     let error = registry
         .encode(&Channel::Telegram, &matrix_message)
         .expect_err("matrix message cannot be encoded for telegram");
@@ -267,7 +268,7 @@ fn encode_rejects_a_message_from_another_channel() {
         other => panic!("unexpected error: {other:?}"),
     }
 
-    let telegram_message = NormalizedMessage::text(Channel::Telegram, "-1001", "hi");
+    let telegram_message = OutboundMessage::text(Channel::Telegram, "-1001", "hi");
     let error = registry
         .encode(&Channel::Matrix, &telegram_message)
         .expect_err("telegram message cannot be encoded for matrix");

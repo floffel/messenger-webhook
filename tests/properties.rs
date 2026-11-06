@@ -7,7 +7,7 @@
 use proptest::prelude::*;
 use serde_json::{Map, Value};
 
-use messenger_webhook::{Adapter, Channel, Error, Headers, NormalizedMessage};
+use messenger_webhook::{Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage};
 
 /// Arbitrary JSON of bounded depth, including wrong types in every position.
 fn arb_json() -> impl Strategy<Value = Value> {
@@ -83,7 +83,7 @@ proptest! {
                 Ok(events) => {
                     for event in &events {
                         // Whatever came out must be encodable or rejected.
-                        let _ = adapter.encode(event);
+                        let _ = adapter.encode(&OutboundMessage::text(event.channel.clone(), event.conversation_id.clone(), event.text.clone().unwrap_or_default()));
                     }
                 }
                 Err(Error::Payload(_)) => {}
@@ -213,7 +213,7 @@ fn digits() -> impl Strategy<Value = String> {
 #[cfg(feature = "telegram")]
 fn telegram_echo(conversation: &str, text: &str) {
     let adapter = messenger_webhook::TelegramAdapter::new("secret");
-    let message = NormalizedMessage::text(Channel::Telegram, conversation, text);
+    let message = OutboundMessage::text(Channel::Telegram, conversation, text);
     let payload = adapter.encode(&message).unwrap();
     let body: Map<String, Value> = serde_json::from_slice(payload.body()).unwrap();
     let chat_id = body["chat_id"].as_str().expect("chat_id");
@@ -258,7 +258,7 @@ proptest! {
     #[test]
     fn whatsapp_text_round_trips(recipient in digits(), text in arb_text()) {
         let adapter = messenger_webhook::WhatsAppAdapter::new("secret");
-        let message = NormalizedMessage::text(Channel::WhatsApp, recipient.clone(), text.clone());
+        let message = OutboundMessage::text(Channel::WhatsApp, recipient.clone(), text.clone());
         let payload = adapter.encode(&message).unwrap();
         let body: Value = serde_json::from_slice(payload.body()).unwrap();
 
@@ -284,7 +284,7 @@ proptest! {
         text in arb_text(),
     ) {
         let adapter = messenger_webhook::MatrixAdapter::new("secret");
-        let message = NormalizedMessage::text(Channel::Matrix, room.clone(), text.clone());
+        let message = OutboundMessage::text(Channel::Matrix, room.clone(), text.clone());
         let content: Value = adapter.encode(&message).unwrap().json().unwrap();
         let event = serde_json::json!({
             "type": "m.room.message", "event_id": "$1", "room_id": room.clone(),
@@ -302,7 +302,7 @@ proptest! {
     #[test]
     fn matrix_reply_round_trips(reply in "\\$[a-z0-9]{1,8}") {
         let adapter = messenger_webhook::MatrixAdapter::new("secret");
-        let mut message = NormalizedMessage::text(Channel::Matrix, "!r:s", "hi");
+        let mut message = OutboundMessage::text(Channel::Matrix, "!r:s", "hi");
         message.reply_to = Some(reply.clone());
         let content: Value = adapter.encode(&message).unwrap().json().unwrap();
         let event = serde_json::json!({
@@ -320,7 +320,7 @@ proptest! {
         let adapter = messenger_webhook::TelegramAdapter::new("secret");
         let text = "😀".repeat(units / 2) ; // two UTF-16 units per emoji
         let measured = text.encode_utf16().count();
-        let message = NormalizedMessage::text(Channel::Telegram, "1", text);
+        let message = OutboundMessage::text(Channel::Telegram, "1", text);
         let result = adapter.encode(&message);
         prop_assert_eq!(result.is_ok(), measured <= 4096);
         if let Err(Error::MessageTooLong { limit, actual, .. }) = result {
@@ -335,7 +335,7 @@ proptest! {
     fn whatsapp_length_boundary_is_exact(characters in 1000usize..=4200) {
         let adapter = messenger_webhook::WhatsAppAdapter::new("secret");
         let text = "ä".repeat(characters); // two bytes per character
-        let message = NormalizedMessage::text(Channel::WhatsApp, "49", text);
+        let message = OutboundMessage::text(Channel::WhatsApp, "49", text);
         let result = adapter.encode(&message);
         prop_assert_eq!(result.is_ok(), characters * 2 <= 4096);
         if let Err(Error::MessageTooLong { limit, actual, .. }) = result {
@@ -354,7 +354,7 @@ proptest! {
                 Channel::Matrix => "!r:example.org".to_owned(),
                 _ => "-1001".to_owned(),
             };
-            let message = NormalizedMessage::text(adapter.channel(), conversation, text);
+            let message = OutboundMessage::text(adapter.channel(), conversation, text);
             let payload = adapter.encode(&message).unwrap();
             prop_assert!(payload.json().is_ok());
             prop_assert_eq!(payload.channel(), &adapter.channel());

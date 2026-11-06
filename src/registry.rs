@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::error::{Error, Result};
-use crate::model::{Channel, NormalizedMessage, ProviderPayload};
+use crate::model::{Channel, NormalizedMessage, OutboundMessage, ProviderPayload};
 use crate::{check_body, Adapter, Headers};
 
 /// A set of adapters, one per channel.
@@ -248,17 +248,13 @@ impl Registry {
     /// channel, plus every error [`Adapter::encode`] reports.
     ///
     /// ```
-    /// use messenger_webhook::{Channel, NormalizedMessage, Registry};
+    /// use messenger_webhook::{Channel, OutboundMessage, Registry};
     ///
     /// let registry = Registry::new();
-    /// let message = NormalizedMessage::text(Channel::Matrix, "!r:s", "hi");
+    /// let message = OutboundMessage::text(Channel::Matrix, "!r:s", "hi");
     /// assert!(registry.encode(&Channel::Matrix, &message).is_err());
     /// ```
-    pub fn encode(
-        &self,
-        channel: &Channel,
-        message: &NormalizedMessage,
-    ) -> Result<ProviderPayload> {
+    pub fn encode(&self, channel: &Channel, message: &OutboundMessage) -> Result<ProviderPayload> {
         let adapter = self.get(channel)?;
         if message.channel != *channel {
             return Err(Error::InvalidMessage {

@@ -9,9 +9,9 @@
 //! request body and refuses to produce one the provider would reject:
 //!
 //! ```
-//! use messenger_webhook::{Adapter, Channel, NormalizedMessage, WhatsAppAdapter};
+//! use messenger_webhook::{Adapter, Channel, OutboundMessage, WhatsAppAdapter};
 //!
-//! let message = NormalizedMessage::text(Channel::WhatsApp, "4915112345678", "Hallo");
+//! let message = OutboundMessage::text(Channel::WhatsApp, "4915112345678", "Hallo");
 //! let payload = WhatsAppAdapter::new("app-secret").encode(&message)?;
 //! assert_eq!(payload.json()?["text"]["body"], "Hallo");
 //! # Ok::<(), messenger_webhook::Error>(())
@@ -24,8 +24,8 @@ use crate::headers::Headers;
 use crate::id;
 use crate::json;
 use crate::model::{
-    Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, ProviderPayload,
-    Reaction,
+    Attachment, AttachmentKind, Channel, DeliveryStatus, NormalizedMessage, OutboundMessage,
+    ProviderPayload, Reaction,
 };
 use crate::secret::Secret;
 use crate::signature::{self, META_SIGNATURE_HEADER};
@@ -151,7 +151,7 @@ impl Adapter for WhatsAppAdapter {
         Ok(events)
     }
 
-    fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
+    fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
         let to = recipient(Channel::WhatsApp, message)?;
 
         let text = message.text.as_deref().unwrap_or_default();

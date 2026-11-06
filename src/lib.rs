@@ -117,7 +117,7 @@ pub use headers::Headers;
 pub use model::SYNTHETIC_ID_PREFIX;
 pub use model::{
     Attachment, AttachmentKind, Channel, DeliveryStatus, IdempotencyKey, NormalizedMessage,
-    ProviderPayload, Reaction, RetryPolicy, MAX_IDEMPOTENCY_KEY_BYTES,
+    OutboundMessage, ProviderPayload, Reaction, RetryPolicy, MAX_IDEMPOTENCY_KEY_BYTES,
 };
 pub use registry::Registry;
 pub use rich::{SpanError, TextFormat, TextSpan};
@@ -237,7 +237,8 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 ///
 /// ```
 /// use messenger_webhook::{
-///     Adapter, Channel, Error, Headers, NormalizedMessage, ProviderPayload, Result,
+///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderPayload,
+///     Result,
 /// };
 ///
 /// /// An adapter for a provider this crate does not ship.
@@ -258,10 +259,15 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 ///
 ///     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
 ///         let text = String::from_utf8_lossy(payload).into_owned();
-///         Ok(vec![NormalizedMessage::text(Channel::Other("echo".into()), "self", text)])
+///         Ok(vec![NormalizedMessage::inbound_text(
+///             Channel::Other("echo".into()),
+///             "event-1",
+///             "self",
+///             text,
+///         )])
 ///     }
 ///
-///     fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
+///     fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
 ///         Ok(ProviderPayload::new(
 ///             Channel::Other("echo".into()),
 ///             "POST",
@@ -274,7 +280,11 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 /// let events = Echo.adapt(b"ping")?;
 /// assert_eq!(events[0].text.as_deref(), Some("ping"));
 ///
-/// let payload = Echo.encode(&events[0])?;
+/// let payload = Echo.encode(&OutboundMessage::text(
+///     Channel::Other("echo".into()),
+///     "self",
+///     "ping",
+/// ))?;
 /// assert_eq!(payload.body(), b"ping");
 /// # Ok::<(), messenger_webhook::Error>(())
 /// ```
@@ -343,7 +353,8 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     ///
     /// ```
     /// use messenger_webhook::{
-    ///     Adapter, Channel, Error, Headers, NormalizedMessage, ProviderPayload, Result,
+    ///     Adapter, Channel, Error, Headers, NormalizedMessage, OutboundMessage, ProviderPayload,
+    ///     Result,
     /// };
     ///
     /// #[derive(Debug)]
@@ -353,17 +364,17 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     ///     fn channel(&self) -> Channel { Channel::Other("upper".into()) }
     ///     fn verify(&self, _: &Headers, _: &[u8]) -> Result<()> { Ok(()) }
     ///     fn adapt(&self, _: &[u8]) -> Result<Vec<NormalizedMessage>> { Ok(Vec::new()) }
-    ///     fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload> {
+    ///     fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
     ///         let text = message.text.clone().unwrap_or_default().to_uppercase();
     ///         Ok(ProviderPayload::new(self.channel(), "POST", "text/plain", text.into_bytes()))
     ///     }
     /// }
     ///
-    /// let message = NormalizedMessage::text(Channel::Other("upper".into()), "1", "hi");
+    /// let message = OutboundMessage::text(Channel::Other("upper".into()), "1", "hi");
     /// assert_eq!(Upper.encode(&message)?.body(), b"HI");
     /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
-    fn encode(&self, message: &NormalizedMessage) -> Result<ProviderPayload>;
+    fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload>;
 }
 
 /// Length of `text` in UTF-16 code units — the unit Telegram counts.
@@ -417,7 +428,7 @@ pub(crate) fn payload(
 /// - `WhatsApp` takes E.164 digits only, Telegram a signed integer chat id and
 ///   Matrix a room id that starts with `!`.
 #[cfg(any(feature = "whatsapp", feature = "telegram", feature = "matrix"))]
-pub(crate) fn recipient(channel: Channel, message: &NormalizedMessage) -> Result<&str> {
+pub(crate) fn recipient(channel: Channel, message: &crate::OutboundMessage) -> Result<&str> {
     let id = message.conversation_id.trim();
     if id.is_empty() {
         return Err(invalid_recipient(channel, "conversation_id is empty"));
