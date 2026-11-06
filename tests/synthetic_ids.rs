@@ -62,6 +62,34 @@ fn a_provider_id_is_never_replaced() {
 }
 
 #[test]
+fn a_provider_id_that_starts_with_the_synthetic_prefix_is_retagged() {
+    let whatsapp_body = json!({
+        "entry": [{ "changes": [{ "value": { "messages": [
+            { "id": "synthetic:from-provider", "from": "4915112345678",
+              "type": "text", "text": { "body": "Hallo" } }
+        ] } }] }]
+    });
+    let whatsapp_events = adapt(&whatsapp(), &whatsapp_body);
+    assert_eq!(
+        whatsapp_events[0].external_id,
+        "provider:synthetic:from-provider"
+    );
+    assert!(!whatsapp_events[0].has_synthetic_id());
+
+    let matrix_body = json!({
+        "type": "m.room.message", "event_id": "synthetic:$from-provider",
+        "room_id": "!r:example.org", "sender": "@a:example.org",
+        "content": { "msgtype": "m.text", "body": "Hallo" }
+    });
+    let matrix_events = adapt(&matrix(), &matrix_body);
+    assert_eq!(
+        matrix_events[0].external_id,
+        "provider:synthetic:$from-provider"
+    );
+    assert!(!matrix_events[0].has_synthetic_id());
+}
+
+#[test]
 fn different_content_yields_a_different_synthetic_id() {
     let build = |text: &str| {
         json!({

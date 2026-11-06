@@ -111,6 +111,12 @@ carry a `!` in the conventional-commit subject.
   `Registry::adapt` and `Registry::handle` now reject a body above
   `MAX_BODY_BYTES` before calling the registered adapter, so a custom `Adapter`
   cannot silently widen the documented crate-wide ceiling. Closes #36.
+- **Provider ids that impersonated the synthetic namespace are retagged.** A
+  real provider id such as `synthetic:x` used to reach
+  `NormalizedMessage::external_id` verbatim, so `has_synthetic_id()` reported
+  the opposite of the truth. Adapters now keep the id but add a `provider:`
+  namespace when the provider's value starts with `SYNTHETIC_ID_PREFIX`, which
+  preserves provenance for idempotency and trust decisions. Closes #33.
 
 ## [0.3.3] - 2026-10-27
 
