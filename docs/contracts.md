@@ -24,6 +24,10 @@ What the crate does with it:
 - [`TxnId`](../src/matrix_out/types.rs) mints one id per send and reuses it for
   every internal attempt (pinned by
   `every_attempt_of_one_send_shares_one_transaction_id`).
+- The retry classifier receives that id as part of the proof: an
+  `Operation::Idempotent` request without a `TxnId` fails closed as
+  `Verdict::Ambiguous` after any outcome that may have written, instead of
+  relying on a caller assertion.
 - A caller re-driving a send passes the id from
   `OutboundError::Ambiguous::txn_id`, so a send whose outcome was unknown is
   repeated at most once, not twice.

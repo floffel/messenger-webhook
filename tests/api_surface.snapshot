@@ -99,6 +99,7 @@ src/matrix_out/retry.rs:enum RetryPolicyError
 src/matrix_out/retry.rs:enum Verdict
 src/matrix_out/retry.rs:impl Operation:fn as_str
 src/matrix_out/retry.rs:impl Operation:fn is_repeatable
+src/matrix_out/retry.rs:impl Operation:fn is_repeatable_with
 src/matrix_out/retry.rs:impl RetryPolicy:fn backoff
 src/matrix_out/retry.rs:impl RetryPolicy:fn base_delay
 src/matrix_out/retry.rs:impl RetryPolicy:fn classify
