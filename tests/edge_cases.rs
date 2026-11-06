@@ -867,4 +867,21 @@ mod matrix_edges {
         assert_eq!(events[0].text(), Some("no id"));
         assert_eq!(events[1].external_id, "$1");
     }
+
+    #[test]
+    fn malformed_transaction_envelopes_are_rejected() {
+        assert_eq!(matrix().adapt(br#"{"events":[]}"#).unwrap().len(), 0);
+
+        for payload in [
+            &br#"{"events":{"chunk":[]}}"#[..],
+            br#"{"events":"not an array"}"#,
+            br#"{"events":null}"#,
+            br#"{"type":"m.room.message","events":[]}"#,
+        ] {
+            assert!(
+                matches!(matrix().adapt(payload), Err(Error::Payload(_))),
+                "unexpectedly accepted {payload:?}"
+            );
+        }
+    }
 }
