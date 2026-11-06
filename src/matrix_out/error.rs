@@ -9,7 +9,11 @@
 //!   applied the request. Do **not** mint a new transaction id and send again:
 //!   repeat the *same* one ([`MatrixClient::send_text_with_txn`]) or reconcile
 //!   by reading the room.
-//! * everything else — the request was rejected and will be rejected again.
+//! * **terminal** — neither retryable nor ambiguous: the caller must change the
+//!   request, configuration or fixture before trying again. This explicit
+//!   bucket holds the request/configuration validation variants, a homeserver
+//!   [`OutboundError::Rejected`], and local [`OutboundError::Decode`] or
+//!   [`OutboundError::TestHarness`] failures.
 //!
 //! [`MatrixClient::send_text_with_txn`]: crate::matrix_out::MatrixClient::send_text_with_txn
 
@@ -585,13 +589,84 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_error_is_both_retryable_and_ambiguous() {
-        let errors = [
-            OutboundError::Ambiguous {
-                txn_id: None,
-                attempts: 1,
-                reason: "x".into(),
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Classification {
+        Retryable,
+        Ambiguous,
+        Terminal,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct ExpectedClassification {
+        classification: Classification,
+        client_error: bool,
+    }
+
+    impl ExpectedClassification {
+        const fn retryable(self) -> bool {
+            matches!(self.classification, Classification::Retryable)
+        }
+
+        const fn ambiguous(self) -> bool {
+            matches!(self.classification, Classification::Ambiguous)
+        }
+    }
+
+    fn expected_classification(error: &OutboundError) -> ExpectedClassification {
+        use Classification::{Ambiguous, Retryable, Terminal};
+
+        match error {
+            OutboundError::InvalidConfig { .. }
+            | OutboundError::InvalidTxnId { .. }
+            | OutboundError::InvalidMxcUri { .. }
+            | OutboundError::InvalidRequest { .. }
+            | OutboundError::MessageTooLong { .. }
+            | OutboundError::MediaTooLarge { .. }
+            | OutboundError::Rejected { .. } => ExpectedClassification {
+                classification: Terminal,
+                client_error: true,
+            },
+            OutboundError::RateLimited { .. }
+            | OutboundError::Server { .. }
+            | OutboundError::Transport { .. } => ExpectedClassification {
+                classification: Retryable,
+                client_error: false,
+            },
+            OutboundError::Ambiguous { .. } => ExpectedClassification {
+                classification: Ambiguous,
+                client_error: false,
+            },
+            OutboundError::TestHarness { .. } | OutboundError::Decode { .. } => {
+                ExpectedClassification {
+                    classification: Terminal,
+                    client_error: false,
+                }
+            }
+        }
+    }
+
+    fn every_outbound_error() -> Vec<OutboundError> {
+        let txn = TxnId::new("t1").expect("valid txn");
+        vec![
+            OutboundError::InvalidConfig {
+                reason: "no scheme".into(),
+            },
+            OutboundError::InvalidTxnId {
+                reason: "empty".into(),
+            },
+            OutboundError::InvalidMxcUri {
+                reason: "no mxc".into(),
+            },
+            OutboundError::InvalidRequest {
+                reason: "empty room".into(),
+            },
+            OutboundError::MessageTooLong {
+                limit: 10,
+                actual: 11,
+            },
+            OutboundError::MediaTooLarge {
+                limit: 5,
+                actual: 6,
             },
             OutboundError::RateLimited {
                 retry_after: None,
@@ -603,9 +678,82 @@ mod tests {
                 errcode: "M_UNKNOWN".into(),
                 message: "x".into(),
             },
-        ];
+            OutboundError::Server {
+                status: 503,
+                errcode: "M_UNKNOWN".into(),
+                message: "x".into(),
+                attempts: 2,
+            },
+            OutboundError::Ambiguous {
+                txn_id: Some(txn),
+                attempts: 1,
+                reason: "x".into(),
+            },
+            OutboundError::Transport {
+                attempts: 1,
+                reason: "x".into(),
+            },
+            OutboundError::TestHarness { reason: "x".into() },
+            OutboundError::Decode {
+                what: "whoami",
+                reason: "x".into(),
+            },
+        ]
+    }
+
+    /// The classification is a finite contract: every variant answers each
+    /// predicate explicitly, and adding a variant without updating this table
+    /// fails to compile.
+    #[test]
+    fn every_error_variant_has_one_explicit_classification() {
+        let errors = every_outbound_error();
+        assert_eq!(errors.len(), 13, "the table must cover every variant");
+
         for error in errors {
+            let expected = expected_classification(&error);
+            assert_eq!(error.is_retryable(), expected.retryable(), "{error:?}");
+            assert_eq!(error.is_ambiguous(), expected.ambiguous(), "{error:?}");
+            assert_eq!(error.is_client_error(), expected.client_error, "{error:?}");
             assert!(!(error.is_retryable() && error.is_ambiguous()), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn no_error_is_both_retryable_and_ambiguous() {
+        for error in every_outbound_error() {
+            assert!(!(error.is_retryable() && error.is_ambiguous()), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn only_declared_predicate_combinations_are_allowed() {
+        let allowed_combinations = [
+            (false, false, false),
+            (false, false, true),
+            (false, true, false),
+            (true, false, false),
+        ];
+        let errors = every_outbound_error();
+        for (retryable, ambiguous, client_error) in [
+            (false, false, false),
+            (false, false, true),
+            (false, true, false),
+            (false, true, true),
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
+            (true, true, true),
+        ] {
+            let matching = errors.iter().any(|error| {
+                error.is_retryable() == retryable
+                    && error.is_ambiguous() == ambiguous
+                    && error.is_client_error() == client_error
+            });
+            let allowed = allowed_combinations.contains(&(retryable, ambiguous, client_error));
+            assert_eq!(
+                matching, allowed,
+                "retryable={retryable}, ambiguous={ambiguous}, client_error={client_error}"
+            );
         }
     }
 
