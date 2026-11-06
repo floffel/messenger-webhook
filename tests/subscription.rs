@@ -4,8 +4,8 @@
 //! (`hub.mode=subscribe&hub.challenge=1158201444&hub.verify_token=meatyhamhock`),
 //! quoted in `docs/contracts.md`. Every case below is one side of a boundary:
 //! a matching token and a token that differs in one byte, a challenge of exactly
-//! the ceiling and one byte past it, a parameter that appears once and one that
-//! appears twice.
+//! the integer boundary and one past it, a parameter that appears once and one
+//! that appears twice.
 
 #![cfg(feature = "whatsapp")]
 
@@ -243,25 +243,43 @@ fn an_encoded_token_matches_the_plain_secret() {
 }
 
 #[test]
-fn the_challenge_must_be_printable_ascii() {
-    // The value is reflected into the response: a CR/LF would be response
-    // splitting if the caller put it in a header.
+fn the_challenge_must_be_an_unsigned_integer() {
+    // The reflected body must be digits only: keeping the query value verbatim
+    // would reintroduce markup/header-reflection risk for handlers that use it
+    // somewhere other than the documented text/plain response body.
     for value in [
+        "<script>alert(1)</script>",
+        "\"quoted\"",
+        "angle< brackets>",
+        "back\\slash",
         "a\r\nX: y",
         "line\nbreak",
         "nul\0byte",
         "tab\there",
         "ümlaut",
         " ",
+        "-1",
+        "1.5",
+        "1e3",
+        "0x10",
     ] {
         let query = request_with(META_CHALLENGE_PARAM, value);
         let error = meta_subscription_challenge(&Secret::new(TOKEN), &query)
-            .expect_err("a non-printable challenge is rejected");
+            .expect_err("a non-integer challenge is rejected");
         assert!(
             matches!(error, Error::MalformedVerificationRequest { .. }),
             "challenge {value:?} gave {error}"
         );
     }
+}
+
+#[test]
+fn the_challenge_is_returned_as_canonical_decimal() {
+    let query = request_with(META_CHALLENGE_PARAM, "0001158201444");
+    let challenge = meta_subscription_challenge(&Secret::new(TOKEN), &query)
+        .expect("leading zeroes are still an integer");
+    assert_eq!(challenge, "1158201444");
+    assert!(challenge.bytes().all(|byte| byte.is_ascii_digit()));
 }
 
 #[test]
@@ -271,18 +289,34 @@ fn an_empty_challenge_is_rejected() {
 }
 
 #[test]
-fn the_challenge_length_is_exact() {
-    let at_limit = "1".repeat(MAX_CHALLENGE_BYTES);
+fn the_challenge_length_is_a_pre_parse_guard() {
+    let at_limit = "0".repeat(MAX_CHALLENGE_BYTES);
     let query = request_with(META_CHALLENGE_PARAM, &at_limit);
     assert_eq!(
         meta_subscription_challenge(&Secret::new(TOKEN), &query).expect("at the ceiling"),
-        at_limit
+        "0"
     );
 
     let past_limit = "1".repeat(MAX_CHALLENGE_BYTES + 1);
     let query = request_with(META_CHALLENGE_PARAM, &past_limit);
     let error = meta_subscription_challenge(&Secret::new(TOKEN), &query)
         .expect_err("one byte past the ceiling");
+    assert!(matches!(error, Error::MalformedVerificationRequest { .. }));
+}
+
+#[test]
+fn the_challenge_integer_range_is_exact() {
+    let max = u64::MAX.to_string();
+    let query = request_with(META_CHALLENGE_PARAM, &max);
+    assert_eq!(
+        meta_subscription_challenge(&Secret::new(TOKEN), &query).expect("u64::MAX fits"),
+        max
+    );
+
+    let past_max = (u128::from(u64::MAX) + 1).to_string();
+    let query = request_with(META_CHALLENGE_PARAM, &past_max);
+    let error = meta_subscription_challenge(&Secret::new(TOKEN), &query)
+        .expect_err("one past u64::MAX is rejected");
     assert!(matches!(error, Error::MalformedVerificationRequest { .. }));
 }
 
@@ -314,7 +348,8 @@ fn the_malformed_error_is_terminal_and_reads_sensibly() {
 
 proptest! {
     /// The handshake succeeds exactly when the token matches, and the answer is
-    /// the challenge — never a value derived from anything else.
+    /// the challenge in canonical decimal — never a value derived from anything
+    /// else.
     #[test]
     fn the_challenge_is_returned_exactly_when_the_token_matches(
         secret in "[!-~]{1,32}",
@@ -328,7 +363,11 @@ proptest! {
         ]);
         let result = meta_subscription_challenge(&Secret::new(secret.clone()), &query);
         if candidate == secret {
-            prop_assert_eq!(result.expect("matching token"), challenge);
+            let canonical = challenge
+                .parse::<u64>()
+                .expect("the proptest strategy generates a u64-sized decimal")
+                .to_string();
+            prop_assert_eq!(result.expect("matching token"), canonical);
         } else {
             // Bound first: `prop_assert!` renders its argument as a format
             // string, and the `{ .. }` pattern would break it.
