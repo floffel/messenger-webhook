@@ -75,6 +75,13 @@ carry a `!` in the conventional-commit subject.
   adapter than `Channel::WhatsApp`. Equality, hashing and ordering now compare
   `Channel::as_str`, and `Channel::other` validates caller-supplied custom names
   against the same lower-case `[a-z0-9_-]` grammar. Closes #93.
+- **Custom channel names are validated at construction.** `Channel::Other` now
+  carries a private-field `ChannelName` instead of a raw `String`, so a custom
+  channel can only be built through `Channel::other`. That constructor trims
+  surrounding whitespace, lower-cases ASCII letters, rejects empty, oversized
+  or malformed names, and reserves built-in channel names. This closes the
+  remaining path where an empty or unbounded raw key could be registered or
+  echoed through `UnknownChannel`. Closes #97.
 - **`Registry::encode` rejects cross-channel messages.** The registry used the
   caller's `channel` argument for dispatch but never compared it with
   `NormalizedMessage::channel`, so a message tagged for one provider could be

@@ -29,7 +29,7 @@ src/lib.rs:use error::{Error,Result}
 src/lib.rs:use headers::Headers
 src/lib.rs:use matrix::MatrixAdapter
 src/lib.rs:use model::SYNTHETIC_ID_PREFIX
-src/lib.rs:use model::{Attachment,AttachmentKind,Channel,DeliveryStatus,IdempotencyKey,NormalizedMessage,OutboundMessage,ProviderMethod,ProviderPayload,Reaction,RetryPolicy,MAX_CHANNEL_NAME_BYTES,MAX_IDEMPOTENCY_KEY_BYTES,}
+src/lib.rs:use model::{Attachment,AttachmentKind,Channel,ChannelName,DeliveryStatus,IdempotencyKey,NormalizedMessage,OutboundMessage,ProviderMethod,ProviderPayload,Reaction,RetryPolicy,MAX_CHANNEL_NAME_BYTES,MAX_IDEMPOTENCY_KEY_BYTES,}
 src/lib.rs:use registry::Registry
 src/lib.rs:use rich::{SpanError,TextFormat,TextSpan}
 src/lib.rs:use secret::Secret
@@ -178,6 +178,7 @@ src/model.rs:impl Attachment:fn new
 src/model.rs:impl AttachmentKind:fn as_str
 src/model.rs:impl Channel:fn as_str
 src/model.rs:impl Channel:fn other
+src/model.rs:impl ChannelName:fn as_str
 src/model.rs:impl DeliveryStatus:fn as_str
 src/model.rs:impl IdempotencyKey:fn as_str
 src/model.rs:impl IdempotencyKey:fn new
@@ -203,6 +204,7 @@ src/model.rs:impl ProviderPayload:fn with_retry
 src/model.rs:impl RetryPolicy:fn as_str
 src/model.rs:impl RetryPolicy:fn is_unsafe_without_key
 src/model.rs:struct Attachment
+src/model.rs:struct ChannelName
 src/model.rs:struct IdempotencyKey
 src/model.rs:struct NormalizedMessage
 src/model.rs:struct OutboundMessage

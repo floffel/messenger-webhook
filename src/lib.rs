@@ -116,8 +116,8 @@ pub use error::{Error, Result};
 pub use headers::Headers;
 pub use model::SYNTHETIC_ID_PREFIX;
 pub use model::{
-    Attachment, AttachmentKind, Channel, DeliveryStatus, IdempotencyKey, NormalizedMessage,
-    OutboundMessage, ProviderMethod, ProviderPayload, Reaction, RetryPolicy,
+    Attachment, AttachmentKind, Channel, ChannelName, DeliveryStatus, IdempotencyKey,
+    NormalizedMessage, OutboundMessage, ProviderMethod, ProviderPayload, Reaction, RetryPolicy,
     MAX_CHANNEL_NAME_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
 };
 pub use registry::Registry;
@@ -248,7 +248,7 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 ///
 /// impl Adapter for Echo {
 ///     fn channel(&self) -> Channel {
-///         Channel::Other("echo".into())
+///         Channel::other("echo").expect("echo is a valid channel")
 ///     }
 ///
 ///     fn verify(&self, _headers: &Headers, body: &[u8]) -> Result<()> {
@@ -261,7 +261,7 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 ///     fn adapt(&self, payload: &[u8]) -> Result<Vec<NormalizedMessage>> {
 ///         let text = String::from_utf8_lossy(payload).into_owned();
 ///         Ok(vec![NormalizedMessage::inbound_text(
-///             Channel::Other("echo".into()),
+///             Channel::other("echo").expect("echo is a valid channel"),
 ///             "event-1",
 ///             "self",
 ///             text,
@@ -270,7 +270,7 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 ///
 ///     fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
 ///         Ok(ProviderPayload::new(
-///             Channel::Other("echo".into()),
+///             Channel::other("echo").expect("echo is a valid channel"),
 ///             ProviderMethod::Post,
 ///             "application/json",
 ///             serde_json::json!({ "text": message.text.clone().unwrap_or_default() })
@@ -284,7 +284,7 @@ pub fn read_body(mut reader: impl std::io::Read) -> Result<Vec<u8>> {
 /// assert_eq!(events[0].text.as_deref(), Some("ping"));
 ///
 /// let payload = Echo.encode(&OutboundMessage::text(
-///     Channel::Other("echo".into()),
+///     Channel::other("echo").expect("echo is a valid channel"),
 ///     "self",
 ///     "ping",
 /// ))?;
@@ -364,7 +364,7 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     /// struct Upper;
     ///
     /// impl Adapter for Upper {
-    ///     fn channel(&self) -> Channel { Channel::Other("upper".into()) }
+    ///     fn channel(&self) -> Channel { Channel::other("upper").expect("upper is valid") }
     ///     fn verify(&self, _: &Headers, _: &[u8]) -> Result<()> { Ok(()) }
     ///     fn adapt(&self, _: &[u8]) -> Result<Vec<NormalizedMessage>> { Ok(Vec::new()) }
     ///     fn encode(&self, message: &OutboundMessage) -> Result<ProviderPayload> {
@@ -378,7 +378,11 @@ pub trait Adapter: Send + Sync + std::fmt::Debug {
     ///     }
     /// }
     ///
-    /// let message = OutboundMessage::text(Channel::Other("upper".into()), "1", "hi");
+    /// let message = OutboundMessage::text(
+    ///     Channel::other("upper").expect("upper is valid"),
+    ///     "1",
+    ///     "hi",
+    /// );
     /// assert_eq!(Upper.encode(&message)?.json()?["text"], "HI");
     /// # Ok::<(), messenger_webhook::Error>(())
     /// ```

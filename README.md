@@ -393,7 +393,7 @@ without its entry.
 
 - a new variant on `Error`, `Channel`, `AttachmentKind` or `DeliveryStatus` — all
   four are `#[non_exhaustive]`, so `match` arms need a `_` anyway
-- new `Channel::Other(..)` values, new inherent methods, new trait methods with
+- new `Channel::other(..)` values, new inherent methods, new trait methods with
   a default body
 - a new optional field on a type that is `#[non_exhaustive]`
 
@@ -402,7 +402,7 @@ field to `Attachment` or `Reaction`. Both structs are built with field literals
 by callers, so a new field is source-breaking; it is announced as breaking and
 lands in a minor bump. `NormalizedMessage` and `OutboundMessage` are
 `#[non_exhaustive]`, so they can take new optional fields as additions.
-`Channel::Other` exists so an unmodelled messenger never forces a variant.
+`Channel::other` exists so an unmodelled messenger never forces a variant.
 
 **The surface is frozen, not remembered.** `tests/api_freeze.rs` records every
 public item of `src/` in `tests/api_surface.snapshot` and fails when one is
