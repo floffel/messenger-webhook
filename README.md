@@ -168,9 +168,9 @@ so your tests can do the same.
 | other `4xx` | not retried | `Rejected { status, errcode, message }` |
 | `2xx` with an unreadable body | not retried | `Ambiguous` for a write, `Decode` for a read |
 
-`OutboundError::is_retryable()` is true only when nothing was applied;
-`is_ambiguous()` is true when the event *may* be in the room. An ambiguous write
-carries the transaction id, and repeating that send with it
+`OutboundError::is_retryable()` is true only when repeating the same request is
+safe; `is_ambiguous()` is true when the event *may* be in the room. An ambiguous
+write carries the transaction id, and repeating that send with it
 (`send_text_with_txn`) is the documented recovery: one event, not two.
 
 Sends into one room are serialised (one request in flight, any number across

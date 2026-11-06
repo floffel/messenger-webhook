@@ -138,6 +138,9 @@ carry a `!` in the conventional-commit subject.
   `M_LIMIT_EXCEEDED`; a header-only or non-Matrix `429` is reported as
   ambiguous because a reverse proxy may have forwarded the request body.
   Closes #72.
+- Matrix `5xx` retryability now follows the operation and transaction id carried
+  by `OutboundError::Server`, so an uncertain write is ambiguous instead of
+  advertised as safe to repeat. Closes #49.
 - **Matrix receipts keep their event identity and fan out completely.** A
   Matrix `m.receipt` event used to overwrite `external_id` with the referenced
   message id, so a read marker could be stored as the message it referred to,
