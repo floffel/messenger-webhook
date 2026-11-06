@@ -37,6 +37,10 @@ pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A [`Transport`] backed by `reqwest`.
 ///
+/// Redirects are not followed. A redirect response is handed back to the client
+/// as a normal [`Response`], so retry and idempotency decisions remain in one
+/// place instead of being made by `reqwest` below the transport boundary.
+///
 /// ```
 /// use messenger_webhook::matrix_out::ReqwestTransport;
 ///
@@ -94,6 +98,7 @@ impl ReqwestTransport {
         let client = HttpClient::builder()
             .timeout(timeout)
             .user_agent(concat!("messenger-webhook/", env!("CARGO_PKG_VERSION")))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| OutboundError::InvalidConfig {
                 reason: format!("building the HTTP client failed: {}", error.without_url()),
