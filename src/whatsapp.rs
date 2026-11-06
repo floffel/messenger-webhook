@@ -198,7 +198,7 @@ impl Adapter for WhatsAppAdapter {
                         channel: Channel::WhatsApp,
                         limit: MAX_CAPTION_BYTES,
                         actual: length,
-                        unit: "bytes",
+                        unit: crate::LimitUnit::Bytes,
                     });
                 }
                 media.insert("caption".to_owned(), Value::String(text.to_owned()));
@@ -225,7 +225,7 @@ impl Adapter for WhatsAppAdapter {
                     channel: Channel::WhatsApp,
                     limit: MAX_TEXT_BYTES,
                     actual: length,
-                    unit: "bytes",
+                    unit: crate::LimitUnit::Bytes,
                 });
             }
             let mut text_body = serde_json::Map::new();

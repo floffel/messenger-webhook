@@ -112,7 +112,7 @@ pub use telegram::TelegramAdapter;
 #[cfg_attr(docsrs, doc(cfg(feature = "whatsapp")))]
 pub use whatsapp::WhatsAppAdapter;
 
-pub use error::{Error, Result};
+pub use error::{Error, LimitUnit, Result};
 pub use headers::Headers;
 pub use model::SYNTHETIC_ID_PREFIX;
 pub use model::{

@@ -146,6 +146,10 @@ carry a `!` in the conventional-commit subject.
   (which leaves `spans` empty) or `..Default::default()`-style updates where
   possible. The next version therefore moves to **0.4.0**; 0.3.4 stays the
   released one.
+- **`Error::MessageTooLong` carries a typed unit.** The `unit` field is now
+  `LimitUnit` instead of `&'static str`, so callers and tests can match
+  `LimitUnit::Bytes` or `LimitUnit::Utf16Units` without parsing display text.
+  The rendered error message is unchanged. Closes #22.
 
 ### Fixed
 

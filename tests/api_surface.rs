@@ -10,9 +10,9 @@ use std::collections::{BTreeSet, HashSet};
 
 use messenger_webhook::{
     signature, Attachment, AttachmentKind, Channel, ChannelName, DeliveryStatus, Error, Headers,
-    IdempotencyKey, NormalizedMessage, OutboundMessage, ProviderMethod, ProviderPayload, Reaction,
-    Registry, RetryPolicy, Secret, MAX_BODY_BYTES, MAX_BODY_READ_BYTES, MAX_CHANNEL_NAME_BYTES,
-    MAX_IDEMPOTENCY_KEY_BYTES,
+    IdempotencyKey, LimitUnit, NormalizedMessage, OutboundMessage, ProviderMethod, ProviderPayload,
+    Reaction, Registry, RetryPolicy, Secret, MAX_BODY_BYTES, MAX_BODY_READ_BYTES,
+    MAX_CHANNEL_NAME_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
 };
 use std::str::FromStr;
 
@@ -469,7 +469,7 @@ fn every_error_variant_renders_without_panicking() {
             channel: Channel::Telegram,
             limit: 4096,
             actual: 5000,
-            unit: "UTF-16 units",
+            unit: LimitUnit::Utf16Units,
         },
         Error::InvalidIdempotencyKey {
             reason: "empty".to_owned(),
