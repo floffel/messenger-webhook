@@ -297,6 +297,7 @@ src/subscription.rs:const META_SUBSCRIBE_MODE
 src/subscription.rs:const META_VERIFY_TOKEN_PARAM
 src/subscription.rs:fn meta_subscription_challenge
 src/telegram.rs:const MAX_CAPTION_UTF16
+src/telegram.rs:const MAX_ENTITIES
 src/telegram.rs:const MAX_TEXT_UTF16
 src/telegram.rs:const MAX_WEBHOOK_BODY_BYTES
 src/telegram.rs:const SECRET_TOKEN_HEADER

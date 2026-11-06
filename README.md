@@ -296,6 +296,8 @@ provider name as `TextFormat::Other` so the run is not lost. Outbound,
 offsets are converted from UTF-8 bytes to UTF-16 code units and `parse_mode`
 stays unset. `text_mention` is rejected on the outbound path because Telegram
 requires a full `User` object, while the neutral span carries only `user_id`.
+An array past `MAX_ENTITIES` (100) is rejected before the wire, because
+Telegram silently drops the runs past that ceiling.
 
 `WhatsApp` interactive replies are not formatting, so they do not travel as
 spans: a chosen button or list row is a selection, and the option id is the
@@ -307,9 +309,9 @@ and template `button` quick replies, while the title is still lifted into
 responses (`interactive.nfm_reply`) stay in `raw`, since the provider asks the
 application to parse the embedded `response_json` itself.
 
-The parts still open are tracked, not excluded: [Matrix
-`formatted_body`](https://github.com/floffel/messenger-webhook/issues/13) (HTML
-needs a parser this crate has to justify and bound).
+Matrix `formatted_body` (`org.matrix.custom.html`) is normalised the same way:
+the body is parsed with a bounded HTML parser into the same `TextSpan`s, so a
+bold run reaches a renderer instead of being lost.
 
 ## The subscription handshake
 
@@ -466,12 +468,6 @@ Each of these is a decision, not an omission:
   payloads and reads webhook bodies; with it, the only I/O is the Matrix
   Client-Server legs listed above. No media download, no token refresh, no sync
   or long polling, no E2EE, no room administration (create/join/invite/state).
-- **No HTML yet.** Telegram entities are parsed (#6) and `WhatsApp` interactive
-  replies are normalised into `InteractiveReply` (#12), but Matrix
-  `formatted_body` is not, and it is tracked as
-  [#13](https://github.com/floffel/messenger-webhook/issues/13) rather than left
-  as a silent gap. Until then the plain text is normalised and the raw object is
-  preserved.
 - **No Matrix E2EE.** `m.room.encrypted` events are carried verbatim
   (`provider_type`, `raw`), never decrypted.
 - **No edits/reactions outbound.** Telegram edits require `editMessageText` on

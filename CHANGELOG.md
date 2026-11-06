@@ -10,6 +10,10 @@ carry a `!` in the conventional-commit subject.
 
 ## [Unreleased]
 
+### Added
+
+- **Rich text and entities are normalized on both adapters.** Telegram message entities and `WhatsApp` interactive replies now normalize into typed inbound surfaces (`TextSpan`/`TextFormat` and `InteractiveReply`), and outbound Telegram spans are encoded back into `entities`/`caption_entities` with the 100-entity ceiling validated before the wire. Closes #6.
+
 ### Fixed
 
 - `OutboundError::DecodeAfterWrite` now marks a `2xx` whose write response body cannot be decoded as ambiguous and carries the transaction id when there is one; unreadable read responses remain terminal `DecodeRead`. Closes #48.
