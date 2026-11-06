@@ -33,6 +33,12 @@ carry a `!` in the conventional-commit subject.
 
 ### Added
 
+- **Meta app-secret rotation windows.** `signature::verify_meta_any` verifies a
+  Meta webhook signature against every configured candidate secret, and
+  `WhatsAppAdapter::with_secret_rotation` lets a caller hold the previous and
+  current app secret while deliveries signed with the old one drain. A request
+  signed with a still-valid rotation secret is accepted, while a request that
+  matches none of them remains `Error::BadSignature`. Closes #116.
 - **Repeated HTTP header fields are observable.** `Headers::append`,
   `Headers::from_pairs`, `Headers::from_iter` and `Headers::from` now preserve
   repeated field names, and `Headers::get_all` returns every value for a name
