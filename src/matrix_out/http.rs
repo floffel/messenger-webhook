@@ -23,7 +23,8 @@ use crate::matrix_out::transport::{
 /// invocation open. It doubles as the boundary between "safe to retry" and
 /// "ambiguous": a timeout here is reported as
 /// [`TransportErrorKind::Timeout`](crate::matrix_out::transport::TransportErrorKind::Timeout),
-/// never as a connection failure.
+/// unless `reqwest` also reports the same failure as a connect error. That
+/// precedence is deliberate, because this transport checks `is_connect()` first.
 ///
 /// ```
 /// use std::time::Duration;
@@ -186,19 +187,41 @@ fn header_map(headers: &[(String, String)]) -> Result<HeaderMap, TransportError>
 
 /// Maps a `reqwest` failure onto the write boundary the retry policy cares about.
 fn transport_error(error: reqwest::Error) -> TransportError {
-    let kind = if error.is_connect() {
-        TransportErrorKind::Connect
-    } else if error.is_timeout() {
-        TransportErrorKind::Timeout
-    } else {
-        TransportErrorKind::Other
-    };
+    let kind = classify_reqwest_failure(ReqwestFailureFlags::from_error(&error));
     // The URL can carry a room id, media id or upload path. Strip it from both
     // the rendered message and the retained source, and keep the source chain
     // the typed error convention requires.
     let error = error.without_url();
     let message = error.to_string();
     TransportError::new(kind, message).with_source(error)
+}
+
+/// The `reqwest` error predicates that decide retry safety.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReqwestFailureFlags {
+    is_connect: bool,
+    is_timeout: bool,
+}
+
+impl ReqwestFailureFlags {
+    fn from_error(error: &reqwest::Error) -> Self {
+        Self {
+            is_connect: error.is_connect(),
+            is_timeout: error.is_timeout(),
+        }
+    }
+}
+
+/// Maps `reqwest` failure flags onto the write boundary the retry policy cares
+/// about.
+fn classify_reqwest_failure(flags: ReqwestFailureFlags) -> TransportErrorKind {
+    if flags.is_connect {
+        TransportErrorKind::Connect
+    } else if flags.is_timeout {
+        TransportErrorKind::Timeout
+    } else {
+        TransportErrorKind::Other
+    }
 }
 
 impl fmt::Display for ReqwestTransport {
@@ -210,6 +233,7 @@ impl fmt::Display for ReqwestTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn methods_map_onto_http() {
@@ -246,5 +270,62 @@ mod tests {
         assert_eq!(transport.timeout(), Duration::from_millis(1_500));
         assert!(transport.to_string().contains("1.5s"));
         assert!(format!("{transport:?}").contains("ReqwestTransport"));
+    }
+
+    #[test]
+    fn reqwest_failure_flags_cover_the_connect_timeout_other_split() {
+        let cases = [
+            (
+                ReqwestFailureFlags {
+                    is_connect: true,
+                    is_timeout: false,
+                },
+                TransportErrorKind::Connect,
+            ),
+            (
+                ReqwestFailureFlags {
+                    is_connect: false,
+                    is_timeout: true,
+                },
+                TransportErrorKind::Timeout,
+            ),
+            (
+                ReqwestFailureFlags {
+                    is_connect: false,
+                    is_timeout: false,
+                },
+                TransportErrorKind::Other,
+            ),
+            (
+                ReqwestFailureFlags {
+                    is_connect: true,
+                    is_timeout: true,
+                },
+                TransportErrorKind::Connect,
+            ),
+        ];
+
+        for (flags, expected) in cases {
+            assert_eq!(classify_reqwest_failure(flags), expected);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn reqwest_failure_classification_is_connect_first(
+            is_connect in any::<bool>(),
+            is_timeout in any::<bool>(),
+        ) {
+            let flags = ReqwestFailureFlags { is_connect, is_timeout };
+            let expected = if is_connect {
+                TransportErrorKind::Connect
+            } else if is_timeout {
+                TransportErrorKind::Timeout
+            } else {
+                TransportErrorKind::Other
+            };
+
+            prop_assert_eq!(classify_reqwest_failure(flags), expected);
+        }
     }
 }
