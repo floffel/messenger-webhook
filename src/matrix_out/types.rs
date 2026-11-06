@@ -4,6 +4,15 @@
 //! Matrix grammar is stricter than `String`: a transaction id, an `mxc://` URI
 //! and a room id each have a shape, and a value that violates it must fail
 //! before a request is built rather than as a `404` from the homeserver.
+//!
+//! The Matrix identifier grammar is hand-written rather than taken from a
+//! maintained crate, because the one crate that owns it (`ruma-common`, via
+//! `matrix-sdk`) drags in `as_variant`, whose MPL-2.0 license this project's
+//! `deny.toml` does not allow, and no maintained standalone identifier crate
+//! exists. The sigils (`!` room, `$` event, `@` user, `#` room alias) are
+//! defined once in `IdKind` and every `validate_*_id` shares one code path,
+//! so a rule cannot drift per id kind; the spec paragraphs are
+//! `appendices.html#room-ids-and-event-ids`, `#user-ids` and `#room-aliases`.
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -488,51 +497,91 @@ pub struct SendOutcome {
     pub attempts: u32,
 }
 
-/// Rejects a room id the send endpoints cannot address.
-pub(crate) fn validate_room_id(room_id: &str) -> Result<(), OutboundError> {
-    if room_id.is_empty() {
+/// The sigil that introduces each Matrix id this client addresses.
+///
+/// Matrix gives every identifier a leading sigil so a room, user and event id
+/// are distinguishable from one another and from an id of the wrong kind. The
+/// spec (`appendices.html#room-ids-and-event-ids`, `#user-ids`,
+/// `#room-aliases`) fixes them as: `!` room id, `$` event id, `@` user id and
+/// `#` room alias.
+#[derive(Clone, Copy)]
+enum IdKind {
+    Room,
+    User,
+    Event,
+}
+
+impl IdKind {
+    /// The sigil the identifier MUST start with, and the noun used in errors.
+    const fn sigil(self) -> char {
+        match self {
+            Self::Room => '!',
+            Self::User => '@',
+            Self::Event => '$',
+        }
+    }
+
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Room => "room id",
+            Self::User => "user id",
+            Self::Event => "event id",
+        }
+    }
+}
+
+/// The single place that decides whether a Matrix id has the right shape.
+///
+/// Every `validate_*_id` funnels through here, so the sigil, the byte ceiling
+/// and the whitespace/control guard live in exactly one place and cannot drift
+/// apart per id kind.
+fn validate_id(kind: IdKind, value: &str) -> Result<(), OutboundError> {
+    let noun = kind.noun();
+    if value.is_empty() {
         return Err(OutboundError::InvalidRequest {
-            reason: "the room id is empty".to_owned(),
+            reason: format!("the {noun} is empty"),
         });
     }
-    if !room_id.starts_with('!') {
+    let sigil = kind.sigil();
+    if !value.starts_with(sigil) {
+        let hint = if sigil == '!' {
+            " (resolve a `#alias` first)"
+        } else {
+            ""
+        };
+        return Err(OutboundError::InvalidRequest {
+            reason: format!("Matrix {noun}s start with `{sigil}`, got {value:?}{hint}"),
+        });
+    }
+    if value.len() > MAX_ID_BYTES {
         return Err(OutboundError::InvalidRequest {
             reason: format!(
-                "Matrix room ids start with `!`, got {room_id:?} (resolve a `#alias` first)"
+                "the {noun} is {} bytes, the ceiling is {MAX_ID_BYTES}",
+                value.len()
             ),
         });
     }
-    validate_id_value("room id", room_id)
+    if value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(OutboundError::InvalidRequest {
+            reason: format!("the {noun} contains whitespace or a control character"),
+        });
+    }
+    Ok(())
+}
+
+/// Rejects a room id the send endpoints cannot address.
+pub(crate) fn validate_room_id(room_id: &str) -> Result<(), OutboundError> {
+    validate_id(IdKind::Room, room_id)
 }
 
 /// Rejects a user id the typing endpoint cannot address.
 pub(crate) fn validate_user_id(user_id: &str) -> Result<(), OutboundError> {
-    if user_id.is_empty() {
-        return Err(OutboundError::InvalidRequest {
-            reason: "the user id is empty".to_owned(),
-        });
-    }
-    if !user_id.starts_with('@') {
-        return Err(OutboundError::InvalidRequest {
-            reason: format!("Matrix user ids start with `@`, got {user_id:?}"),
-        });
-    }
-    validate_id_value("user id", user_id)
+    validate_id(IdKind::User, user_id)
 }
 
 /// Rejects an event id used as a relation target.
 pub(crate) fn validate_event_id(event_id: &str) -> Result<(), OutboundError> {
-    if event_id.is_empty() {
-        return Err(OutboundError::InvalidRequest {
-            reason: "the event id is empty".to_owned(),
-        });
-    }
-    if !event_id.starts_with('$') {
-        return Err(OutboundError::InvalidRequest {
-            reason: format!("Matrix event ids start with `$`, got {event_id:?}"),
-        });
-    }
-    validate_id_value("event id", event_id)
+    validate_id(IdKind::Event, event_id)
 }
 
 /// Rejects an event type the send endpoint cannot address.
@@ -560,24 +609,6 @@ pub(crate) fn validate_event_type(event_type: &str) -> Result<(), OutboundError>
     if event_type.chars().any(char::is_control) {
         return Err(OutboundError::InvalidRequest {
             reason: "the event type contains a control character".to_owned(),
-        });
-    }
-    Ok(())
-}
-
-/// The shared shape of a Matrix id: bounded, no control characters, no spaces.
-fn validate_id_value(what: &str, value: &str) -> Result<(), OutboundError> {
-    if value.len() > MAX_ID_BYTES {
-        return Err(OutboundError::InvalidRequest {
-            reason: format!(
-                "the {what} is {} bytes, the ceiling is {MAX_ID_BYTES}",
-                value.len()
-            ),
-        });
-    }
-    if value.chars().any(|c| c.is_control() || c.is_whitespace()) {
-        return Err(OutboundError::InvalidRequest {
-            reason: format!("the {what} contains whitespace or a control character"),
         });
     }
     Ok(())
@@ -855,6 +886,35 @@ mod tests {
         assert!(validate_event_type("m.room/message").is_err());
         assert!(validate_event_type("bad\n").is_err());
         assert!(validate_event_type(&"t".repeat(MAX_EVENT_TYPE_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn every_id_kind_rejects_the_other_two_sigils() {
+        // The regression that motivated the shared helper: `validate_event_id`
+        // used to accept a `!`-prefixed room id because the `$` sigil was
+        // missing. Pin that each kind rejects the wrong sigil, so no future
+        // divergence can let one id kind masquerade as another.
+        let wrong_for_room = ["@bot:example.org", "$abc", "#alias:example.org"];
+        for value in wrong_for_room {
+            let error = validate_room_id(value).expect_err(value);
+            assert!(error.to_string().contains("start with `!`"), "{error}");
+        }
+        assert!(validate_room_id("#alias:example.org")
+            .expect_err("an alias")
+            .to_string()
+            .contains("resolve a `#alias`"));
+
+        let wrong_for_user = ["!room:example.org", "$abc", "bot:example.org"];
+        for value in wrong_for_user {
+            let error = validate_user_id(value).expect_err(value);
+            assert!(error.to_string().contains("start with `@`"), "{error}");
+        }
+
+        let wrong_for_event = ["!room:example.org", "@bot:example.org", "https://x"];
+        for value in wrong_for_event {
+            let error = validate_event_id(value).expect_err(value);
+            assert!(error.to_string().contains("start with `$`"), "{error}");
+        }
     }
 
     #[test]
