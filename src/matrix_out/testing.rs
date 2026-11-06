@@ -308,10 +308,10 @@ impl Transport for StubTransport {
             match self.lock_script().pop_front() {
                 Some(Outcome::Response(response)) => Ok(response),
                 Some(Outcome::Failure(error)) => Err(error),
-                None => Err(TransportError {
-                    kind: TransportErrorKind::TestHarness,
-                    message: format!("{method} {url} ran out of scripted responses"),
-                }),
+                None => Err(TransportError::new(
+                    TransportErrorKind::TestHarness,
+                    format!("{method} {url} ran out of scripted responses"),
+                )),
             }
         })
     }

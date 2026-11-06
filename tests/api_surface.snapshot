@@ -134,6 +134,7 @@ src/matrix_out/transport.rs:impl Response:fn new
 src/matrix_out/transport.rs:impl Response:fn status
 src/matrix_out/transport.rs:impl Response:fn with_header
 src/matrix_out/transport.rs:impl TransportError:fn connect
+src/matrix_out/transport.rs:impl TransportError:fn new
 src/matrix_out/transport.rs:impl TransportError:fn other
 src/matrix_out/transport.rs:impl TransportError:fn timeout
 src/matrix_out/transport.rs:impl TransportErrorKind:fn as_str
