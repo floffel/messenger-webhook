@@ -256,6 +256,17 @@ What the crate does with it:
   markdown as mutually exclusive. `text_mention` is rejected because Telegram
   requires a full `User` object, while the neutral span carries only `user_id`.
 
+The Telegram update/MessageEntity model is intentionally local rather than a
+maintained Telegram type crate. `frankenstein` is WTFPL, which is outside
+`deny.toml`'s allow list. `teloxide`/`teloxide-core` are MIT, but their model
+types arrive with an HTTP/runtime stack and stricter enum modelling than this
+webhook-only decoder wants. The permissive `json::*` accessors are kept because
+unknown fields and unknown enum variants have to survive in
+`NormalizedMessage::raw`. To keep that choice from drifting, every Telegram
+field name and update-root mapping used by the adapter lives in
+[`src/telegram/schema.rs`](../src/telegram/schema.rs) and is pinned by unit tests
+in that module against the Bot API names above.
+
 Unverified: the visible result of `date_time` formatting (it depends on the
 client's locale), and whether `custom_emoji` markup survives forwarding — neither
 affects the offsets this crate emits.

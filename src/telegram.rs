@@ -34,6 +34,8 @@ use crate::rich::{byte_to_utf16_ranges, utf16_to_byte_ranges, TextFormat, TextSp
 use crate::secret::Secret;
 use crate::{check_body, json_payload, recipient, utf16_len, Adapter};
 
+mod schema;
+
 /// Maximum length of a Telegram text message, in UTF-16 code units.
 ///
 /// ```
@@ -149,21 +151,16 @@ impl Adapter for TelegramAdapter {
             return Err(Error::Payload("expected a JSON object".to_owned()));
         }
 
+        let update = schema::Update::new(&root);
         let mut events = Vec::new();
-        for (field, provider_type) in [
-            ("message", "message"),
-            ("edited_message", "edited_message"),
-            ("channel_post", "channel_post"),
-            ("edited_channel_post", "edited_channel_post"),
-        ] {
-            if let Some(message) = json::child(&root, field).filter(|value| value.is_object()) {
-                events.push(normalize_message(message, provider_type)?);
+        for kind in schema::UPDATE_KINDS {
+            let Some(object) = update.object(kind) else {
+                continue;
+            };
+            match kind {
+                schema::UpdateKind::MessageReaction => events.push(normalize_reaction(object)?),
+                _ => events.push(normalize_message(object, kind)?),
             }
-        }
-        if let Some(reaction) =
-            json::child(&root, "message_reaction").filter(|value| value.is_object())
-        {
-            events.push(normalize_reaction(reaction)?);
         }
         Ok(events)
     }
@@ -182,7 +179,10 @@ impl Adapter for TelegramAdapter {
             });
         }
         let mut body = serde_json::Map::new();
-        body.insert("chat_id".to_owned(), Value::String(chat_id.to_owned()));
+        body.insert(
+            schema::CHAT_ID.to_owned(),
+            Value::String(chat_id.to_owned()),
+        );
 
         let text = message.text.as_deref().unwrap_or_default();
         if let Some(attachment) = message.first_attachment() {
@@ -195,7 +195,7 @@ impl Adapter for TelegramAdapter {
                     });
                 }
                 body.insert(
-                    "caption_entities".to_owned(),
+                    schema::CAPTION_ENTITIES.to_owned(),
                     telegram_entities(text, message.spans())?,
                 );
             }
@@ -215,10 +215,10 @@ impl Adapter for TelegramAdapter {
                     unit: crate::LimitUnit::Utf16Units,
                 });
             }
-            body.insert("text".to_owned(), Value::String(text.to_owned()));
+            body.insert(schema::TEXT.to_owned(), Value::String(text.to_owned()));
             if !message.spans().is_empty() {
                 body.insert(
-                    "entities".to_owned(),
+                    schema::ENTITIES.to_owned(),
                     telegram_entities(text, message.spans())?,
                 );
             }
@@ -226,17 +226,20 @@ impl Adapter for TelegramAdapter {
 
         if let Some(thread) = &message.thread_id {
             body.insert(
-                "message_thread_id".to_owned(),
+                schema::MESSAGE_THREAD_ID.to_owned(),
                 Value::from(telegram_id(thread, "thread_id")?),
             );
         }
         if let Some(reply) = &message.reply_to {
             let mut parameters = serde_json::Map::new();
             parameters.insert(
-                "message_id".to_owned(),
+                schema::MESSAGE_ID.to_owned(),
                 Value::from(telegram_id(reply, "reply_to")?),
             );
-            body.insert("reply_parameters".to_owned(), Value::Object(parameters));
+            body.insert(
+                schema::REPLY_PARAMETERS.to_owned(),
+                Value::Object(parameters),
+            );
         }
 
         json_payload(
@@ -261,12 +264,12 @@ fn telegram_id(text: &str, field: &str) -> Result<i64> {
 /// Maps a media attachment onto the top-level field Telegram accepts.
 fn telegram_media_field(kind: &AttachmentKind) -> Result<&'static str> {
     match kind {
-        AttachmentKind::Image => Ok("photo"),
-        AttachmentKind::Video => Ok("video"),
-        AttachmentKind::Audio => Ok("audio"),
-        AttachmentKind::Voice => Ok("voice"),
-        AttachmentKind::Document => Ok("document"),
-        AttachmentKind::Sticker => Ok("sticker"),
+        AttachmentKind::Image => Ok(schema::PHOTO),
+        AttachmentKind::Video => Ok(schema::VIDEO),
+        AttachmentKind::Audio => Ok(schema::AUDIO),
+        AttachmentKind::Voice => Ok(schema::VOICE),
+        AttachmentKind::Document => Ok(schema::DOCUMENT),
+        AttachmentKind::Sticker => Ok(schema::STICKER),
         other => Err(Error::InvalidMessage {
             channel: Channel::Telegram,
             reason: format!(
@@ -292,8 +295,8 @@ fn telegram_attachment_fields(
                 });
             }
             let (latitude, longitude) = telegram_location_fields(attachment)?;
-            body.insert("latitude".to_owned(), Value::Number(latitude));
-            body.insert("longitude".to_owned(), Value::Number(longitude));
+            body.insert(schema::LATITUDE.to_owned(), Value::Number(latitude));
+            body.insert(schema::LONGITUDE.to_owned(), Value::Number(longitude));
         }
         AttachmentKind::Contact => {
             if !text.is_empty() {
@@ -316,7 +319,7 @@ fn telegram_attachment_fields(
                         unit: crate::LimitUnit::Utf16Units,
                     });
                 }
-                body.insert("caption".to_owned(), Value::String(text.to_owned()));
+                body.insert(schema::CAPTION.to_owned(), Value::String(text.to_owned()));
             }
             let reference = attachment
                 .id
@@ -354,32 +357,32 @@ fn telegram_entities(text: &str, spans: &[TextSpan]) -> Result<Value> {
 /// Maps one [`TextFormat`] onto the `MessageEntity` object Telegram accepts.
 fn telegram_entity(format: &TextFormat, offset: u64, length: u64) -> Result<Value> {
     let mut entity = serde_json::Map::new();
-    entity.insert("offset".to_owned(), Value::from(offset));
-    entity.insert("length".to_owned(), Value::from(length));
+    entity.insert(schema::OFFSET.to_owned(), Value::from(offset));
+    entity.insert(schema::LENGTH.to_owned(), Value::from(length));
     match format {
-        TextFormat::Bold => insert_type(&mut entity, "bold"),
-        TextFormat::Italic => insert_type(&mut entity, "italic"),
-        TextFormat::Underline => insert_type(&mut entity, "underline"),
-        TextFormat::Strikethrough => insert_type(&mut entity, "strikethrough"),
-        TextFormat::Spoiler => insert_type(&mut entity, "spoiler"),
-        TextFormat::Code => insert_type(&mut entity, "code"),
+        TextFormat::Bold => insert_type(&mut entity, schema::ENTITY_BOLD),
+        TextFormat::Italic => insert_type(&mut entity, schema::ENTITY_ITALIC),
+        TextFormat::Underline => insert_type(&mut entity, schema::ENTITY_UNDERLINE),
+        TextFormat::Strikethrough => insert_type(&mut entity, schema::ENTITY_STRIKETHROUGH),
+        TextFormat::Spoiler => insert_type(&mut entity, schema::ENTITY_SPOILER),
+        TextFormat::Code => insert_type(&mut entity, schema::ENTITY_CODE),
         TextFormat::Pre { language } => {
-            insert_type(&mut entity, "pre");
+            insert_type(&mut entity, schema::ENTITY_PRE);
             if let Some(language) = language.as_ref().filter(|language| !language.is_empty()) {
-                entity.insert("language".to_owned(), Value::String(language.clone()));
+                entity.insert(schema::LANGUAGE.to_owned(), Value::String(language.clone()));
             }
         }
         TextFormat::Link { url } => {
-            insert_type(&mut entity, "text_link");
-            entity.insert("url".to_owned(), Value::String(url.clone()));
+            insert_type(&mut entity, schema::ENTITY_TEXT_LINK);
+            entity.insert(schema::URL.to_owned(), Value::String(url.clone()));
         }
-        TextFormat::Mention => insert_type(&mut entity, "mention"),
-        TextFormat::Hashtag => insert_type(&mut entity, "hashtag"),
-        TextFormat::Cashtag => insert_type(&mut entity, "cashtag"),
-        TextFormat::BotCommand => insert_type(&mut entity, "bot_command"),
-        TextFormat::Url => insert_type(&mut entity, "url"),
-        TextFormat::Email => insert_type(&mut entity, "email"),
-        TextFormat::PhoneNumber => insert_type(&mut entity, "phone_number"),
+        TextFormat::Mention => insert_type(&mut entity, schema::ENTITY_MENTION),
+        TextFormat::Hashtag => insert_type(&mut entity, schema::ENTITY_HASHTAG),
+        TextFormat::Cashtag => insert_type(&mut entity, schema::ENTITY_CASHTAG),
+        TextFormat::BotCommand => insert_type(&mut entity, schema::ENTITY_BOT_COMMAND),
+        TextFormat::Url => insert_type(&mut entity, schema::ENTITY_URL),
+        TextFormat::Email => insert_type(&mut entity, schema::ENTITY_EMAIL),
+        TextFormat::PhoneNumber => insert_type(&mut entity, schema::ENTITY_PHONE_NUMBER),
         TextFormat::TextMention { user_id } => {
             return Err(Error::InvalidMessage {
                 channel: Channel::Telegram,
@@ -389,17 +392,22 @@ fn telegram_entity(format: &TextFormat, offset: u64, length: u64) -> Result<Valu
             });
         }
         TextFormat::CustomEmoji { id } => {
-            insert_type(&mut entity, "custom_emoji");
+            insert_type(&mut entity, schema::ENTITY_CUSTOM_EMOJI);
             if id.is_empty() {
                 return Err(Error::InvalidMessage {
                     channel: Channel::Telegram,
                     reason: "custom_emoji id is empty".to_owned(),
                 });
             }
-            entity.insert("custom_emoji_id".to_owned(), Value::String(id.clone()));
+            entity.insert(
+                schema::CUSTOM_EMOJI_ID.to_owned(),
+                Value::String(id.clone()),
+            );
         }
-        TextFormat::Blockquote => insert_type(&mut entity, "blockquote"),
-        TextFormat::ExpandableBlockquote => insert_type(&mut entity, "expandable_blockquote"),
+        TextFormat::Blockquote => insert_type(&mut entity, schema::ENTITY_BLOCKQUOTE),
+        TextFormat::ExpandableBlockquote => {
+            insert_type(&mut entity, schema::ENTITY_EXPANDABLE_BLOCKQUOTE);
+        }
         TextFormat::Other(kind) => {
             if kind.is_empty() {
                 return Err(Error::InvalidMessage {
@@ -415,7 +423,7 @@ fn telegram_entity(format: &TextFormat, offset: u64, length: u64) -> Result<Valu
 
 /// Inserts the `type` field shared by every entity.
 fn insert_type(entity: &mut serde_json::Map<String, Value>, kind: &str) {
-    entity.insert("type".to_owned(), Value::String(kind.to_owned()));
+    entity.insert(schema::TYPE.to_owned(), Value::String(kind.to_owned()));
 }
 
 /// Builds the `latitude` and `longitude` fields Telegram accepts for
@@ -493,136 +501,138 @@ fn telegram_contact_fields(
 }
 
 /// Maps one `Message` object.
-fn normalize_message(message: &Value, provider_type: &str) -> Result<NormalizedMessage> {
-    let external_id = id::identify(message, "message_id", &Channel::Telegram, "message")?;
-    let chat = json::child(message, "chat");
-    let conversation_id = chat
-        .and_then(|chat| json::id(chat, "id"))
-        .unwrap_or_default();
+fn normalize_message(message: &Value, kind: schema::UpdateKind) -> Result<NormalizedMessage> {
+    let message = schema::Message::new(message);
+    let external_id = id::identify(
+        message.raw(),
+        schema::MESSAGE_ID,
+        &Channel::Telegram,
+        "message",
+    )?;
+    let conversation_id = message.chat_id().unwrap_or_default();
     // Channel posts have no `from`; the chat itself is the author.
-    let sender_id = json::child(message, "from")
-        .and_then(|from| json::id(from, "id"))
-        .or_else(|| json::child(message, "sender_chat").and_then(|chat| json::id(chat, "id")))
+    let sender_id = message
+        .user_id()
+        .or_else(|| message.sender_chat_id())
         .unwrap_or_else(|| conversation_id.clone());
-
-    let text = json::string(message, "text")
-        .or_else(|| json::string(message, "caption"))
-        .map(str::to_owned);
-    let is_edit = provider_type.starts_with("edited_");
 
     let mut normalized =
         NormalizedMessage::carrier(Channel::Telegram, external_id, conversation_id, sender_id);
-    normalized.edit_of = is_edit.then(|| normalized.external_id.clone());
-    normalized.timestamp =
-        json::integer(message, "edit_date").or_else(|| json::integer(message, "date"));
+    normalized.edit_of = kind.is_edit().then(|| normalized.external_id.clone());
+    normalized.timestamp = message.timestamp();
     normalized.attachments = attachments(message);
-    normalized.reply_to =
-        json::child(message, "reply_to_message").and_then(|reply| json::id(reply, "message_id"));
-    normalized.thread_id = json::id(message, "message_thread_id");
-    normalized.provider_type = Some(provider_type.to_owned());
-    normalized.raw = Some(message.clone());
-    normalized.set_text(text);
+    normalized.reply_to = message.reply_to();
+    normalized.thread_id = message.thread_id();
+    normalized.provider_type = Some(kind.provider_type().to_owned());
+    normalized.raw = Some(message.raw().clone());
+    normalized.set_text(message.text_or_caption());
     normalized.set_spans(spans(message));
     Ok(normalized)
 }
 
 /// Collects every media field Telegram may attach to a message.
-fn attachments(message: &Value) -> Vec<Attachment> {
+fn attachments(message: schema::Message<'_>) -> Vec<Attachment> {
     let mut out = Vec::new();
 
     // Telegram sends every rendition of a photo; keep the largest one.
-    if let Some(photo) = json::child(message, "photo").and_then(Value::as_array) {
+    let photo = message.array(schema::PHOTO);
+    if !photo.is_empty() {
         let largest = photo
             .iter()
             .filter_map(|size| photo_area(size).map(|area| (size, area)))
             .max_by_key(|(_, area)| *area)
             .map(|(size, _)| size);
         if let Some(size) = largest {
+            let size = schema::PhotoSize::new(size);
             let mut attachment = Attachment::new(AttachmentKind::Image);
-            attachment.id = json::id(size, "file_id");
-            attachment.size_bytes = json::unsigned(size, "file_size");
-            attachment.width = json::narrow(json::unsigned(size, "width"));
-            attachment.height = json::narrow(json::unsigned(size, "height"));
+            attachment.id = size.file_id();
+            attachment.size_bytes = size.size_bytes();
+            attachment.width = size.width();
+            attachment.height = size.height();
             out.push(attachment);
         }
     }
 
-    if let Some(document) = json::child(message, "document") {
+    if let Some(document) = message.object(schema::DOCUMENT) {
+        let document = schema::Message::new(document);
         let mut attachment = Attachment::new(AttachmentKind::Document);
-        attachment.id = json::id(document, "file_id");
-        attachment.mime_type = json::string(document, "mime_type").map(str::to_owned);
-        attachment.filename = json::string(document, "file_name").map(str::to_owned);
-        attachment.size_bytes = json::unsigned(document, "file_size");
+        attachment.id = document.id(schema::FILE_ID);
+        attachment.mime_type = document.string(schema::MIME_TYPE).map(str::to_owned);
+        attachment.filename = document.string(schema::FILE_NAME).map(str::to_owned);
+        attachment.size_bytes = document.unsigned(schema::FILE_SIZE);
         out.push(attachment);
     }
 
-    if let Some(audio) = json::child(message, "audio") {
+    if let Some(audio) = message.object(schema::AUDIO) {
+        let audio = schema::Message::new(audio);
         let mut attachment = Attachment::new(AttachmentKind::Audio);
-        attachment.id = json::id(audio, "file_id");
-        attachment.mime_type = json::string(audio, "mime_type").map(str::to_owned);
-        attachment.filename = json::string(audio, "file_name").map(str::to_owned);
-        attachment.size_bytes = json::unsigned(audio, "file_size");
-        attachment.duration_seconds = json::narrow(json::unsigned(audio, "duration"));
+        attachment.id = audio.id(schema::FILE_ID);
+        attachment.mime_type = audio.string(schema::MIME_TYPE).map(str::to_owned);
+        attachment.filename = audio.string(schema::FILE_NAME).map(str::to_owned);
+        attachment.size_bytes = audio.unsigned(schema::FILE_SIZE);
+        attachment.duration_seconds = json::narrow(audio.unsigned(schema::DURATION));
         out.push(attachment);
     }
 
-    if let Some(voice) = json::child(message, "voice") {
+    if let Some(voice) = message.object(schema::VOICE) {
+        let voice = schema::Message::new(voice);
         let mut attachment = Attachment::new(AttachmentKind::Voice);
-        attachment.id = json::id(voice, "file_id");
-        attachment.mime_type = json::string(voice, "mime_type").map(str::to_owned);
-        attachment.size_bytes = json::unsigned(voice, "file_size");
-        attachment.duration_seconds = json::narrow(json::unsigned(voice, "duration"));
+        attachment.id = voice.id(schema::FILE_ID);
+        attachment.mime_type = voice.string(schema::MIME_TYPE).map(str::to_owned);
+        attachment.size_bytes = voice.unsigned(schema::FILE_SIZE);
+        attachment.duration_seconds = json::narrow(voice.unsigned(schema::DURATION));
         out.push(attachment);
     }
 
-    for (field, kind) in [
-        ("video", AttachmentKind::Video),
-        ("video_note", AttachmentKind::Video),
-        ("animation", AttachmentKind::Video),
-    ] {
-        if let Some(video) = json::child(message, field) {
-            let mut attachment = Attachment::new(kind);
-            attachment.id = json::id(video, "file_id");
-            attachment.mime_type = json::string(video, "mime_type").map(str::to_owned);
-            attachment.filename = json::string(video, "file_name").map(str::to_owned);
-            attachment.size_bytes = json::unsigned(video, "file_size");
-            attachment.width = json::narrow(json::unsigned(video, "width"));
-            attachment.height = json::narrow(json::unsigned(video, "height"));
-            attachment.duration_seconds = json::narrow(json::unsigned(video, "duration"));
+    for field in schema::VIDEO_FIELDS {
+        if let Some(video) = message.object(field) {
+            let video = schema::Message::new(video);
+            let mut attachment = Attachment::new(AttachmentKind::Video);
+            attachment.id = video.id(schema::FILE_ID);
+            attachment.mime_type = video.string(schema::MIME_TYPE).map(str::to_owned);
+            attachment.filename = video.string(schema::FILE_NAME).map(str::to_owned);
+            attachment.size_bytes = video.unsigned(schema::FILE_SIZE);
+            attachment.width = json::narrow(video.unsigned(schema::WIDTH));
+            attachment.height = json::narrow(video.unsigned(schema::HEIGHT));
+            attachment.duration_seconds = json::narrow(video.unsigned(schema::DURATION));
             out.push(attachment);
         }
     }
 
-    if let Some(sticker) = json::child(message, "sticker") {
+    if let Some(sticker) = message.object(schema::STICKER) {
+        let sticker = schema::Message::new(sticker);
         let mut attachment = Attachment::new(AttachmentKind::Sticker);
-        attachment.id = json::id(sticker, "file_id");
-        attachment.size_bytes = json::unsigned(sticker, "file_size");
-        attachment.width = json::narrow(json::unsigned(sticker, "width"));
-        attachment.height = json::narrow(json::unsigned(sticker, "height"));
-        attachment.caption = json::string(sticker, "emoji").map(str::to_owned);
+        attachment.id = sticker.id(schema::FILE_ID);
+        attachment.size_bytes = sticker.unsigned(schema::FILE_SIZE);
+        attachment.width = json::narrow(sticker.unsigned(schema::WIDTH));
+        attachment.height = json::narrow(sticker.unsigned(schema::HEIGHT));
+        attachment.caption = sticker.string(schema::EMOJI).map(str::to_owned);
         out.push(attachment);
     }
 
-    if let Some(location) = json::child(message, "location") {
+    if let Some(location) = message.object(schema::LOCATION) {
+        let location = schema::Message::new(location);
         let mut attachment = Attachment::new(AttachmentKind::Location);
-        attachment.caption = json::string(location, "name").map(str::to_owned);
-        attachment.latitude = json::number(location, "latitude");
-        attachment.longitude = json::number(location, "longitude");
+        attachment.caption = location.string(schema::NAME).map(str::to_owned);
+        attachment.latitude = location.number(schema::LATITUDE);
+        attachment.longitude = location.number(schema::LONGITUDE);
         out.push(attachment);
     }
 
-    if let Some(contact) = json::child(message, "contact") {
+    if let Some(contact) = message.object(schema::CONTACT) {
+        let contact = schema::Message::new(contact);
         let mut attachment = Attachment::new(AttachmentKind::Contact);
-        attachment.phone_number = json::string(contact, "phone_number").map(str::to_owned);
-        attachment.first_name = json::string(contact, "first_name").map(str::to_owned);
-        attachment.last_name = json::string(contact, "last_name").map(str::to_owned);
-        attachment.caption = json::string(contact, "first_name")
-            .or_else(|| json::string(contact, "title"))
+        attachment.phone_number = contact.string(schema::PHONE_NUMBER).map(str::to_owned);
+        attachment.first_name = contact.string(schema::FIRST_NAME).map(str::to_owned);
+        attachment.last_name = contact.string(schema::LAST_NAME).map(str::to_owned);
+        attachment.caption = contact
+            .string(schema::FIRST_NAME)
+            .or_else(|| contact.string(schema::TITLE))
             .map(str::to_owned);
         out.push(attachment);
     }
 
-    if json::child(message, "poll").is_some() {
+    if message.object(schema::POLL).is_some() {
         out.push(Attachment::new(AttachmentKind::Other("poll".to_owned())));
     }
 
@@ -631,8 +641,9 @@ fn attachments(message: &Value) -> Vec<Attachment> {
 
 /// Area of a photo rendition, or `None` when its dimensions are unusable.
 fn photo_area(size: &Value) -> Option<u128> {
-    let width = json::unsigned(size, "width")?;
-    let height = json::unsigned(size, "height")?;
+    let size = schema::PhotoSize::new(size);
+    let width = size.raw_width()?;
+    let height = size.raw_height()?;
     if width > MAX_PHOTO_DIMENSION || height > MAX_PHOTO_DIMENSION {
         return None;
     }
@@ -642,22 +653,22 @@ fn photo_area(size: &Value) -> Option<u128> {
 /// Maps a `message_reaction` update; the reaction is keyed by the message it
 /// annotates.
 fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
-    let chat = json::child(reaction, "chat");
-    let conversation_id = chat
-        .and_then(|chat| json::id(chat, "id"))
-        .unwrap_or_default();
-    let message_id = id::identify(reaction, "message_id", &Channel::Telegram, "reaction")?;
-    let sender_id = json::child(reaction, "user")
-        .and_then(|user| json::id(user, "id"))
+    let reaction = schema::MessageReactionUpdated::new(reaction);
+    let conversation_id = reaction.chat_id().unwrap_or_default();
+    let message_id = id::identify(
+        reaction.raw(),
+        schema::MESSAGE_ID,
+        &Channel::Telegram,
+        "reaction",
+    )?;
+    let sender_id = reaction
+        .user_id()
         .unwrap_or_else(|| conversation_id.clone());
 
-    let old_reactions = reaction_keys(json::array(reaction, "old_reaction"));
-    let new_reactions = reaction_keys(json::array(reaction, "new_reaction"));
+    let old_reactions = reaction.old_reactions();
+    let new_reactions = reaction.new_reactions();
     let emoji = new_reactions.first().cloned().unwrap_or_default();
-    let removed = matches!(
-        json::child(reaction, "new_reaction"),
-        Some(Value::Array(entries)) if entries.is_empty()
-    );
+    let removed = reaction.new_reaction_is_empty();
     let added_reactions = new_reactions
         .iter()
         .filter(|reaction| !old_reactions.contains(reaction))
@@ -675,7 +686,7 @@ fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
         conversation_id,
         sender_id,
     );
-    normalized.timestamp = json::integer(reaction, "date");
+    normalized.timestamp = reaction.timestamp();
     normalized.reaction = Some(Reaction::from_parts(
         message_id,
         emoji,
@@ -684,20 +695,8 @@ fn normalize_reaction(reaction: &Value) -> Result<NormalizedMessage> {
         removed_reactions,
     )?);
     normalized.provider_type = Some("message_reaction".to_owned());
-    normalized.raw = Some(reaction.clone());
+    normalized.raw = Some(reaction.raw().clone());
     Ok(normalized)
-}
-
-/// Reads Telegram reaction entries into their emoji or custom-emoji keys.
-fn reaction_keys(entries: &[Value]) -> Vec<String> {
-    entries
-        .iter()
-        .filter_map(|entry| {
-            json::string(entry, "emoji")
-                .or_else(|| json::string(entry, "custom_emoji_id"))
-                .map(str::to_owned)
-        })
-        .collect()
 }
 
 /// Collects the formatting Telegram marks on a message.
@@ -709,36 +708,34 @@ fn reaction_keys(entries: &[Value]) -> Vec<String> {
 /// inside a surrogate pair, an offset past the end — is dropped: the plain text
 /// is still complete, and inventing a run would mark text the provider did not
 /// mark.
-fn spans(message: &Value) -> Vec<TextSpan> {
-    let (text, field) = match (
-        json::string(message, "text"),
-        json::string(message, "caption"),
-    ) {
-        (Some(text), _) => (text, "entities"),
-        (None, Some(caption)) => (caption, "caption_entities"),
+fn spans(message: schema::Message<'_>) -> Vec<TextSpan> {
+    let (text, field) = match (message.text(), message.caption()) {
+        (Some(text), _) => (text, schema::ENTITIES),
+        (None, Some(caption)) => (caption, schema::CAPTION_ENTITIES),
         (None, None) => return Vec::new(),
     };
-    let entities = json::array(message, field);
-    let ranges = utf16_to_byte_ranges(text, entities.iter().map(entity_range));
+    let entities = message.array(field);
+    let ranges = utf16_to_byte_ranges(
+        text,
+        entities
+            .iter()
+            .map(|entity| schema::MessageEntity::new(entity).range()),
+    );
     entities
         .iter()
         .zip(ranges)
-        .filter_map(|(entity, range)| one_span(text, entity, range?))
+        .filter_map(|(entity, range)| one_span(text, schema::MessageEntity::new(entity), range?))
         .collect()
 }
 
 /// Maps one `MessageEntity` object onto a span of `text`.
-fn one_span(text: &str, entity: &Value, (start, end): (usize, usize)) -> Option<TextSpan> {
-    let kind = json::string(entity, "type")?;
+fn one_span(
+    text: &str,
+    entity: schema::MessageEntity<'_>,
+    (start, end): (usize, usize),
+) -> Option<TextSpan> {
+    let kind = entity.kind()?;
     TextSpan::new(text, start, end, format_of(kind, entity)).ok()
-}
-
-/// Reads the UTF-16 range Telegram put on one entity.
-fn entity_range(entity: &Value) -> Option<(u64, u64)> {
-    Some((
-        json::unsigned(entity, "offset")?,
-        json::unsigned(entity, "length")?,
-    ))
 }
 
 /// Maps a Telegram `MessageEntity.type` onto a [`TextFormat`].
@@ -747,48 +744,46 @@ fn entity_range(entity: &Value) -> Option<(u64, u64)> {
 /// `custom_emoji` without its id — keeps its provider name as
 /// [`TextFormat::Other`] instead of losing the run, so a renderer still sees
 /// that the provider marked it.
-fn format_of(kind: &str, entity: &Value) -> TextFormat {
+fn format_of(kind: &str, entity: schema::MessageEntity<'_>) -> TextFormat {
     match kind {
-        "bold" => TextFormat::Bold,
-        "italic" => TextFormat::Italic,
-        "underline" => TextFormat::Underline,
-        "strikethrough" => TextFormat::Strikethrough,
-        "spoiler" => TextFormat::Spoiler,
-        "code" => TextFormat::Code,
-        "pre" => TextFormat::Pre {
-            language: json::string(entity, "language")
+        schema::ENTITY_BOLD => TextFormat::Bold,
+        schema::ENTITY_ITALIC => TextFormat::Italic,
+        schema::ENTITY_UNDERLINE => TextFormat::Underline,
+        schema::ENTITY_STRIKETHROUGH => TextFormat::Strikethrough,
+        schema::ENTITY_SPOILER => TextFormat::Spoiler,
+        schema::ENTITY_CODE => TextFormat::Code,
+        schema::ENTITY_PRE => TextFormat::Pre {
+            language: entity
+                .language()
                 .filter(|language| !language.is_empty())
                 .map(str::to_owned),
         },
-        "text_link" => json::string(entity, "url")
-            .filter(|url| !url.is_empty())
-            .map_or_else(
-                || TextFormat::Other(kind.to_owned()),
-                |url| TextFormat::Link {
-                    url: url.to_owned(),
-                },
-            ),
-        "text_mention" => json::child(entity, "user")
-            .and_then(|user| json::id(user, "id"))
-            .map_or_else(
-                || TextFormat::Other(kind.to_owned()),
-                |user_id| TextFormat::TextMention { user_id },
-            ),
-        "custom_emoji" => json::string(entity, "custom_emoji_id")
+        schema::ENTITY_TEXT_LINK => entity.url().filter(|url| !url.is_empty()).map_or_else(
+            || TextFormat::Other(kind.to_owned()),
+            |url| TextFormat::Link {
+                url: url.to_owned(),
+            },
+        ),
+        schema::ENTITY_TEXT_MENTION => entity.text_mention_user_id().map_or_else(
+            || TextFormat::Other(kind.to_owned()),
+            |user_id| TextFormat::TextMention { user_id },
+        ),
+        schema::ENTITY_CUSTOM_EMOJI => entity
+            .custom_emoji_id()
             .filter(|id| !id.is_empty())
             .map_or_else(
                 || TextFormat::Other(kind.to_owned()),
                 |id| TextFormat::CustomEmoji { id: id.to_owned() },
             ),
-        "mention" => TextFormat::Mention,
-        "hashtag" => TextFormat::Hashtag,
-        "cashtag" => TextFormat::Cashtag,
-        "bot_command" => TextFormat::BotCommand,
-        "url" => TextFormat::Url,
-        "email" => TextFormat::Email,
-        "phone_number" => TextFormat::PhoneNumber,
-        "blockquote" => TextFormat::Blockquote,
-        "expandable_blockquote" => TextFormat::ExpandableBlockquote,
+        schema::ENTITY_MENTION => TextFormat::Mention,
+        schema::ENTITY_HASHTAG => TextFormat::Hashtag,
+        schema::ENTITY_CASHTAG => TextFormat::Cashtag,
+        schema::ENTITY_BOT_COMMAND => TextFormat::BotCommand,
+        schema::ENTITY_URL => TextFormat::Url,
+        schema::ENTITY_EMAIL => TextFormat::Email,
+        schema::ENTITY_PHONE_NUMBER => TextFormat::PhoneNumber,
+        schema::ENTITY_BLOCKQUOTE => TextFormat::Blockquote,
+        schema::ENTITY_EXPANDABLE_BLOCKQUOTE => TextFormat::ExpandableBlockquote,
         // `date_time` and anything newer stay reachable under the provider's
         // own name; `raw` still carries the untouched entity object.
         other => TextFormat::Other(other.to_owned()),
