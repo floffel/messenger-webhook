@@ -15,7 +15,7 @@ use messenger_webhook::matrix_out::transport::{
     Method, Response, TransportError, TransportErrorKind,
 };
 use messenger_webhook::matrix_out::{
-    ClientConfig, MatrixClient, MediaKind, MediaUpload, OutboundError, RecordingSleeper,
+    ClientConfig, MatrixClient, MediaKind, MediaUpload, Operation, OutboundError, RecordingSleeper,
     RetryPolicy, StubTransport, TxnId,
 };
 
@@ -458,11 +458,15 @@ fn the_probe_is_retried_after_a_5xx_and_reports_a_retryable_server_error() {
 
     match &error {
         OutboundError::Server {
+            operation,
+            txn_id,
             status,
             errcode,
             attempts,
             ..
         } => {
+            assert_eq!(*operation, Operation::Read);
+            assert_eq!(txn_id, &None);
             assert_eq!(*status, 503);
             assert_eq!(errcode, "M_UNKNOWN");
             assert_eq!(*attempts, 3);

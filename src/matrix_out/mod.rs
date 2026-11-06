@@ -1576,6 +1576,8 @@ fn http_failure(
             ),
         },
         500..=599 => OutboundError::Server {
+            operation,
+            txn_id: txn.cloned(),
             status: response.status,
             errcode,
             message,

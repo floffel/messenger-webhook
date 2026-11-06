@@ -3,8 +3,8 @@
 //! Three questions decide what a caller may do next, and every variant answers
 //! exactly one way:
 //!
-//! * **retryable** ([`OutboundError::is_retryable`]) — nothing was applied and
-//!   the same request may succeed later. Requeue it.
+//! * **retryable** ([`OutboundError::is_retryable`]) — repeating the same
+//!   request is safe and it may succeed later. Requeue it.
 //! * **ambiguous** ([`OutboundError::is_ambiguous`]) — the homeserver may have
 //!   applied the request. Do **not** mint a new transaction id and send again:
 //!   repeat the *same* one ([`MatrixClient::send_text_with_txn`]) or reconcile
@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::matrix_out::retry::Operation;
 use crate::matrix_out::types::TxnId;
 
 /// Everything the outbound client can fail with.
@@ -114,9 +115,15 @@ pub enum OutboundError {
     },
 
     /// The homeserver failed (`5xx`) on a request that is safe to repeat, and
-    /// the client ran out of attempts. Nothing is known to be applied.
+    /// the client ran out of attempts. This variant is retryable only while the
+    /// carried operation and transaction id say repeating it is safe; an
+    /// uncertain write is reported as [`OutboundError::Ambiguous`].
     #[error("the homeserver answered {status} ({errcode}) after {attempts} attempts: {message}")]
     Server {
+        /// The operation whose retry-safety this error describes.
+        operation: Operation,
+        /// The transaction id of the request, when it had one.
+        txn_id: Option<TxnId>,
         /// HTTP status of the last attempt.
         status: u16,
         /// The Matrix error code, when the body carried one.
@@ -204,14 +211,14 @@ fn txn_id_suffix(txn_id: Option<&TxnId>) -> String {
 impl OutboundError {
     /// Whether the same request could succeed if it were retried unchanged.
     ///
-    /// `true` for [`OutboundError::RateLimited`], [`OutboundError::Server`] and
-    /// [`OutboundError::Transport`] — three cases where the request provably was
-    /// not applied. `false` for an ambiguous write: retrying it blindly is how a
-    /// message gets posted twice.
+    /// `true` for [`OutboundError::RateLimited`], [`OutboundError::Transport`],
+    /// and [`OutboundError::Server`] only when the server error belongs to a
+    /// repeatable operation with no transaction id. `false` for an ambiguous
+    /// write: retrying it blindly is how a message gets posted twice.
     ///
     /// ```
     /// use std::time::Duration;
-    /// use messenger_webhook::matrix_out::OutboundError;
+    /// use messenger_webhook::matrix_out::{Operation, OutboundError};
     ///
     /// let limited = OutboundError::RateLimited {
     ///     retry_after: Some(Duration::from_secs(1)),
@@ -220,20 +227,45 @@ impl OutboundError {
     /// };
     /// assert!(limited.is_retryable());
     /// assert!(!limited.is_ambiguous());
+    ///
+    /// let server = OutboundError::Server {
+    ///     operation: Operation::Read,
+    ///     txn_id: None,
+    ///     status: 503,
+    ///     errcode: "M_UNKNOWN".into(),
+    ///     message: "down".into(),
+    ///     attempts: 3,
+    /// };
+    /// assert!(server.is_retryable());
+    ///
+    /// let uncertain_upload = OutboundError::Server {
+    ///     operation: Operation::NonIdempotent,
+    ///     txn_id: None,
+    ///     status: 503,
+    ///     errcode: "M_UNKNOWN".into(),
+    ///     message: "down".into(),
+    ///     attempts: 3,
+    /// };
+    /// assert!(!uncertain_upload.is_retryable());
+    /// assert!(uncertain_upload.is_ambiguous());
     /// ```
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::RateLimited { .. } | Self::Server { .. } | Self::Transport { .. }
-        )
+        match self {
+            Self::RateLimited { .. } | Self::Transport { .. } => true,
+            Self::Server {
+                operation, txn_id, ..
+            } => txn_id.is_none() && operation.is_repeatable(),
+            _ => false,
+        }
     }
 
     /// Whether the request may have been applied.
     ///
-    /// [`OutboundError::Ambiguous`] and [`OutboundError::DecodeAfterWrite`] are
-    /// ambiguous. A caller must not treat them as plain failures: the message
-    /// may be in the room already.
+    /// [`OutboundError::Ambiguous`], [`OutboundError::DecodeAfterWrite`] and
+    /// [`OutboundError::Server`] are ambiguous when their carried operation or
+    /// transaction id says the request may have been applied. A caller must not
+    /// treat them as plain failures: the message may be in the room already.
     ///
     /// ```
     /// use messenger_webhook::matrix_out::{OutboundError, TxnId};
@@ -257,10 +289,16 @@ impl OutboundError {
     /// ```
     #[must_use]
     pub const fn is_ambiguous(&self) -> bool {
-        matches!(self, Self::Ambiguous { .. } | Self::DecodeAfterWrite { .. })
+        match self {
+            Self::Ambiguous { .. } | Self::DecodeAfterWrite { .. } => true,
+            Self::Server {
+                operation, txn_id, ..
+            } => txn_id.is_some() || !operation.is_repeatable(),
+            _ => false,
+        }
     }
 
-    /// The transaction id of an ambiguous write, when it had one.
+    /// The transaction id of an uncertain write, when it had one.
     ///
     /// Repeat the send with this id instead of minting a new one: Matrix
     /// de-duplicates on it, so the second request either creates the event or
@@ -284,9 +322,9 @@ impl OutboundError {
     #[must_use]
     pub fn txn_id(&self) -> Option<&TxnId> {
         match self {
-            Self::Ambiguous { txn_id, .. } | Self::DecodeAfterWrite { txn_id, .. } => {
-                txn_id.as_ref()
-            }
+            Self::Ambiguous { txn_id, .. }
+            | Self::DecodeAfterWrite { txn_id, .. }
+            | Self::Server { txn_id, .. } => txn_id.as_ref(),
             _ => None,
         }
     }
@@ -501,6 +539,8 @@ mod tests {
             ),
             (
                 OutboundError::Server {
+                    operation: Operation::Read,
+                    txn_id: None,
                     status: 503,
                     errcode: "M_UNKNOWN".into(),
                     message: "down".into(),
@@ -639,6 +679,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn server_errors_keep_their_retry_safety_from_operation_and_txn() {
+        let txn = TxnId::new("t1").expect("valid txn");
+        let base = OutboundError::Server {
+            operation: Operation::Idempotent,
+            txn_id: None,
+            status: 503,
+            errcode: "M_UNKNOWN".into(),
+            message: "down".into(),
+            attempts: 3,
+        };
+        assert!(base.is_retryable());
+        assert!(!base.is_ambiguous());
+
+        let txn_keyed = OutboundError::Server {
+            operation: Operation::Idempotent,
+            txn_id: Some(txn.clone()),
+            status: 503,
+            errcode: "M_UNKNOWN".into(),
+            message: "down".into(),
+            attempts: 3,
+        };
+        assert!(!txn_keyed.is_retryable());
+        assert!(txn_keyed.is_ambiguous());
+        assert_eq!(txn_keyed.txn_id(), Some(&txn));
+
+        let non_idempotent = OutboundError::Server {
+            operation: Operation::NonIdempotent,
+            txn_id: None,
+            status: 503,
+            errcode: "M_UNKNOWN".into(),
+            message: "down".into(),
+            attempts: 3,
+        };
+        assert!(!non_idempotent.is_retryable());
+        assert!(non_idempotent.is_ambiguous());
+        assert_eq!(non_idempotent.txn_id(), None);
+    }
+
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Classification {
         Retryable,
@@ -676,18 +755,24 @@ mod tests {
                 classification: Terminal,
                 client_error: true,
             },
-            OutboundError::RateLimited { .. }
-            | OutboundError::Server { .. }
-            | OutboundError::Transport { .. } => ExpectedClassification {
-                classification: Retryable,
-                client_error: false,
-            },
-            OutboundError::Ambiguous { .. } | OutboundError::DecodeAfterWrite { .. } => {
+            OutboundError::RateLimited { .. } | OutboundError::Transport { .. } => {
                 ExpectedClassification {
-                    classification: Ambiguous,
+                    classification: Retryable,
                     client_error: false,
                 }
             }
+            OutboundError::Server {
+                operation, txn_id, ..
+            } if txn_id.is_none() && operation.is_repeatable() => ExpectedClassification {
+                classification: Retryable,
+                client_error: false,
+            },
+            OutboundError::Server { .. }
+            | OutboundError::Ambiguous { .. }
+            | OutboundError::DecodeAfterWrite { .. } => ExpectedClassification {
+                classification: Ambiguous,
+                client_error: false,
+            },
             OutboundError::TestHarness { .. } | OutboundError::DecodeRead { .. } => {
                 ExpectedClassification {
                     classification: Terminal,
@@ -731,6 +816,8 @@ mod tests {
                 message: "x".into(),
             },
             OutboundError::Server {
+                operation: Operation::Read,
+                txn_id: None,
                 status: 503,
                 errcode: "M_UNKNOWN".into(),
                 message: "x".into(),
