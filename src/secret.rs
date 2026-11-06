@@ -22,7 +22,9 @@ pub const MIN_SECRET_BYTES: usize = 16;
 /// A shared secret used to authenticate provider webhooks.
 ///
 /// The value is redacted in [`Debug`](fmt::Debug) output and can only be
-/// compared in constant time through [`Secret::ct_eq`]. Empty and weak secrets
+/// compared in constant time through [`Secret::ct_eq`] when the candidate
+/// length matches the secret. Unequal lengths return `false` after the length
+/// check, so that path reveals the secret's byte length. Empty and weak secrets
 /// are rejected at construction, so a `Secret` that exists is at least
 /// [`MIN_SECRET_BYTES`] long.
 ///
@@ -116,7 +118,13 @@ impl Secret {
         self.0.as_str()
     }
 
-    /// Compares a candidate in constant time.
+    /// Compares a candidate with this secret.
+    ///
+    /// The byte comparison is constant time only when the candidate has the
+    /// same length as the secret. Unequal lengths return `false` after the
+    /// length check, so an attacker who can measure timing can learn the
+    /// secret's byte length. Do not treat this as a length-blind comparison for
+    /// variable-length candidates.
     ///
     /// ```
     /// use messenger_webhook::Secret;
@@ -124,6 +132,7 @@ impl Secret {
     /// let secret = Secret::new("telegram-bot-secret")?;
     /// assert!(secret.ct_eq(b"telegram-bot-secret"));
     /// assert!(!secret.ct_eq(b"telegram-bot-secre"));
+    /// assert!(!secret.ct_eq(b"telegram-bot-secret!"));
     /// # Ok::<(), messenger_webhook::Error>(())
     /// ```
     #[must_use]
@@ -193,6 +202,17 @@ mod tests {
 
         let above_minimum = Secret::new("a".repeat(MIN_SECRET_BYTES + 1)).expect("above minimum");
         assert_eq!(above_minimum.expose_secret().len(), MIN_SECRET_BYTES + 1);
+    }
+
+    #[test]
+    fn ct_eq_pins_equal_length_and_length_mismatch_contract() {
+        let secret = Secret::new("0123456789abcdef").expect("secret");
+
+        assert!(secret.ct_eq(b"0123456789abcdef"));
+        assert!(!secret.ct_eq(b"0123456789abcdeG"));
+        assert!(!secret.ct_eq(b"0123456789abcde"));
+        assert!(!secret.ct_eq(b"0123456789abcdefg"));
+        assert!(!secret.ct_eq(b""));
     }
 
     #[test]
